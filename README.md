@@ -20,7 +20,7 @@ Tag w formacie `v*` uruchamia pełne CI. Po pomyślnym zakończeniu testów, bui
 
 ### SmartScreen
 
-Instalator nie jest podpisany certyfikatem wydawcy. Windows może więc pokazać ostrzeżenie Microsoft Defender SmartScreen. Instaluj tylko plik pobrany z repozytorium NEXUS AUREA; jeśli świadomie kontynuujesz, wybierz **Więcej informacji** → **Uruchom mimo to**.
+Instalator nie jest podpisany certyfikatem wydawcy, więc Microsoft Defender SmartScreen może ostrzec, że wydawca jest nieznany. Instaluj tylko plik pobrany z repozytorium NEXUS AUREA. Jeśli standardowy ekran ostrzeżenia pokazuje opcję kontynuacji, użyj jej tylko po sprawdzeniu źródła. Na urządzeniach z aktywnym Smart App Control Windows 11 może zablokować niepodpisany plik bez możliwości uruchomienia go mimo ostrzeżenia; nie wyłączaj zabezpieczeń, aby to obejść. [Microsoft opisuje wpływ podpisu na SmartScreen i Smart App Control](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation).
 
 Windows 11 zwykle ma WebView2 wymagany przez aplikację. Przy pierwszym uruchomieniu aplikacji system może potrzebować połączenia internetowego, aby pobrać brakujący składnik WebView2.
 
