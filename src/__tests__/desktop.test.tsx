@@ -51,7 +51,7 @@ describe("gamepad without hardware", () => {
     expect(screen.getByText(/Połączone: 1/)).toBeTruthy();
     expect(screen.getByText(/B0: 1.00/).getAttribute("data-pressed")).toBe("true");
     expect(screen.getByText(/A0: -0.750/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button"));
+    fireEvent.click(screen.getByRole("button", { name: /Zamknij/ }));
     expect(close).toHaveBeenCalledOnce();
   });
   it("reports unsupported API without failing", () => {
