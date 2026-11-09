@@ -1,8 +1,30 @@
-# NEXUS AUREA v0.2
+# NEXUS AUREA v0.3
 
 Projekt React + TypeScript + Tauri oparty bezpośrednio na zatwierdzonym prototypie AUREA · Grand Cinema. Oryginalny plik jest zachowany w `design/aurea-prototype.html`, a arkusz `src/styles.css` został z niego przeniesiony bez zmiany bazowego układu, kolorów ani animacji.
 
-## Uruchomienie na Macu
+## Instalacja na Windows 11
+
+NEXUS AUREA jest budowany jako instalator NSIS `.exe` dla Windows x64. Instalator domyślnie instaluje aplikację dla bieżącego użytkownika, bez konieczności instalacji systemowej.
+
+### Artefakt z GitHub Actions
+
+1. Otwórz [przebiegi CI](https://github.com/Milklosz/nexus-aurea/actions/workflows/ci.yml) i wybierz ukończony przebieg z gałęzi `main`.
+2. W sekcji **Artifacts** pobierz `NEXUS-AUREA-Windows-x64-<SHA>` i rozpakuj pobrane archiwum ZIP.
+3. Uruchom plik instalatora `NEXUS AUREA_0.3.0_x64-setup.exe`.
+
+Artefakt jest tworzony po udanym buildzie Windows przy każdym ukończonym pushu na `main`. GitHub przechowuje go przez 30 dni. Pobranie artefaktu wymaga zalogowania do GitHuba i dostępu do repozytorium.
+
+### GitHub Release
+
+Tag w formacie `v*` uruchamia pełne CI. Po pomyślnym zakończeniu testów, buildów macOS i Windows oraz przesłaniu instalatora workflow publikuje GitHub Release z plikiem `.exe`. Wydanie pobierzesz z [zakładki Releases](https://github.com/Milklosz/nexus-aurea/releases).
+
+### SmartScreen
+
+Instalator nie jest podpisany certyfikatem wydawcy. Windows może więc pokazać ostrzeżenie Microsoft Defender SmartScreen. Instaluj tylko plik pobrany z repozytorium NEXUS AUREA; jeśli świadomie kontynuujesz, wybierz **Więcej informacji** → **Uruchom mimo to**.
+
+Windows 11 zwykle ma WebView2 wymagany przez aplikację. Przy pierwszym uruchomieniu aplikacji system może potrzebować połączenia internetowego, aby pobrać brakujący składnik WebView2.
+
+## Uruchomienie developerskie na Macu
 
 Wymagane są Node.js 22.12 lub nowszy, Rust stable oraz narzędzia kompilacyjne Xcode.
 
@@ -21,13 +43,11 @@ pnpm tauri:windows
 
 ## GitHub Actions
 
-Workflow `CI` uruchamia się po każdym pushu i pull requeście, a także ręcznie. Na macOS i Windows/MSVC instaluje zależności z zamrożonego `pnpm-lock.yaml`, uruchamia testy, buduje frontend React/TypeScript, sprawdza backend Rust i kompiluje aplikację Tauri. Kompilacja CI nie podpisuje aplikacji ani nie pakuje instalatorów.
+Workflow `CI` uruchamia się po pushu, pull requeście oraz ręcznie. Na macOS i Windows/MSVC instaluje zależności z zamrożonego `pnpm-lock.yaml`, uruchamia testy, buduje frontend React/TypeScript i sprawdza backend Rust. Windows buduje rzeczywisty instalator NSIS x64 i przesyła go jako artefakt; macOS kompiluje aplikację bez tworzenia pakietu. Zależności pnpm i pliki kompilacji Rust są buforowane.
 
-Sam podgląd web uruchomisz przez `pnpm dev`; Vite udostępnia go pod `http://127.0.0.1:1420/`.
+Workflow ma domyślne uprawnienie `contents: read`; tylko job publikujący tagowane Releases otrzymuje `contents: write`. Nie są wymagane sekrety ani token zapisany w repozytorium.
 
-`tauri:windows` jest przygotowany dla kompilacji na Windows 11 z targetem MSVC. Tauri wymaga tam narzędzi Microsoft C++ Build Tools; WebView2 jest standardowo dostępny w Windows 11. Konfiguracja Windows nie była tu uruchamiana.
-
-## Co działa w v0.2
+## Aplikacja
 
 - Zegar w formacie 24-godzinnym dla strefy `Europe/Warsaw`.
 - Bieżąca pogoda Zabrza z Open-Meteo, odświeżana co 15 minut. Błąd sieci pokazuje czytelny status, zachowuje ostatni poprawny odczyt i nie blokuje interfejsu.
@@ -35,6 +55,8 @@ Sam podgląd web uruchomisz przez `pnpm dev`; Vite udostępnia go pod `http://12
 - Pięć oficjalnych stron usług otwieranych w domyślnej przeglądarce. Aplikacja sprawdza HTTPS i dokładną nazwę hosta, a Tauri ogranicza uprawnienie openera do tych domen.
 - Wspólny punkt wejścia nawigacji dla klawiatury i pada, do którego można później podłączyć sterowanie LAN.
 
-## Zakres poza v0.2
+## Poza zakresem v0.3
 
-Nie ma tu odtwarzacza ani osadzania usług, lokalnego AI, zmian firmware telewizora ani obejść DRM. Pilot iPhone/LAN oraz test fizycznego pada pozostają kolejnymi etapami. Na tym Macu nie wykonano kompilacji Tauri ani Windows.
+Automatyczne aktualizacje, AirPlay, pilot iPhone/LAN oraz test fizycznego pada nie są jeszcze skonfigurowane. Instalator nie jest podpisany. Projekt graficzny Grand Cinema i działające funkcje aplikacji pozostają bez zmian.
+
+Podgląd web uruchomisz przez `pnpm dev`; Vite udostępnia go pod `http://127.0.0.1:1420/`.
