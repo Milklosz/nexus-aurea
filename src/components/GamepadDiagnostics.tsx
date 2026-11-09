@@ -1,20 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import { gamepadSnapshot } from "../services/gamepadSnapshot";
 import { ControlServicePanel } from "./ControlServicePanel";
+import { AppManagerPanel } from "./AppManagerPanel";
+import { CinemaPanel } from "./CinemaPanel";
+import type { CinemaProfile } from "../services/cinemaMode";
 import {
   resolveControllerProfile,
   type ControllerProfile,
 } from "../services/controllerEngine";
-import {
-  getPlatformLauncherStatus,
-  type PlatformLauncherId,
-  type PlatformLauncherStatus,
-} from "../services/platformLaunchers";
 
 type GamepadDiagnosticsProps = {
   profile: ControllerProfile;
   onProfileChange: (profile: ControllerProfile) => void;
-  onLaunch: (launcher: PlatformLauncherId) => Promise<void>;
+  cinemaProfile: CinemaProfile;
+  onCinemaProfileChange: (profile: CinemaProfile) => void;
+  onShowDesktop: () => void;
   onClose: () => void;
 };
 
@@ -29,15 +29,14 @@ const profiles: ControllerProfile[] = ["auto", "standard", "playstation"];
 export function GamepadDiagnostics({
   profile,
   onProfileChange,
-  onLaunch,
+  cinemaProfile,
+  onCinemaProfileChange,
+  onShowDesktop,
   onClose,
 }: GamepadDiagnosticsProps) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [pads, setPads] = useState<ReturnType<typeof gamepadSnapshot>>([]);
   const [focused, setFocused] = useState(false);
-  const [launcherStatus, setLauncherStatus] = useState<PlatformLauncherStatus | null>(null);
-  const [launcherError, setLauncherError] = useState(false);
-  const [launching, setLaunching] = useState<PlatformLauncherId | null>(null);
   const supported = typeof navigator.getGamepads === "function";
   useEffect(() => {
     const element = dialog.current;
@@ -56,28 +55,9 @@ export function GamepadDiagnostics({
     const timer = window.setInterval(update, 100);
     return () => { window.clearInterval(timer); element?.close(); };
   }, [supported]);
-  useEffect(() => {
-    let active = true;
-    void getPlatformLauncherStatus().then((status) => {
-      if (active) setLauncherStatus(status);
-    }).catch(() => {
-      if (active) setLauncherError(true);
-    });
-    return () => { active = false; };
-  }, []);
-
   const cycleProfile = () => {
     const index = profiles.indexOf(profile);
     onProfileChange(profiles[(index + 1) % profiles.length]);
-  };
-
-  const launch = async (launcher: PlatformLauncherId) => {
-    setLaunching(launcher);
-    try {
-      await onLaunch(launcher);
-    } finally {
-      setLaunching(null);
-    }
   };
 
   return <dialog ref={dialog} className="diagnostics" onCancel={onClose} aria-labelledby="pad-title">
@@ -100,31 +80,9 @@ export function GamepadDiagnostics({
         <p>Osie: {pad.axes.map((value, i) => "A" + i + ": " + value.toFixed(3)).join(" · ")}</p>
       </section>;
     })}
+    <CinemaPanel profile={cinemaProfile} onChange={onCinemaProfileChange} onDesktop={onShowDesktop} />
+    <AppManagerPanel />
     <ControlServicePanel />
-    <section className="launcher-panel" aria-label="Launchery opcjonalne">
-      <h3>Launchery Windows</h3>
-      <p>NEXUS nie instaluje ani nie zmienia ustawień tych aplikacji. Po uruchomieniu pozostaje dostępny po powrocie fokusu.</p>
-      {launcherError && <p role="status">Nie udało się sprawdzić instalacji.</p>}
-      {!launcherError && !launcherStatus && <p role="status">Sprawdzam dostępność…</p>}
-      {launcherStatus && !launcherStatus.windows && <p role="status">Uruchamianie dostępne tylko w aplikacji Windows. Kafelki usług NEXUS działają bez zmian.</p>}
-      {launcherStatus?.windows && (
-        <>
-          <div className="launcher-actions">
-            <button type="button" disabled={!launcherStatus.steamAvailable || launching !== null} onClick={() => void launch("steamBigPicture")}>
-              {launching === "steamBigPicture" ? "Uruchamiam Steam…" : "Steam Big Picture"}
-            </button>
-            <button type="button" disabled={!launcherStatus.playniteAvailable || launching !== null} onClick={() => void launch("playniteFullscreen")}>
-              {launching === "playniteFullscreen" ? "Uruchamiam Playnite…" : "Playnite Fullscreen"}
-            </button>
-          </div>
-          <p role="status">
-            {!launcherStatus.steamAvailable && !launcherStatus.playniteAvailable
-              ? "Nie wykryto Steam ani Playnite w typowych folderach instalacji. Możesz zamknąć panel i korzystać z NEXUS."
-              : (!launcherStatus.steamAvailable ? "Steam niewykryty. " : "") + (!launcherStatus.playniteAvailable ? "Playnite niewykryty." : "")}
-          </p>
-        </>
-      )}
-    </section>
     <button type="button" onClick={onClose} autoFocus>Zamknij (Esc / ◯)</button>
   </dialog>;
 }

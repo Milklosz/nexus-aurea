@@ -1,6 +1,7 @@
 use tauri::Manager;
 
 mod control_service;
+mod app_manager;
 mod platform_launchers;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -15,6 +16,8 @@ pub fn run() {
             control_service::start_control_service,
             control_service::set_control_game_mode,
             control_service::stop_control_service,
+            app_manager::get_app_manager_status,
+            app_manager::launch_managed_app,
         ])
         .setup(|app| {
             if std::env::args().any(|arg| arg == "--windowed") {

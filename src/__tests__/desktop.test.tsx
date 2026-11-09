@@ -33,6 +33,11 @@ vi.mock("../services/controlService", () => ({
   listenForControlServiceStop: vi.fn(async () => () => {}),
   listenForNexusControlReturn: vi.fn(async () => () => {}),
 }));
+vi.mock("../services/appManager", () => ({
+  emptyAppManagerSnapshot: { windows: false, foregroundProcess: null, apps: [] },
+  getAppManagerStatus: vi.fn(async () => ({ windows: false, foregroundProcess: null, apps: [] })),
+  launchManagedApp: vi.fn(async () => ({ id: "chrome", alreadyRunning: false, focusRestoreSupported: false })),
+}));
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const pad = { connected: true, index: 0, id: "Wireless Controller", mapping: "standard", buttons: [{ pressed: true, value: 1 }], axes: [-0.75, 0.3] } as unknown as Gamepad;
 
@@ -64,7 +69,7 @@ describe("gamepad without hardware", () => {
     Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: vi.fn() });
     vi.stubGlobal("navigator", { getGamepads: () => [null, pad] });
     const close = vi.fn();
-    render(<GamepadDiagnostics profile="auto" onProfileChange={vi.fn()} onLaunch={vi.fn(async () => {})} onClose={close} />);
+    render(<GamepadDiagnostics profile="auto" onProfileChange={vi.fn()} cinemaProfile="cinema" onCinemaProfileChange={vi.fn()} onShowDesktop={vi.fn()} onClose={close} />);
     expect(screen.getByText(/Połączone: 1/)).toBeTruthy();
     expect(screen.getByText(/B0: 1.00/).getAttribute("data-pressed")).toBe("true");
     expect(screen.getByText(/A0: -0.750/)).toBeTruthy();
@@ -75,7 +80,7 @@ describe("gamepad without hardware", () => {
     Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: vi.fn(function(this: HTMLDialogElement) { this.setAttribute("open", ""); }) });
     Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: vi.fn() });
     vi.stubGlobal("navigator", {});
-    render(<GamepadDiagnostics profile="auto" onProfileChange={vi.fn()} onLaunch={vi.fn(async () => {})} onClose={() => {}} />);
+    render(<GamepadDiagnostics profile="auto" onProfileChange={vi.fn()} cinemaProfile="cinema" onCinemaProfileChange={vi.fn()} onShowDesktop={vi.fn()} onClose={() => {}} />);
     expect(screen.getByText(/Gamepad API niedostępne/)).toBeTruthy();
   });
   it("moves relative to selection and wraps", () => {

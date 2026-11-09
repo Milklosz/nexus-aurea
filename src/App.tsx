@@ -14,8 +14,9 @@ import { useFocusRestoreOnClose } from "./hooks/useFocusRestoreOnClose";
 import { useToast } from "./hooks/useToast";
 import { useWeather } from "./hooks/useWeather";
 import { openStreamingService } from "./services/openStreamingService";
-import { launchPlatform, type PlatformLauncherId } from "./services/platformLaunchers";
-import { listenForNexusControlReturn } from "./services/controlService";
+import { getControlServiceStatus, listenForNexusControlReturn, setControlGameMode } from "./services/controlService";
+import { listenForManagedAppExit } from "./services/appManager";
+import { readCinemaProfile, saveCinemaProfile, type CinemaProfile } from "./services/cinemaMode";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ControllerProfile } from "./services/controllerEngine";
 import "./styles.css";
@@ -34,6 +35,7 @@ export default function App() {
   const version = useAppVersion();
   const [diagnostics, setDiagnostics] = useState(false);
   const [controllerProfile, setControllerProfile] = useState<ControllerProfile>(savedControllerProfile);
+  const [cinemaProfile, setCinemaProfile] = useState<CinemaProfile>(readCinemaProfile);
   const { now, time } = useClock();
   const { label: weatherLabel, title: weatherTitle } = useWeather();
   const { message, showToast } = useToast();
@@ -103,14 +105,24 @@ export default function App() {
       // The selected mapping remains active for this session.
     }
   }, []);
-  const handlePlatformLaunch = useCallback(async (launcher: PlatformLauncherId) => {
+  const changeCinemaProfile = useCallback(async (nextProfile: CinemaProfile) => {
+    const previous = cinemaProfile;
+    setCinemaProfile(nextProfile);
+    saveCinemaProfile(nextProfile);
     try {
-      await launchPlatform(launcher);
-      showToast(launcher === "steamBigPicture" ? "Uruchamiam Steam Big Picture." : "Uruchamiam Playnite Fullscreen.");
+      if (nextProfile === "cinema") await windowMode(true);
+      if (nextProfile === "desktop") await windowMode(false);
+      if ((nextProfile === "gaming" || previous === "gaming") && nextProfile !== previous) {
+        const status = await getControlServiceStatus();
+        if (status.running) await setControlGameMode(nextProfile === "gaming");
+      }
     } catch {
-      showToast("Nie udało się uruchomić tej aplikacji. Sprawdź, czy jest zainstalowana.");
+      showToast("Nie udało się zastosować całego profilu. Control Service pozostaje w bezpiecznym stanie.");
+      return;
     }
-  }, [showToast]);
+    showToast(nextProfile === "desktop" ? "Profil Desktop · pulpit Windows." : `Profil ${nextProfile === "cinema" ? "Cinema" : "Gaming"} aktywny.`);
+  }, [cinemaProfile, showToast]);
+  const showDesktop = useCallback(() => void changeCinemaProfile("desktop"), [changeCinemaProfile]);
   useGamepad({
     move: moveControllerFocus,
     confirm: confirmControllerFocus,
@@ -139,6 +151,24 @@ export default function App() {
       if (!active) return;
       void getCurrentWindow().setFocus().catch(() => {
         showToast("Windows zablokował powrót do NEXUS. Wróć do aplikacji przez Alt+Tab.");
+      });
+    }).then((stopListening) => {
+      if (active) unlisten = stopListening;
+      else stopListening();
+    }).catch(() => {});
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [showToast]);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void listenForManagedAppExit((id) => {
+      if (!active || id !== "playniteFullscreen") return;
+      void getCurrentWindow().setFocus().catch(() => {
+        showToast("Playnite został zamknięty. Wróć do NEXUS przez Alt+Tab.");
       });
     }).then((stopListening) => {
       if (active) unlisten = stopListening;
@@ -190,7 +220,9 @@ export default function App() {
       {diagnostics && <GamepadDiagnostics
         profile={controllerProfile}
         onProfileChange={updateControllerProfile}
-        onLaunch={handlePlatformLaunch}
+        cinemaProfile={cinemaProfile}
+        onCinemaProfileChange={(profile) => void changeCinemaProfile(profile)}
+        onShowDesktop={showDesktop}
         onClose={closeDiagnostics}
       />}
       <Toast message={message} />
