@@ -81,6 +81,8 @@
 .pad-values span { border: 1px solid #806e49; padding: .3rem; }
 .pad-values [data-pressed="true"] { color: #17191d; background: #e4c37c; }
 .launcher-panel { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #806e49; }
+.control-service { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #806e49; }
+.control-service p { max-width: 70rem; }
 .launcher-actions { display: flex; flex-wrap: wrap; gap: .7rem; }
 .diagnostics button:focus-visible { outline: 2px solid #e4c37c; outline-offset: 3px; }
 .diagnostics button:disabled { cursor: not-allowed; opacity: .5; }

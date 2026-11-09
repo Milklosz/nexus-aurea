@@ -56,6 +56,7 @@ describe("PlayStation and standard controller mappings", () => {
     expect(readControllerSample(press(source, 9))?.options).toBe(true);
     expect(resolveControllerProfile({ id: "Unknown pad", mapping: "" }, "auto")).toBeNull();
     expect(resolveControllerProfile({ id: "Unknown pad", mapping: "" }, "standard")).toBe("standard");
+    expect(resolveControllerProfile({ id: "Wireless Controller", mapping: "standard" }, "auto")).toBe("standard");
   });
 });
 
@@ -100,6 +101,19 @@ describe("controller timing and focus", () => {
     engine.update(neutral, 0, true);
     expect(engine.update({ ...neutral, confirm: true }, 10, true)).toEqual([]);
     expect(engine.update({ ...neutral, confirm: true }, 20, false)).toEqual([]);
+    expect(engine.update({ ...neutral, confirm: true }, 30, true)).toEqual([]);
+    expect(engine.update({ ...neutral, confirm: true }, 100, true)).toEqual([]);
+    expect(engine.update(neutral, 110, true)).toEqual([]);
+    expect(engine.update(neutral, 150, true)).toEqual([]);
+    expect(engine.update({ ...neutral, confirm: true }, 160, true)).toEqual([]);
+    expect(engine.update({ ...neutral, confirm: true }, 200, true)).toEqual([{ type: "confirm" }]);
+  });
+
+  it("does not replay a held input after controller disconnect and reconnect", () => {
+    const engine = new ControllerEngine();
+    engine.update(neutral, 0, true);
+    expect(engine.update({ ...neutral, confirm: true }, 10, true)).toEqual([]);
+    expect(engine.update({ ...neutral, connected: false, confirm: true }, 20, true)).toEqual([]);
     expect(engine.update({ ...neutral, confirm: true }, 30, true)).toEqual([]);
     expect(engine.update({ ...neutral, confirm: true }, 100, true)).toEqual([]);
     expect(engine.update(neutral, 110, true)).toEqual([]);

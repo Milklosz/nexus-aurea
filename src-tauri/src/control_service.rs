@@ -1,0 +1,687 @@
+use serde::Serialize;
+use std::sync::{Arc, Mutex, RwLock};
+use tauri::{AppHandle, State};
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlServiceStatus {
+    pub windows: bool,
+    pub running: bool,
+    pub game_mode: bool,
+    pub controller_count: usize,
+    pub playstation_controller_count: usize,
+    pub foreground_process: Option<String>,
+    pub return_hotkey_registered: bool,
+    pub last_error: Option<String>,
+}
+
+impl ControlServiceStatus {
+    fn disabled() -> Self {
+        Self {
+            windows: cfg!(target_os = "windows"),
+            running: false,
+            game_mode: false,
+            controller_count: 0,
+            playstation_controller_count: 0,
+            foreground_process: None,
+            return_hotkey_registered: false,
+            last_error: None,
+        }
+    }
+}
+
+fn is_controller_collection(usage_page: u16, usage: u16) -> bool {
+    usage_page == 0x01 && matches!(usage, 0x04 | 0x05)
+}
+
+fn is_playstation_controller(vendor_id: u32, usage_page: u16, usage: u16) -> bool {
+    vendor_id == 0x054c && is_controller_collection(usage_page, usage)
+}
+
+struct Worker {
+    enabled: Arc<std::sync::atomic::AtomicBool>,
+    game_mode: Arc<std::sync::atomic::AtomicBool>,
+    join: std::thread::JoinHandle<()>,
+}
+
+pub struct ControlService {
+    worker: Mutex<Option<Worker>>,
+    latest: Arc<RwLock<ControlServiceStatus>>,
+}
+
+impl Default for ControlService {
+    fn default() -> Self {
+        Self {
+            worker: Mutex::new(None),
+            latest: Arc::new(RwLock::new(ControlServiceStatus::disabled())),
+        }
+    }
+}
+
+impl ControlService {
+    fn status_with_worker(&self, worker: Option<&Worker>) -> ControlServiceStatus {
+        let mut status = self
+            .latest
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        status.running = worker.is_some_and(|worker| {
+            worker
+                .enabled
+                .load(std::sync::atomic::Ordering::Acquire)
+        });
+        status.game_mode = worker.is_some_and(|worker| {
+            worker
+                .game_mode
+                .load(std::sync::atomic::Ordering::Acquire)
+        });
+        status
+    }
+
+    pub fn status(&self) -> ControlServiceStatus {
+        let worker = self
+            .worker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.status_with_worker(worker.as_ref())
+    }
+
+    pub fn start(&self, app: AppHandle) -> Result<ControlServiceStatus, String> {
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = app;
+            Err("NEXUS Control Service jest dostępny tylko w natywnej aplikacji Windows.".into())
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            use std::sync::atomic::{AtomicBool, Ordering};
+            use std::sync::mpsc;
+            use std::time::Duration;
+
+            let mut worker_slot = self
+                .worker
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if worker_slot.as_ref().is_some_and(|worker| {
+                worker.enabled.load(Ordering::Acquire)
+            }) {
+                return Ok(self.status_with_worker(worker_slot.as_ref()));
+            }
+
+            if let Some(old_worker) = worker_slot.take() {
+                old_worker.enabled.store(false, Ordering::Release);
+                let _ = old_worker.join.join();
+            }
+
+            let enabled = Arc::new(AtomicBool::new(true));
+            let game_mode = Arc::new(AtomicBool::new(false));
+            let (started_tx, started_rx) = mpsc::sync_channel(1);
+            let app_for_thread = app.clone();
+            let enabled_for_thread = Arc::clone(&enabled);
+            let game_mode_for_thread = Arc::clone(&game_mode);
+            let latest_for_thread = Arc::clone(&self.latest);
+            let join = std::thread::Builder::new()
+                .name("nexus-control-session".into())
+                .spawn(move || {
+                    windows::run_worker(
+                        app_for_thread,
+                        enabled_for_thread,
+                        game_mode_for_thread,
+                        latest_for_thread,
+                        started_tx,
+                    );
+                })
+                .map_err(|_| "Nie udało się uruchomić wątku Control Service.".to_string())?;
+
+            match started_rx.recv_timeout(Duration::from_secs(5)) {
+                Ok(Ok(())) => {
+                    *worker_slot = Some(Worker {
+                        enabled,
+                        game_mode,
+                        join,
+                    });
+                    Ok(self.status_with_worker(worker_slot.as_ref()))
+                }
+                Ok(Err(error)) => {
+                    let _ = join.join();
+                    if let Ok(mut status) = self.latest.write() {
+                        status.last_error = Some(error.clone());
+                    }
+                    Err(error)
+                }
+                Err(_) => {
+                    enabled.store(false, Ordering::Release);
+                    let _ = join.join();
+                    let error = "Control Service nie odpowiedział podczas uruchamiania.".to_string();
+                    if let Ok(mut status) = self.latest.write() {
+                        status.running = false;
+                        status.last_error = Some(error.clone());
+                    }
+                    Err(error)
+                }
+            }
+        }
+    }
+
+    pub fn set_game_mode(&self, enabled: bool) -> Result<ControlServiceStatus, String> {
+        let worker = self
+            .worker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(worker) = worker.as_ref() else {
+            return Err("Najpierw uruchom Control Service.".into());
+        };
+        if !worker.enabled.load(std::sync::atomic::Ordering::Acquire) {
+            return Err("Control Service jest wyłączony.".into());
+        }
+        worker
+            .game_mode
+            .store(enabled, std::sync::atomic::Ordering::Release);
+        let mut status = self.status_with_worker(Some(worker));
+        status.return_hotkey_registered = !enabled;
+        if let Ok(mut latest) = self.latest.write() {
+            latest.game_mode = enabled;
+            latest.return_hotkey_registered = !enabled;
+        }
+        Ok(status)
+    }
+
+    pub fn stop(&self) -> ControlServiceStatus {
+        let worker = self
+            .worker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(worker) = worker {
+            worker
+                .enabled
+                .store(false, std::sync::atomic::Ordering::Release);
+            let _ = worker.join.join();
+        }
+        if let Ok(mut latest) = self.latest.write() {
+            latest.running = false;
+            latest.game_mode = false;
+            latest.controller_count = 0;
+            latest.playstation_controller_count = 0;
+            latest.foreground_process = None;
+            latest.return_hotkey_registered = false;
+        }
+        self.status()
+    }
+}
+
+#[tauri::command]
+pub fn get_control_service_status(service: State<'_, ControlService>) -> ControlServiceStatus {
+    service.status()
+}
+
+#[tauri::command]
+pub fn start_control_service(
+    app: AppHandle,
+    service: State<'_, ControlService>,
+) -> Result<ControlServiceStatus, String> {
+    service.start(app)
+}
+
+#[tauri::command]
+pub fn set_control_game_mode(
+    enabled: bool,
+    service: State<'_, ControlService>,
+) -> Result<ControlServiceStatus, String> {
+    service.set_game_mode(enabled)
+}
+
+#[tauri::command]
+pub fn stop_control_service(service: State<'_, ControlService>) -> ControlServiceStatus {
+    service.stop()
+}
+
+#[cfg(target_os = "windows")]
+mod windows {
+    use super::{is_controller_collection, is_playstation_controller, ControlServiceStatus};
+    use std::ffi::c_void;
+    use std::mem::{size_of, MaybeUninit};
+    use std::path::Path;
+    use std::ptr::null_mut;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::SyncSender;
+    use std::sync::{Arc, RwLock};
+    use std::thread;
+    use std::time::{Duration, Instant};
+    use tauri::{AppHandle, Emitter};
+
+    const RIM_TYPE_HID: u32 = 2;
+    const RIDI_DEVICE_INFO: u32 = 0x2000_000b;
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+
+    const WM_HOTKEY: u32 = 0x0312;
+    const PM_REMOVE: u32 = 0x0001;
+    const MOD_ALT: u32 = 0x0001;
+    const MOD_CONTROL: u32 = 0x0002;
+    const MOD_NOREPEAT: u32 = 0x4000;
+    const VK_N: u32 = 0x4e;
+    const VK_F12: u32 = 0x7b;
+    const RETURN_HOTKEY_ID: i32 = 0x4e58;
+    const EMERGENCY_HOTKEY_ID: i32 = 0x4e59;
+
+    type Handle = *mut c_void;
+    type Hwnd = *mut c_void;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct RawInputDeviceList {
+        device: Handle,
+        device_type: u32,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct RawInputHidInfo {
+        vendor_id: u32,
+        product_id: u32,
+        version: u32,
+        usage_page: u16,
+        usage: u16,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    union RawInputDeviceInfoData {
+        mouse: [u32; 4],
+        keyboard: [u32; 6],
+        hid: RawInputHidInfo,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct RawInputDeviceInfo {
+        size: u32,
+        device_type: u32,
+        data: RawInputDeviceInfoData,
+    }
+
+    #[repr(C)]
+    struct Point {
+        x: i32,
+        y: i32,
+    }
+
+    #[repr(C)]
+    struct Message {
+        window: Hwnd,
+        message: u32,
+        w_param: usize,
+        l_param: isize,
+        time: u32,
+        point: Point,
+        private: u32,
+    }
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetRawInputDeviceList(
+            devices: *mut RawInputDeviceList,
+            count: *mut u32,
+            device_list_size: u32,
+        ) -> u32;
+        fn GetRawInputDeviceInfoW(
+            device: Handle,
+            command: u32,
+            data: *mut c_void,
+            size: *mut u32,
+        ) -> u32;
+        fn PeekMessageW(
+            message: *mut Message,
+            window: Hwnd,
+            min_filter: u32,
+            max_filter: u32,
+            remove: u32,
+        ) -> i32;
+        fn RegisterHotKey(window: Hwnd, id: i32, modifiers: u32, key: u32) -> i32;
+        fn UnregisterHotKey(window: Hwnd, id: i32) -> i32;
+        fn GetForegroundWindow() -> Hwnd;
+        fn GetWindowThreadProcessId(window: Hwnd, process_id: *mut u32) -> u32;
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn OpenProcess(access: u32, inherit_handle: i32, process_id: u32) -> Handle;
+        fn QueryFullProcessImageNameW(
+            process: Handle,
+            flags: u32,
+            image_name: *mut u16,
+            size: *mut u32,
+        ) -> i32;
+        fn CloseHandle(object: Handle) -> i32;
+    }
+
+    pub(super) fn run_worker(
+        app: AppHandle,
+        enabled: Arc<AtomicBool>,
+        game_mode: Arc<AtomicBool>,
+        latest: Arc<RwLock<ControlServiceStatus>>,
+        started: SyncSender<Result<(), String>>,
+    ) {
+        let modifiers = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
+        let message_queue_ready = unsafe {
+            let mut message = MaybeUninit::<Message>::zeroed();
+            PeekMessageW(message.as_mut_ptr(), null_mut(), 0, 0, PM_REMOVE)
+        };
+        let _ = message_queue_ready;
+
+        let return_registered = unsafe {
+            RegisterHotKey(null_mut(), RETURN_HOTKEY_ID, modifiers, VK_N) != 0
+        };
+        if !return_registered {
+            fail_startup(
+                &latest,
+                &started,
+                "Skrót Ctrl+Alt+N jest już zajęty. Usługa pozostała wyłączona.",
+            );
+            return;
+        }
+
+        let emergency_registered = unsafe {
+            RegisterHotKey(null_mut(), EMERGENCY_HOTKEY_ID, modifiers, VK_F12) != 0
+        };
+        if !emergency_registered {
+            unsafe { UnregisterHotKey(null_mut(), RETURN_HOTKEY_ID) };
+            fail_startup(
+                &latest,
+                &started,
+                "Nie udało się zarejestrować awaryjnego skrótu. Usługa pozostała wyłączona.",
+            );
+            return;
+        }
+
+        let (controller_count, playstation_count) = match enumerate_controllers() {
+            Ok(counts) => counts,
+            Err(error) => {
+                unsafe {
+                    UnregisterHotKey(null_mut(), RETURN_HOTKEY_ID);
+                    UnregisterHotKey(null_mut(), EMERGENCY_HOTKEY_ID);
+                }
+                fail_startup(&latest, &started, &error);
+                return;
+            }
+        };
+
+        let mut status = ControlServiceStatus {
+            windows: true,
+            running: true,
+            game_mode: false,
+            controller_count,
+            playstation_controller_count: playstation_count,
+            foreground_process: foreground_process_name(),
+            return_hotkey_registered: true,
+            last_error: None,
+        };
+        write_status(&latest, status.clone());
+        publish_status(&app, &status);
+        let _ = started.send(Ok(()));
+
+        let mut return_key_registered = true;
+        let mut observed_game_mode = false;
+        let mut last_refresh = Instant::now();
+
+        while enabled.load(Ordering::Acquire) {
+            let current_game_mode = game_mode.load(Ordering::Acquire);
+            if current_game_mode != observed_game_mode {
+                if current_game_mode {
+                    let unregistered = unsafe { UnregisterHotKey(null_mut(), RETURN_HOTKEY_ID) != 0 };
+                    if !unregistered {
+                        status.last_error = Some(
+                            "Nie udało się zwolnić skrótu powrotu; Control Service wyłączono.".into(),
+                        );
+                        write_status(&latest, status.clone());
+                        publish_status(&app, &status);
+                        enabled.store(false, Ordering::Release);
+                        break;
+                    }
+                    return_key_registered = false;
+                } else {
+                    let registered = unsafe {
+                        RegisterHotKey(null_mut(), RETURN_HOTKEY_ID, modifiers, VK_N) != 0
+                    };
+                    if !registered {
+                        status.last_error = Some(
+                            "Skrót Ctrl+Alt+N został zajęty; Control Service wyłączono.".into(),
+                        );
+                        write_status(&latest, status.clone());
+                        publish_status(&app, &status);
+                        enabled.store(false, Ordering::Release);
+                        break;
+                    }
+                    return_key_registered = true;
+                }
+                observed_game_mode = current_game_mode;
+                status.game_mode = current_game_mode;
+                status.return_hotkey_registered = return_key_registered;
+                write_status(&latest, status.clone());
+                publish_status(&app, &status);
+            }
+
+            loop {
+                let mut queued = MaybeUninit::<Message>::zeroed();
+                let has_message = unsafe {
+                    PeekMessageW(queued.as_mut_ptr(), null_mut(), 0, 0, PM_REMOVE) != 0
+                };
+                if !has_message {
+                    break;
+                }
+                let message = unsafe { queued.assume_init() };
+                if message.message != WM_HOTKEY {
+                    continue;
+                }
+                match message.w_param as i32 {
+                    RETURN_HOTKEY_ID if !observed_game_mode && return_key_registered => {
+                        let _ = app.emit("nexus-control-return", ());
+                    }
+                    EMERGENCY_HOTKEY_ID => {
+                        enabled.store(false, Ordering::Release);
+                        let _ = app.emit("control-service-stopped", "keyboard-emergency");
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+
+            if last_refresh.elapsed() >= Duration::from_millis(750) {
+                match enumerate_controllers() {
+                    Ok((controllers, playstation)) => {
+                        status.controller_count = controllers;
+                        status.playstation_controller_count = playstation;
+                        status.foreground_process = foreground_process_name();
+                        status.game_mode = observed_game_mode;
+                        status.return_hotkey_registered = return_key_registered;
+                        status.last_error = None;
+                        write_status(&latest, status.clone());
+                        publish_status(&app, &status);
+                    }
+                    Err(error) => {
+                        status.last_error = Some(error);
+                        write_status(&latest, status.clone());
+                        publish_status(&app, &status);
+                        let _ = app.emit("control-service-stopped", "device-enumeration-failed");
+                        enabled.store(false, Ordering::Release);
+                        break;
+                    }
+                }
+                last_refresh = Instant::now();
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+
+        unsafe {
+            if return_key_registered {
+                UnregisterHotKey(null_mut(), RETURN_HOTKEY_ID);
+            }
+            UnregisterHotKey(null_mut(), EMERGENCY_HOTKEY_ID);
+        }
+        status.running = false;
+        status.game_mode = false;
+        status.controller_count = 0;
+        status.playstation_controller_count = 0;
+        status.foreground_process = None;
+        status.return_hotkey_registered = false;
+        write_status(&latest, status.clone());
+        publish_status(&app, &status);
+    }
+
+    fn fail_startup(
+        latest: &RwLock<ControlServiceStatus>,
+        started: &SyncSender<Result<(), String>>,
+        message: &str,
+    ) {
+        if let Ok(mut status) = latest.write() {
+            status.running = false;
+            status.last_error = Some(message.to_string());
+        }
+        let _ = started.send(Err(message.to_string()));
+    }
+
+    fn write_status(latest: &RwLock<ControlServiceStatus>, status: ControlServiceStatus) {
+        if let Ok(mut target) = latest.write() {
+            *target = status;
+        }
+    }
+
+    fn publish_status(app: &AppHandle, status: &ControlServiceStatus) {
+        let _ = app.emit("control-service-status", status.clone());
+    }
+
+    fn enumerate_controllers() -> Result<(usize, usize), String> {
+        for _ in 0..2 {
+            let mut count = 0u32;
+            let first_result = unsafe {
+                GetRawInputDeviceList(
+                    null_mut(),
+                    &mut count,
+                    size_of::<RawInputDeviceList>() as u32,
+                )
+            };
+            if first_result == u32::MAX {
+                return Err("Windows nie udostępnił listy urządzeń HID.".into());
+            }
+            if count == 0 {
+                return Ok((0, 0));
+            }
+            if count > 4096 {
+                return Err("Lista urządzeń HID przekroczyła bezpieczny limit.".into());
+            }
+
+            let mut devices = Vec::<RawInputDeviceList>::with_capacity(count as usize);
+            let actual = unsafe {
+                GetRawInputDeviceList(
+                    devices.as_mut_ptr(),
+                    &mut count,
+                    size_of::<RawInputDeviceList>() as u32,
+                )
+            };
+            if actual == u32::MAX {
+                continue;
+            }
+            unsafe { devices.set_len(actual as usize) };
+
+            let mut controllers = 0;
+            let mut playstation = 0;
+            for device in devices.iter().filter(|device| device.device_type == RIM_TYPE_HID) {
+                let mut info = RawInputDeviceInfo {
+                    size: size_of::<RawInputDeviceInfo>() as u32,
+                    device_type: 0,
+                    data: RawInputDeviceInfoData { keyboard: [0; 6] },
+                };
+                let mut info_size = info.size;
+                let result = unsafe {
+                    GetRawInputDeviceInfoW(
+                        device.device,
+                        RIDI_DEVICE_INFO,
+                        (&mut info as *mut RawInputDeviceInfo).cast::<c_void>(),
+                        &mut info_size,
+                    )
+                };
+                // A controller can disconnect between list and detail reads; skip that stale row.
+                if result == u32::MAX || info.device_type != RIM_TYPE_HID {
+                    continue;
+                }
+                let hid = unsafe { info.data.hid };
+                if is_controller_collection(hid.usage_page, hid.usage) {
+                    controllers += 1;
+                    if is_playstation_controller(hid.vendor_id, hid.usage_page, hid.usage) {
+                        playstation += 1;
+                    }
+                }
+            }
+            return Ok((controllers, playstation));
+        }
+        Err("Lista urządzeń HID zmieniała się podczas odczytu; usługę wyłączono.".into())
+    }
+
+    fn foreground_process_name() -> Option<String> {
+        let window = unsafe { GetForegroundWindow() };
+        if window.is_null() {
+            return None;
+        }
+        let mut process_id = 0u32;
+        if unsafe { GetWindowThreadProcessId(window, &mut process_id) } == 0 || process_id == 0 {
+            return None;
+        }
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
+        if process.is_null() {
+            return None;
+        }
+        let mut path = vec![0u16; 32768];
+        let mut length = path.len() as u32;
+        let succeeded = unsafe {
+            QueryFullProcessImageNameW(process, 0, path.as_mut_ptr(), &mut length) != 0
+        };
+        unsafe { CloseHandle(process) };
+        if !succeeded {
+            return None;
+        }
+        let path = String::from_utf16_lossy(&path[..length as usize]);
+        Path::new(&path)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+    }
+
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ControlService, ControlServiceStatus};
+
+    #[test]
+    fn service_is_disabled_by_default() {
+        let service = ControlService::default();
+        let status = service.status();
+        assert!(!status.running);
+        assert!(!status.game_mode);
+        assert!(!status.return_hotkey_registered);
+        assert_eq!(status.controller_count, 0);
+    }
+
+    #[test]
+    fn disabled_status_does_not_claim_global_input_mapping() {
+        let status = ControlServiceStatus::disabled();
+        assert!(!status.running);
+        assert!(!status.return_hotkey_registered);
+        assert!(status.last_error.is_none());
+    }
+
+    #[test]
+    fn only_generic_desktop_joysticks_and_gamepads_are_counted() {
+        assert!(super::is_controller_collection(0x01, 0x04));
+        assert!(super::is_controller_collection(0x01, 0x05));
+        assert!(!super::is_controller_collection(0x01, 0x02));
+        assert!(!super::is_controller_collection(0x0c, 0x05));
+    }
+
+    #[test]
+    fn playstation_detection_requires_sony_vendor_and_gamepad_usage() {
+        assert!(super::is_playstation_controller(0x054c, 0x01, 0x05));
+        assert!(!super::is_playstation_controller(0x045e, 0x01, 0x05));
+        assert!(!super::is_playstation_controller(0x054c, 0x01, 0x02));
+    }
+}

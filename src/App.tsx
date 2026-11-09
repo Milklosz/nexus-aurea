@@ -10,10 +10,13 @@ import { streamingServices } from "./data/streamingServices";
 import { useClock } from "./hooks/useClock";
 import { useGamepad } from "./hooks/useGamepad";
 import { useNavigation } from "./hooks/useNavigation";
+import { useFocusRestoreOnClose } from "./hooks/useFocusRestoreOnClose";
 import { useToast } from "./hooks/useToast";
 import { useWeather } from "./hooks/useWeather";
 import { openStreamingService } from "./services/openStreamingService";
 import { launchPlatform, type PlatformLauncherId } from "./services/platformLaunchers";
+import { listenForNexusControlReturn } from "./services/controlService";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ControllerProfile } from "./services/controllerEngine";
 import "./styles.css";
 
@@ -54,6 +57,12 @@ export default function App() {
   );
   const activateSelected = useCallback(() => void openService(activeServiceRef.current), [openService]);
   const navigation = useNavigation(streamingServices.length, activateSelected, showMenu);
+  const restoreSelectedFocus = useCallback(
+    () => navigation.focusApp(activeServiceRef.current),
+    [navigation.focusApp],
+  );
+  useFocusRestoreOnClose(diagnostics, restoreSelectedFocus);
+  const closeDiagnostics = useCallback(() => setDiagnostics(false), []);
   const moveControllerFocus = useCallback((delta: -1 | 1) => {
     const dialog = document.querySelector("dialog[open]");
     if (!dialog) {
@@ -80,12 +89,11 @@ export default function App() {
   }, [activateSelected]);
   const backControllerFocus = useCallback(() => {
     if (document.querySelector("dialog[open]")) {
-      setDiagnostics(false);
-      navigation.focusApp(activeServiceRef.current);
+      closeDiagnostics();
       return;
     }
     navigation.focusApp(0);
-  }, [navigation.focusApp]);
+  }, [closeDiagnostics, navigation.focusApp]);
   const toggleDiagnostics = useCallback(() => setDiagnostics((open) => !open), []);
   const updateControllerProfile = useCallback((profile: ControllerProfile) => {
     setControllerProfile(profile);
@@ -123,6 +131,24 @@ export default function App() {
     window.addEventListener("focus", restore);
     return () => { window.removeEventListener("keydown", recover); window.removeEventListener("focus", restore); };
   }, [diagnostics, navigation.focusApp, showToast]);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void listenForNexusControlReturn(() => {
+      if (!active) return;
+      void getCurrentWindow().setFocus().catch(() => {
+        showToast("Windows zablokował powrót do NEXUS. Wróć do aplikacji przez Alt+Tab.");
+      });
+    }).then((stopListening) => {
+      if (active) unlisten = stopListening;
+      else stopListening();
+    }).catch(() => {});
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [showToast]);
 
   const handleFocus = useCallback(
     (index: number) => {
@@ -165,7 +191,7 @@ export default function App() {
         profile={controllerProfile}
         onProfileChange={updateControllerProfile}
         onLaunch={handlePlatformLaunch}
-        onClose={() => { setDiagnostics(false); navigation.focusApp(activeServiceRef.current); }}
+        onClose={closeDiagnostics}
       />}
       <Toast message={message} />
     </main>

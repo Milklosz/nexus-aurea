@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { gamepadSnapshot } from "../services/gamepadSnapshot";
+import { ControlServicePanel } from "./ControlServicePanel";
 import {
   resolveControllerProfile,
   type ControllerProfile,
@@ -99,6 +100,7 @@ export function GamepadDiagnostics({
         <p>Osie: {pad.axes.map((value, i) => "A" + i + ": " + value.toFixed(3)).join(" · ")}</p>
       </section>;
     })}
+    <ControlServicePanel />
     <section className="launcher-panel" aria-label="Launchery opcjonalne">
       <h3>Launchery Windows</h3>
       <p>NEXUS nie instaluje ani nie zmienia ustawień tych aplikacji. Po uruchomieniu pozostaje dostępny po powrocie fokusu.</p>

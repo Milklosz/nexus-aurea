@@ -1,4 +1,4 @@
-# NEXUS AUREA v0.4
+# NEXUS AUREA v0.5.0
 
 Projekt React + TypeScript + Tauri oparty bezpośrednio na zatwierdzonym prototypie AUREA · Grand Cinema. Oryginalny plik jest zachowany w `design/aurea-prototype.html`, a arkusz `src/styles.css` został z niego przeniesiony bez zmiany bazowego układu, kolorów ani animacji.
 
@@ -10,7 +10,7 @@ NEXUS AUREA jest budowany jako instalator NSIS `.exe` dla Windows x64. Instalato
 
 1. Otwórz [przebiegi CI](https://github.com/Milklosz/nexus-aurea/actions/workflows/ci.yml) i wybierz ukończony przebieg z gałęzi `main`.
 2. W sekcji **Artifacts** pobierz `NEXUS-AUREA-Windows-x64-<SHA>` i rozpakuj pobrane archiwum ZIP.
-3. Uruchom plik instalatora `NEXUS AUREA_0.3.0_x64-setup.exe`.
+3. Uruchom instalator `NEXUS AUREA_<wersja>_x64-setup.exe` z pobranego artefaktu.
 
 Artefakt jest tworzony po udanym buildzie Windows przy każdym ukończonym pushu na `main`. GitHub przechowuje go przez 30 dni. Pobranie artefaktu wymaga zalogowania do GitHuba i dostępu do repozytorium.
 
@@ -92,3 +92,17 @@ Grand Cinema artwork, layout, streaming destinations, and their HTTPS allowlist 
 ### Manual Windows acceptance checks
 
 Hardware tests remain required for each PlayStation controller over USB and Bluetooth: compare the standard and raw profiles; verify D-pad and analog left/right; confirm ✕, ◯, and Options; hold a direction to check repeat; traverse all five tiles in both directions; open and close the Options panel with the controller; and test Windows focus return after launching each installed platform. These checks are not represented by synthetic CI tests.
+
+## v0.5.0 — NEXUS Control Service (safe prototype)
+
+The first native Control Service prototype runs in the signed-in user's desktop session. It uses only Windows user-mode APIs and requires no driver, administrator access, shell replacement, password access, or global keyboard hook. It is **off by default** and starts only after the user presses **Włącz monitoring sesji** in controller diagnostics.
+
+While enabled, it enumerates HID device metadata to report Generic Desktop gamepads/joysticks and Sony VID `054C`; it does not read button reports. It reports only the foreground executable name, not the window title or full path. `Ctrl+Alt+N` requests a return to NEXUS. `Ctrl+Alt+F12` unregisters the hotkeys and stops the worker. Game mode unregisters the return shortcut and leaves only the emergency stop active. If hotkey registration or HID enumeration fails, activation is rejected or the worker shuts down. A shortcut already owned by another app is reported and not taken over.
+
+The existing Steam Big Picture and Playnite Fullscreen buttons remain explicit, fixed allow-list launch actions. NEXUS restores its selected tile when Windows returns focus; this prototype does not watch or close external apps and does not force foreground focus after a process or browser tab exits.
+
+Global gamepad button mapping, cursor movement, Windows actions, volume, automatic game detection, and process-close focus restoration are intentionally not active in this prototype. Focused NEXUS continues to use the existing Gamepad API locally. The next step is a separately tested Windows input backend that can identify DualShock/DualSense reports and suspend itself for games or Steam Input before enabling any global actions.
+
+Synthetic tests cover the disabled default, Sony HID classification, hotkey bridge state, game-mode shortcut behavior, emergency-stop UI updates, focus restoration after closing diagnostics, controller reconnects, and keyboard traversal across the five dock tiles. They do not prove HID enumeration, global hotkey delivery, HDMI/fullscreen behavior, Steam Input coexistence, or controller mapping on the MSI. These remain manual MSI acceptance checks before any global button mapping is added.
+
+For the first MSI acceptance pass, open diagnostics and start the service manually; confirm USB and Bluetooth pad enumeration, switch to another app and test `Ctrl+Alt+N`, enable game mode and confirm that shortcut is released, then test `Ctrl+Alt+F12` and verify the status returns to disabled. Repeat once with Steam Input active to confirm the prototype observes device metadata without consuming controller reports. No v0.5 installer is to be installed automatically.

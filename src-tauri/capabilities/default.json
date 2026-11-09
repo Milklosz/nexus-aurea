@@ -7,8 +7,11 @@
   ],
   "permissions": [
     "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
     "core:window:allow-set-fullscreen",
     "core:window:allow-set-decorations",
+    "core:window:allow-set-focus",
     {
       "identifier": "opener:allow-open-url",
       "allow": [
