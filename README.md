@@ -1,4 +1,4 @@
-# NEXUS AUREA v0.3
+# NEXUS AUREA v0.4
 
 Projekt React + TypeScript + Tauri oparty bezpośrednio na zatwierdzonym prototypie AUREA · Grand Cinema. Oryginalny plik jest zachowany w `design/aurea-prototype.html`, a arkusz `src/styles.css` został z niego przeniesiony bez zmiany bazowego układu, kolorów ani animacji.
 
@@ -78,3 +78,17 @@ Services still open through the system opener in the user's default browser. The
 CI runs frontend tests, TypeScript/production build and locked Rust checks on Windows/macOS, and uploads the Windows x64 NSIS installer on successful Windows builds (30-day retention). Tests use synthetic controller samples and a DOM environment, including analog values, unsupported API, disabled polling, relative navigation and native window recovery calls. These do not prove hardware or Windows foreground behavior.
 
 After installing on MSI: confirm the footer version; verify no title bar at startup; use Esc then F11; test `--windowed`; open diagnostics without a controller; later test PlayStation buttons/axes and reconnect; launch YouTube and return via Alt+Tab, checking the dock selection. Native fullscreen and physical controller acceptance remain manual hardware checks.
+
+## v0.4.0 — controller engine and optional Windows launchers
+
+The controller engine accepts standard Gamepad API mappings and an explicit PlayStation raw profile. Automatic mode uses the browser's standard mapping, or a PlayStation raw layout when the device ID identifies a DualShock, DualSense, or Wireless Controller. Diagnostics show raw buttons, axes, the selected profile, and whether NEXUS currently has focus. The profile can be cycled and is saved locally.
+
+Left/right D-pad and left stick move through every dock tile and wrap at each end. Axis activation uses 0.55 and release uses 0.35; directional input is debounced for 40 ms, repeats 420 ms after the first move, then every 135 ms. ✕ confirms, ◯ returns to the first tile or closes the Options panel, and Options toggles diagnostics. Polling only triggers actions while the NEXUS window is focused and visible. Unsupported mappings remain visible in diagnostics and keyboard control remains available.
+
+The Options/diagnostics panel can launch Steam Big Picture or Playnite Fullscreen when their executables are found in common Windows installation folders. Launching is an explicit user action; missing applications are reported and never installed. Steam receives its fixed Big Picture URI, and Playnite receives the documented **--startfullscreen** argument ([Playnite command-line documentation](https://api.playnite.link/docs/manual/advanced/cmdlineArguments.html)). [Steam Big Picture](https://help.steampowered.com/en/faqs/view/3725-76D3-3F31-FB63) remains a separate external application. NEXUS does not monitor or terminate either process, force foreground focus, or claim to detect when an external browser tab closes. When Windows returns focus to NEXUS, the selected tile is restored.
+
+Grand Cinema artwork, layout, streaming destinations, and their HTTPS allowlist are unchanged. NEXUS continues to open official service pages and does not alter DRM or streaming protections. CI runs the controller and launcher tests, performs frontend and Rust checks, builds the Windows x64 NSIS installer, and uploads it as a 30-day Actions artifact. No release is created by this change.
+
+### Manual Windows acceptance checks
+
+Hardware tests remain required for each PlayStation controller over USB and Bluetooth: compare the standard and raw profiles; verify D-pad and analog left/right; confirm ✕, ◯, and Options; hold a direction to check repeat; traverse all five tiles in both directions; open and close the Options panel with the controller; and test Windows focus return after launching each installed platform. These checks are not represented by synthetic CI tests.
