@@ -60,3 +60,21 @@ Workflow ma domyślne uprawnienie `contents: read`; tylko job publikujący tagow
 Automatyczne aktualizacje, AirPlay, pilot iPhone/LAN oraz test fizycznego pada nie są jeszcze skonfigurowane. Instalator nie jest podpisany. Projekt graficzny Grand Cinema i działające funkcje aplikacji pozostają bez zmian.
 
 Podgląd web uruchomisz przez `pnpm dev`; Vite udostępnia go pod `http://127.0.0.1:1420/`.
+
+## v0.3.1 — fullscreen, version and controller diagnostics
+
+The desktop app starts in native Tauri fullscreen without decorations. Esc restores a decorated window; F11 toggles fullscreen. Alt+F4 remains the Windows exit shortcut. If the web UI cannot respond, close the app and start `nexus-aurea.exe --windowed` (or add `--windowed` to a shortcut target). This recovery option does not change persistent settings.
+
+The Tauri version comes from `package.json`; the desktop footer reads `getVersion()` from the running app. Browser previews use package metadata. CI checks that the Rust crate version matches.
+
+Open controller diagnostics with F2, Options (standard-mapped controller), or the diagnostics button. The modal shows API availability, connected devices, IDs, mapping, raw button values and axes. Press a controller button with NEXUS focused to let the browser expose the device. Windows device detection alone does not confirm Gamepad API support. Diagnostics do not activate launcher items. Launcher polling only acts while NEXUS is focused and visible and only interprets standard-mapped devices. Nonstandard devices remain visible as raw values. No global input hook, driver, controller emulator or physical controller is required for CI.
+
+### Return from external services: limitation
+
+Services still open through the system opener in the user's default browser. The opener does not expose the lifecycle of a browser tab or an existing browser process. NEXUS therefore cannot reliably detect tab closure or guarantee automatic foreground focus. No process watcher, forced foreground loop or browser termination is used. When Windows or the user returns focus to NEXUS (for example with Alt+Tab), NEXUS restores the selected dock button. True automatic return requires a separately designed managed browser/window integration and is not implemented here.
+
+### Validation and MSI smoke test
+
+CI runs frontend tests, TypeScript/production build and locked Rust checks on Windows/macOS, and uploads the Windows x64 NSIS installer on successful Windows builds (30-day retention). Tests use synthetic controller samples and a DOM environment, including analog values, unsupported API, disabled polling, relative navigation and native window recovery calls. These do not prove hardware or Windows foreground behavior.
+
+After installing on MSI: confirm the footer version; verify no title bar at startup; use Esc then F11; test `--windowed`; open diagnostics without a controller; later test PlayStation buttons/axes and reconnect; launch YouTube and return via Alt+Tab, checking the dock selection. Native fullscreen and physical controller acceptance remain manual hardware checks.

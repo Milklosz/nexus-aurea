@@ -32,6 +32,7 @@ export function useNavigation(count: number, onActivate: () => void, onMenu: () 
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (document.querySelector("dialog[open]")) return;
       const target = event.target;
       if (
         target instanceof HTMLElement &&
@@ -49,7 +50,7 @@ export function useNavigation(count: number, onActivate: () => void, onMenu: () 
       } else if (event.key.toLowerCase() === "x") {
         event.preventDefault();
         activateRef.current();
-      } else if (event.key === "Escape") {
+      } else if (event.key === "F2") {
         menuRef.current();
       }
     };
@@ -62,7 +63,10 @@ export function useNavigation(count: number, onActivate: () => void, onMenu: () 
     };
   }, [focusApp]);
 
+  const moveApp = useCallback((delta: number) => focusApp(activeIndexRef.current + delta), [focusApp]);
+
   return {
+    moveApp,
     activeIndex,
     buttonRefs,
     focusApp,

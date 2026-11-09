@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-export function useGamepad(focusApp: (index: number) => void, onActivate: () => void, onMenu: () => void) {
+export function useGamepad(focusApp: (index: number) => void, onActivate: () => void, onMenu: () => void, enabled = true) {
   const activateRef = useRef(onActivate);
   const menuRef = useRef(onMenu);
 
@@ -13,14 +13,14 @@ export function useGamepad(focusApp: (index: number) => void, onActivate: () => 
   }, [onMenu]);
 
   useEffect(() => {
-    if (!navigator.getGamepads) return;
+    if (!navigator.getGamepads || !enabled) return;
 
     let frame = 0;
     let previous = { left: false, right: false, open: false, menu: false };
 
     const poll = () => {
       const pads = Array.from(navigator.getGamepads() ?? []).filter((pad) => pad?.connected);
-      const pad = pads[0];
+      const pad = document.hasFocus() && document.visibilityState === "visible" ? pads.find(pad => pad?.mapping === "standard") : undefined;
 
       if (!pad) {
         previous = { left: false, right: false, open: false, menu: false };
@@ -43,5 +43,5 @@ export function useGamepad(focusApp: (index: number) => void, onActivate: () => 
 
     frame = window.requestAnimationFrame(poll);
     return () => window.cancelAnimationFrame(frame);
-  }, [focusApp]);
+  }, [focusApp, enabled]);
 }

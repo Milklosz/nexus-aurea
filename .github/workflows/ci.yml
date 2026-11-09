@@ -50,6 +50,9 @@ jobs:
       - name: Build React and TypeScript
         run: pnpm build
 
+      - name: Check patch whitespace
+        run: git diff --check
+
       - name: Check Rust backend (Windows MSVC)
         if: runner.os == 'Windows'
         run: cargo check --locked --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc

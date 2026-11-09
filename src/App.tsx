@@ -1,4 +1,7 @@
-import { useCallback, useRef } from "react";
+import { GamepadDiagnostics } from "./components/GamepadDiagnostics";
+import { useAppVersion } from "./hooks/useAppVersion";
+import { windowMode } from "./services/windowMode";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AppDock } from "./components/AppDock";
 import { HeroPanel } from "./components/HeroPanel";
 import { StatusBar } from "./components/StatusBar";
@@ -13,11 +16,13 @@ import { openStreamingService } from "./services/openStreamingService";
 import "./styles.css";
 
 export default function App() {
+  const version = useAppVersion();
+  const [diagnostics, setDiagnostics] = useState(false);
   const { now, time } = useClock();
   const { label: weatherLabel, title: weatherTitle } = useWeather();
   const { message, showToast } = useToast();
   const activeServiceRef = useRef(0);
-  const showMenu = useCallback(() => showToast("Menu ustawień — dostępne w kolejnej wersji."), [showToast]);
+  const showMenu = useCallback(() => setDiagnostics(true), []);
   const showRecommendation = useCallback(
     () => showToast("„Nocna zmiana” to karta demonstracyjna. Wybierz usługę z docka."),
     [showToast],
@@ -36,7 +41,21 @@ export default function App() {
   );
   const activateSelected = useCallback(() => void openService(activeServiceRef.current), [openService]);
   const navigation = useNavigation(streamingServices.length, activateSelected, showMenu);
-  useGamepad(navigation.focusApp, activateSelected, showMenu);
+  useGamepad(navigation.moveApp, activateSelected, showMenu, !diagnostics);
+  useEffect(() => {
+    const recover = (event: KeyboardEvent) => {
+      if (event.key === "Escape" || event.key === "F11") {
+        event.preventDefault();
+        void windowMode(event.key === "Escape" ? false : undefined)
+          .catch(() => showToast("Nie udało się zmienić trybu okna. Uruchom z --windowed."));
+      }
+      if (event.key === "F2") setDiagnostics(true);
+    };
+    const restore = () => { if (!diagnostics) navigation.focusApp(activeServiceRef.current); };
+    window.addEventListener("keydown", recover);
+    window.addEventListener("focus", restore);
+    return () => { window.removeEventListener("keydown", recover); window.removeEventListener("focus", restore); };
+  }, [diagnostics, navigation.focusApp, showToast]);
 
   const handleFocus = useCallback(
     (index: number) => {
@@ -70,10 +89,12 @@ export default function App() {
       <footer className="controls">
         <span>
           ◯ / <kbd>←</kbd> <kbd>→</kbd> &nbsp;PORUSZAJ &nbsp;·&nbsp; ✕ / <kbd>ENTER</kbd> &nbsp;WYBIERZ
-          &nbsp;·&nbsp; OPTIONS &nbsp;MENU
+          &nbsp;·&nbsp; OPTIONS / F2 &nbsp;PAD · F11 &nbsp;EKRAN · ESC &nbsp;OKNO
         </span>
-        <span className="version">AUREA &nbsp;/&nbsp; V0.2</span>
+        <span className="version">AUREA &nbsp;/&nbsp; V{version}</span>
       </footer>
+      <button className="diagnostics-trigger" onClick={showMenu}>Diagnostyka pada</button>
+      {diagnostics && <GamepadDiagnostics onClose={() => { setDiagnostics(false); navigation.focusApp(activeServiceRef.current); }} />}
       <Toast message={message} />
     </main>
   );
