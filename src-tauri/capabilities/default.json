@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Main NEXUS AUREA window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://www.netflix.com/**" },
+        { "url": "https://www.disneyplus.com/**" },
+        { "url": "https://www.hbomax.com/**" },
+        { "url": "https://www.primevideo.com/**" },
+        { "url": "https://www.youtube.com/**" }
+      ]
+    }
+  ]
+}

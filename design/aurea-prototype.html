@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>NEXUS — AUREA Cinema</title>
+  <style>
+    :root { color-scheme: dark; --cream: #f5f0e7; --muted: #c9c3b8; --gold: #d2b484; --ease: cubic-bezier(.2,.8,.2,1); }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #08090d; color: var(--cream); font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { min-width: 780px; }
+    .screen { position: relative; isolation: isolate; width: 100vw; height: 100svh; min-height: 650px; overflow: hidden; background: radial-gradient(ellipse at 76% 44%, #3d2928 0, #211b20 34%, #0a0c12 74%); }
+    .screen::before { content: ""; position: absolute; z-index: -3; inset: 0; background: radial-gradient(ellipse 27% 33% at 77% 37%, #d99766 0%, #a75e4d 18%, #5a3437 36%, transparent 73%), radial-gradient(ellipse 38% 26% at 72% 65%, #784b42 0%, transparent 72%), linear-gradient(90deg, #090a0e 0%, #111116 37%, #1f1a20 69%, #0a0c12 100%); }
+    .screen::after { content: ""; position: absolute; z-index: -1; inset: 0; pointer-events: none; background: linear-gradient(90deg, rgba(6,7,10,.76) 0%, rgba(6,7,10,.4) 40%, rgba(6,7,10,.04) 76%), linear-gradient(0deg, rgba(5,7,10,.85) 0%, transparent 37%), linear-gradient(180deg, rgba(5,7,10,.36) 0%, transparent 22%); }
+    .sun { position: absolute; z-index: -2; width: min(34vw, 600px); aspect-ratio: 1; right: 8%; top: 9%; border-radius: 50%; background: radial-gradient(circle, rgba(255,225,187,.93) 0 14%, rgba(229,165,114,.52) 33%, rgba(203,117,82,.16) 57%, transparent 72%); filter: blur(2px); }
+    .ridge { position: absolute; z-index: -1; right: -4%; bottom: 13%; width: 71%; height: 51%; clip-path: polygon(0 59%, 13% 36%, 22% 48%, 34% 18%, 41% 32%, 55% 4%, 64% 30%, 78% 12%, 100% 48%, 100% 100%, 0 100%); background: linear-gradient(164deg, rgba(108,93,94,.84), #27232c 58%, #11141a); opacity: .76; }
+    .ridge.back { right: -7%; bottom: 8%; width: 76%; height: 43%; clip-path: polygon(0 50%, 16% 20%, 26% 44%, 41% 28%, 53% 48%, 67% 19%, 81% 38%, 100% 14%, 100% 100%, 0 100%); background: linear-gradient(160deg, #40343b, #11141a 78%); opacity: .92; }
+    .topbar { position: absolute; top: clamp(30px, 5.5vh, 62px); left: 6.2%; right: 6.2%; display: flex; align-items: flex-start; justify-content: space-between; }
+    .brand { display: flex; align-items: center; gap: 18px; }
+    .wordmark { font-size: clamp(18px, 1.45vw, 27px); font-weight: 700; letter-spacing: .31em; white-space: nowrap; }
+    .brand-line { width: 1px; height: 26px; background: rgba(255,255,255,.25); }
+    .edition { color: #d0cbc2; font-size: 10px; letter-spacing: .25em; opacity: .73; }
+    .status { display: flex; align-items: center; gap: clamp(22px, 3vw, 55px); text-align: right; }
+    .weather-label { display: block; margin-bottom: 7px; color: #d3cdc3; font-size: 10px; letter-spacing: .2em; }
+    .weather { color: #f7f4ee; font-size: 13px; white-space: nowrap; }
+    .clock { font-size: clamp(27px, 2.05vw, 39px); font-weight: 300; letter-spacing: .025em; font-variant-numeric: tabular-nums; }
+    .hero { position: absolute; top: 23%; left: 6.1%; width: min(52%, 860px); }
+    .eyebrow { margin: 0 0 25px; color: var(--gold); font-size: 11px; letter-spacing: .34em; }
+    h1 { margin: 0; font-size: clamp(46px, 5.1vw, 91px); line-height: .99; font-weight: 480; letter-spacing: -.055em; text-shadow: 0 4px 36px #09090b55; }
+    .summary { max-width: 630px; margin: 22px 0 0; color: #e0dbd2; font-size: clamp(15px, 1.25vw, 21px); line-height: 1.55; opacity: .88; }
+    .metadata { margin-top: 26px; color: #d4cec4; font-size: 11px; letter-spacing: .18em; opacity: .7; }
+    .actions { display: flex; align-items: center; gap: 28px; margin-top: 32px; }
+    .watch { display: inline-flex; align-items: center; gap: 12px; min-height: 48px; padding: 0 20px; border: 1px solid rgba(255,255,255,.28); border-radius: 28px; background: rgba(255,255,255,.075); color: var(--cream); font: inherit; font-size: 13px; letter-spacing: .07em; }
+    .play { display: inline-grid; place-items: center; width: 19px; height: 19px; border-radius: 50%; background: var(--cream); color: #151416; font-size: 9px; }
+    .details { color: #eee8df; font-size: 13px; opacity: .78; }
+    .dock-caption { position: absolute; left: 6.2%; bottom: calc(14% + 164px); color: #d2cbbf; font-size: 10px; letter-spacing: .27em; opacity: .69; }
+    .dock-wrap { position: absolute; left: 5.5%; right: 5.5%; bottom: 7.5%; display: grid; grid-template-columns: minmax(0, 1fr) minmax(175px, 19%); gap: 16px; align-items: stretch; }
+    .dock { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: clamp(9px, 1.15vw, 21px); padding: 14px; border: 1px solid rgba(255,255,255,.19); border-radius: 28px; background: linear-gradient(180deg, rgba(255,255,255,.14), rgba(255,255,255,.055)); box-shadow: 0 19px 55px #0006, inset 0 1px rgba(255,255,255,.08); backdrop-filter: blur(26px) saturate(140%); }
+    .app { position: relative; min-width: 0; min-height: clamp(112px, 12.6vh, 144px); padding: 15px 7px 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; border: 1px solid rgba(255,255,255,.095); border-radius: 20px; background: rgba(10,11,15,.14); color: #fff; cursor: pointer; transition: transform .36s var(--ease), background .3s ease, border-color .3s ease, box-shadow .36s var(--ease); transform-origin: center bottom; }
+    .app:hover { background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.3); }
+    .app:focus { z-index: 2; outline: none; transform: translateY(-8px) scale(1.045); border-color: rgba(231,201,154,.9); background: linear-gradient(155deg, rgba(247,229,199,.2), rgba(255,255,255,.075)); box-shadow: 0 0 0 1px rgba(255,244,225,.36), 0 0 28px rgba(221,178,120,.2), 0 18px 35px #0005; }
+    .app:focus-visible { outline: 2px solid #fff4df; outline-offset: 3px; }
+    .app-mark { display: grid; place-items: center; height: 45px; font-size: clamp(25px, 2.6vw, 43px); font-weight: 700; line-height: 1; }
+    .netflix .app-mark { color: #ee343e; font-family: Georgia, serif; font-size: 51px; }
+    .disney .app-mark { font-size: clamp(18px, 1.7vw, 28px); font-weight: 600; letter-spacing: -.08em; }
+    .disney .app-mark span { color: #91c8ff; font-size: .8em; }
+    .max .app-mark { font-size: clamp(29px, 2.7vw, 42px); font-weight: 750; letter-spacing: -.08em; }
+    .prime .app-mark { font-size: clamp(15px, 1.35vw, 22px); font-weight: 650; letter-spacing: -.06em; }
+    .prime .app-mark span { color: #86d5dc; margin-left: 4px; }
+    .youtube .app-mark { width: 48px; height: 33px; border-radius: 11px; background: #ff2638; font-size: 18px; }
+    .app-name { max-width: 100%; overflow: hidden; color: #f6f2eb; font-size: 10px; font-weight: 600; letter-spacing: .13em; text-overflow: ellipsis; white-space: nowrap; opacity: .85; }
+    .focus-panel { display: flex; flex-direction: column; justify-content: center; padding: 17px 19px; border: 1px solid rgba(255,255,255,.14); border-radius: 23px; background: rgba(9,10,14,.27); backdrop-filter: blur(24px); }
+    .focus-label { color: #d8c49e; font-size: 9px; letter-spacing: .25em; }
+    .focus-name { margin-top: 9px; font-size: clamp(16px, 1.25vw, 21px); font-weight: 550; }
+    .focus-hint { margin-top: 8px; color: #d8d4ce; font-size: 10px; line-height: 1.5; opacity: .69; }
+    .controls { position: absolute; left: 6.2%; right: 6.2%; bottom: 2.5%; display: flex; justify-content: space-between; align-items: center; color: #d8d3ca; font-size: 10px; letter-spacing: .09em; opacity: .55; }
+    .controls kbd { padding: 2px 6px; border: 1px solid #ffffff44; border-radius: 5px; font: inherit; }
+    .version { letter-spacing: .18em; }
+    .toast { position: absolute; left: 50%; top: 13%; z-index: 4; transform: translate(-50%, -12px); padding: 12px 18px; border: 1px solid #ffffff28; border-radius: 24px; background: rgba(15,16,20,.78); color: #f7f3ec; font-size: 12px; opacity: 0; pointer-events: none; transition: opacity .25s ease, transform .25s var(--ease); backdrop-filter: blur(20px); }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+    .back { position: absolute; left: 6.2%; top: 16%; color: #e4dfd5; font-size: 11px; text-decoration: none; opacity: .62; transition: opacity .2s ease; }
+    .back:hover, .back:focus-visible { opacity: 1; }
+    @media (max-width: 1100px) {
+      body { min-width: 0; }
+      .hero { top: 21%; width: 55%; }
+      .dock-wrap { grid-template-columns: minmax(0,1fr) 170px; gap: 10px; left: 3%; right: 3%; }
+      .dock { gap: 8px; padding: 10px; border-radius: 22px; }
+      .app { min-height: 112px; border-radius: 16px; }
+      .focus-panel { padding: 12px; }
+    }
+    @media (max-height: 760px) {
+      .hero { top: 20%; }
+      .eyebrow { margin-bottom: 14px; }
+      .summary { margin-top: 14px; }
+      .metadata { margin-top: 15px; }
+      .actions { margin-top: 18px; }
+      .dock-wrap { bottom: 8%; }
+      .dock-caption { bottom: calc(8% + 140px); }
+      .app { min-height: 106px; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }
+  </style>
+</head>
+<body>
+  <main class="screen" aria-label="NEXUS AUREA — ekran główny">
+    <div class="sun" aria-hidden="true"></div><div class="ridge" aria-hidden="true"></div><div class="ridge back" aria-hidden="true"></div>
+    <header class="topbar">
+      <div class="brand"><span class="wordmark">N E X U S</span><span class="brand-line"></span><span class="edition">ENTERTAINMENT OS</span></div>
+      <div class="status"><div><span class="weather-label">ZABRZE</span><span class="weather">◦ &nbsp;9° &nbsp; Pogodnie</span></div><time class="clock" aria-label="Godzina 21:08">21:08</time></div>
+    </header>
+    <a class="back" href="index.html">← &nbsp;PORÓWNAJ KIERUNKI</a>
+    <section class="hero" aria-labelledby="hero-title">
+      <p class="eyebrow">DZISIAJ W CENTRUM</p>
+      <h1 id="hero-title">Nocna zmiana</h1>
+      <p class="summary">Kiedy miasto gaśnie, zaczyna się prawdziwa historia.</p>
+      <p class="metadata">DRAMAT &nbsp;·&nbsp; 1 SEZON &nbsp;·&nbsp; 8 ODCINKÓW</p>
+      <div class="actions"><button class="watch" type="button" id="watch"><span class="play">▶</span>OGLĄDAJ TERAZ</button><span class="details">Szczegóły&nbsp; ↗</span></div>
+    </section>
+    <p class="dock-caption">TWOJE APLIKACJE</p>
+    <section class="dock-wrap" aria-label="Aplikacje rozrywkowe">
+      <nav class="dock" aria-label="Wybierz aplikację">
+        <button class="app netflix" type="button" aria-label="Netflix" data-name="Netflix"><span class="app-mark">N</span><span class="app-name">NETFLIX</span></button>
+        <button class="app disney" type="button" aria-label="Disney Plus" data-name="Disney+"><span class="app-mark">Disney<span>+</span></span><span class="app-name">DISNEY+</span></button>
+        <button class="app max" type="button" aria-label="Max" data-name="Max"><span class="app-mark">max</span><span class="app-name">MAX</span></button>
+        <button class="app prime" type="button" aria-label="Prime Video" data-name="Prime Video"><span class="app-mark">prime<span>video</span></span><span class="app-name">PRIME VIDEO</span></button>
+        <button class="app youtube" type="button" aria-label="YouTube" data-name="YouTube"><span class="app-mark">▶</span><span class="app-name">YOUTUBE</span></button>
+      </nav>
+      <aside class="focus-panel" aria-live="polite"><span class="focus-label">WYBRANA APLIKACJA</span><span class="focus-name" id="focus-name">Netflix</span><span class="focus-hint">✕ &nbsp;Otwórz podgląd</span></aside>
+    </section>
+    <footer class="controls"><span>◯ / <kbd>←</kbd> <kbd>→</kbd> &nbsp;PORUSZAJ &nbsp;·&nbsp; ✕ / <kbd>ENTER</kbd> &nbsp;WYBIERZ &nbsp;·&nbsp; OPTIONS &nbsp;MENU</span><span class="version">AUREA &nbsp;/&nbsp; PROTOTYP</span></footer>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </main>
+  <script>
+    const apps = [...document.querySelectorAll('.app')];
+    const focusName = document.querySelector('#focus-name');
+    const toast = document.querySelector('#toast');
+    let active = 0;
+    let toastTimer;
+    const focusApp = (index) => apps[(index + apps.length) % apps.length].focus({ preventScroll: true });
+    const showToast = (message) => {
+      toast.textContent = message;
+      toast.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 2400);
+    };
+    const openPreview = () => showToast(`${apps[active].dataset.name} — podgląd kierunku, bez połączenia z usługą.`);
+    const showMenu = () => showToast('Menu ustawień — widok koncepcyjny.');
+    apps.forEach((app, index) => {
+      app.addEventListener('focus', () => { active = index; focusName.textContent = app.dataset.name; });
+      app.addEventListener('click', openPreview);
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowRight') { event.preventDefault(); focusApp(active + 1); }
+      if (event.key === 'ArrowLeft') { event.preventDefault(); focusApp(active - 1); }
+      if (event.key.toLowerCase() === 'x') { event.preventDefault(); openPreview(); }
+      if (event.key === 'Escape') showMenu();
+    });
+    document.querySelector('#watch').addEventListener('click', () => showToast('Nocna zmiana — karta demonstracyjna, bez podłączonego odtwarzacza.'));
+    let previous = { left: false, right: false, open: false, menu: false };
+    setInterval(() => {
+      if (!navigator.getGamepads) return;
+      const pad = [...navigator.getGamepads()].find(Boolean);
+      if (!pad) { previous = { left: false, right: false, open: false, menu: false }; return; }
+      const left = Boolean(pad.buttons[14]?.pressed || pad.axes[0] < -0.65);
+      const right = Boolean(pad.buttons[15]?.pressed || pad.axes[0] > 0.65);
+      const open = Boolean(pad.buttons[0]?.pressed);
+      const menu = Boolean(pad.buttons[9]?.pressed);
+      if (left && !previous.left) focusApp(active - 1);
+      if (right && !previous.right) focusApp(active + 1);
+      if (open && !previous.open) openPreview();
+      if (menu && !previous.menu) showMenu();
+      previous = { left, right, open, menu };
+    }, 120);
+    focusApp(0);
+  </script>
+</body>
+</html>
