@@ -92,13 +92,29 @@ mod windows {
         GlobalSystemMediaTransportControlsSessionManager,
         GlobalSystemMediaTransportControlsSessionPlaybackStatus,
     };
+    use ::windows::Win32::System::WinRT::{RoInitialize, RoUninitialize, RO_INIT_MULTITHREADED};
+
+    struct WinRtApartment;
+
+    impl WinRtApartment {
+        fn initialize() -> Result<Self, String> {
+            unsafe { RoInitialize(RO_INIT_MULTITHREADED) }
+                .map_err(|error| format!("Nie można zainicjalizować WinRT: {error}"))?;
+            Ok(Self)
+        }
+    }
+
+    impl Drop for WinRtApartment {
+        fn drop(&mut self) {
+            unsafe { RoUninitialize() };
+        }
+    }
 
     pub(super) fn status() -> AppleMusicStatus {
         let result = std::thread::Builder::new()
             .name("nexus-apple-music-status".into())
             .spawn(|| {
-                let _apartment = ::windows::core::initialize_mta()
-                    .map_err(|error| format!("Nie można zainicjalizować WinRT: {error}"))?;
+                let _apartment = WinRtApartment::initialize()?;
                 block_on(async { read_status().await })
             })
             .and_then(|thread| thread.join().map_err(|_| std::io::Error::other("wątek WinRT zakończył się błędem")));
@@ -114,8 +130,7 @@ mod windows {
         std::thread::Builder::new()
             .name("nexus-apple-music-control".into())
             .spawn(move || {
-                let _apartment = ::windows::core::initialize_mta()
-                    .map_err(|error| format!("Nie można zainicjalizować WinRT: {error}"))?;
+                let _apartment = WinRtApartment::initialize()?;
                 block_on(async { control_session(&action).await })
             })
             .map_err(|_| "Nie uruchomiono wątku sterowania SMTC.".to_string())?
