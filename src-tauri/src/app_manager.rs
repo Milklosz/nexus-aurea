@@ -1,6 +1,6 @@
 use serde::Serialize;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
@@ -127,7 +127,7 @@ pub fn launch_managed_app(app: AppHandle, id: String) -> Result<LaunchReceipt, S
             "playniteFullscreen" => { command.arg("--startfullscreen"); }
             _ => {}
         }
-        let child = command.spawn().map_err(|_| format!("Windows nie uruchomił aplikacji {}.", spec.name))?;
+        let child = command.spawn().map_err(|error| format!("Windows nie uruchomił aplikacji {}: {error}", spec.name))?;
         if spec.focus_restore_supported {
             watch_owned_process(app, id.clone(), child);
         }
@@ -219,38 +219,47 @@ fn first_existing(paths: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
 
 #[cfg(target_os = "windows")]
 fn process_count(image_name: &str) -> Result<usize, String> {
-    let mut child = Command::new("tasklist")
-        .args(["/FO", "CSV", "/NH", "/FI", &format!("IMAGENAME eq {image_name}")])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+    use windows::core::HRESULT;
+    use windows::Win32::Foundation::{CloseHandle, ERROR_NO_MORE_FILES};
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }
         .map_err(|_| "Nie można odczytać stanu procesów Windows.".to_string())?;
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("Przekroczono limit czasu diagnostyki procesów Windows.".into());
+    let no_more_files = HRESULT::from_win32(ERROR_NO_MORE_FILES.0);
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+    let first = unsafe { Process32FirstW(snapshot, &mut entry) };
+    let mut count = 0;
+
+    let result = match first {
+        Ok(()) => loop {
+            if process_entry_matches(&entry.szExeFile, image_name) {
+                count += 1;
             }
-            Err(_) => return Err("Nie udało się sprawdzić procesów Windows.".into()),
-        }
+            match unsafe { Process32NextW(snapshot, &mut entry) } {
+                Ok(()) => {}
+                Err(error) if error.code() == no_more_files => break Ok(count),
+                Err(_) => break Err("Nie udało się odczytać stanu procesów Windows.".into()),
+            }
+        },
+        Err(error) if error.code() == no_more_files => Ok(0),
+        Err(_) => Err("Nie udało się odczytać stanu procesów Windows.".into()),
+    };
+    let close_result = unsafe { CloseHandle(snapshot) };
+    if result.is_ok() && close_result.is_err() {
+        return Err("Nie udało się zamknąć migawki procesów Windows.".into());
     }
-    let output = child.wait_with_output().map_err(|_| "Nie można odczytać stanu procesów Windows.".to_string())?;
-    if !output.status.success() {
-        return Err("Windows zwrócił błąd przy sprawdzaniu procesów.".into());
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    Ok(parse_tasklist_count(&text, image_name))
+    result
 }
 
-fn parse_tasklist_count(output: &str, image_name: &str) -> usize {
-    output.lines().filter(|line| {
-        line.split(',').next().map(|field| field.trim().trim_matches('"'))
-            .is_some_and(|name| name.eq_ignore_ascii_case(image_name))
-    }).count()
+fn process_entry_matches(executable_name: &[u16], image_name: &str) -> bool {
+    let length = executable_name.iter().position(|character| *character == 0).unwrap_or(executable_name.len());
+    String::from_utf16_lossy(&executable_name[..length]).eq_ignore_ascii_case(image_name)
 }
 
 #[cfg(target_os = "windows")]
@@ -279,7 +288,7 @@ fn watch_owned_process(app: AppHandle, id: String, mut child: Child) {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_tasklist_count, spec_for};
+    use super::{process_entry_matches, spec_for};
 
     #[test]
     fn app_registry_rejects_unlisted_ids() {
@@ -289,9 +298,9 @@ mod tests {
     }
 
     #[test]
-    fn process_diagnostics_parse_only_the_allowlisted_image_name() {
-        let output = "\"chrome.exe\",\"123\",\"Console\",\"1\",\"1000 K\"\r\n\"chrome.exe\",\"124\",\"Console\",\"1\",\"1200 K\"\r\nINFO: No tasks are running which match the specified criteria.\r\n";
-        assert_eq!(parse_tasklist_count(output, "chrome.exe"), 2);
-        assert_eq!(parse_tasklist_count(output, "steam.exe"), 0);
+    fn process_diagnostics_match_names_case_insensitively() {
+        let name = "ChRoMe.ExE".encode_utf16().chain([0]).collect::<Vec<_>>();
+        assert!(process_entry_matches(&name, "chrome.exe"));
+        assert!(!process_entry_matches(&name, "steam.exe"));
     }
 }

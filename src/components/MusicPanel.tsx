@@ -115,16 +115,20 @@ type MiniProps = {
 
 export function MusicMiniPlayer({ status, profile, onControl }: MiniProps) {
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   const available = status.appleSessionFound && profile !== "gaming";
   const run = async (action: AppleMusicAction) => {
     setBusy(true);
+    setError("");
     try { await onControl(action); }
+    catch { setError("Nie udało się sterować Apple Music. Sprawdź sesję w diagnostyce."); }
     finally { setBusy(false); }
   };
   return <aside className="music-mini-player" aria-label="Apple Music Background Mode">
     <span className="music-mini-label">BACKGROUND MODE · APPLE MUSIC</span>
     <strong>{status.title ?? (status.appleSessionFound ? "Tytuł niedostępny" : "Brak sesji Apple Music")}</strong>
     <span>{status.artist ?? "Otwórz diagnostykę, aby uruchomić Apple Music"}</span>
+    {error && <span role="alert">{error}</span>}
     <div>
       <button type="button" aria-label="Poprzedni utwór" disabled={busy || !available || !status.canPrevious} onClick={() => void run("previous")}>⏮</button>
       <button type="button" aria-label={status.playbackState === "playing" ? "Pauza" : "Odtwórz"} disabled={busy || !available || !status.canTogglePlayPause} onClick={() => void run("toggle")}>{status.playbackState === "playing" ? "⏸" : "▶"}</button>
@@ -132,3 +136,4 @@ export function MusicMiniPlayer({ status, profile, onControl }: MiniProps) {
     </div>
   </aside>;
 }
+
