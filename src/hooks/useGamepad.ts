@@ -17,8 +17,14 @@ export function useGamepad(
   actions: ControllerActions,
   enabled = true,
   profile: ControllerProfile = "auto",
+  suspendInput?: () => boolean,
 ) {
   const actionsRef = useRef(actions);
+  const suspendRef = useRef(suspendInput);
+
+  useEffect(() => {
+    suspendRef.current = suspendInput;
+  }, [suspendInput]);
 
   useEffect(() => {
     actionsRef.current = actions;
@@ -51,7 +57,9 @@ export function useGamepad(
         selectedPad = identity;
       }
       const samples = engine.update(pad ? readControllerSample(pad, profile) : null, performance.now(), focused);
-      for (const action of samples) dispatch(action);
+      if (!suspendRef.current?.()) {
+        for (const action of samples) dispatch(action);
+      }
       frame = window.requestAnimationFrame(poll);
     };
 

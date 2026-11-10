@@ -80,7 +80,7 @@ export function GamepadDiagnostics({
     <h2 id="pad-title">Diagnostyka pada PlayStation</h2>
     <p>{supported ? "Gamepad API dostępne" : "Gamepad API niedostępne"} · Połączone: {pads.length} · Fokus NEXUS: {focused ? "aktywny" : "nieaktywny"}</p>
     <p>Naciśnij przycisk pada, gdy NEXUS ma fokus. Windows może wykrywać urządzenie, zanim udostępni je Gamepad API.</p>
-    <p>← / → lub lewy analog porusza fokusem. ✕ wybiera, ◯ wraca, Options otwiera lub zamyka ten panel. Przytrzymanie kierunku powtarza ruch.</p>
+    <p>← / → lub lewy analog porusza fokusem. ✕ wybiera, ◯ wraca, Options otwiera Control Center. F2 otwiera diagnostykę. Przytrzymanie kierunku powtarza ruch.</p>
     <button type="button" onClick={cycleProfile}>Mapowanie: {profileLabels[profile]} · zmień</button>
     {pads.map(pad => {
       const resolvedProfile = resolveControllerProfile(pad, profile);
