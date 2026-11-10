@@ -69,7 +69,7 @@ describe("Gaming Hub and App Manager integration", () => {
     };
     render(<GamingHub onActivateGaming={vi.fn(async () => true)} />);
     expect(await screen.findAllByText("Nie wykryto")).toHaveLength(2);
-    expect(screen.getByRole("alert")).toHaveTextContent("Nie można odczytać katalogów bibliotek Steam.");
+    expect(screen.getByRole("alert").textContent).toContain("Nie można odczytać katalogów bibliotek Steam.");
     expect(screen.getByText(/Brak listy gier/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Big Picture" }).hasAttribute("disabled")).toBe(true);
     expect(screen.queryByText("Elden Ring")).toBeNull();
@@ -81,7 +81,7 @@ describe("Gaming Hub and App Manager integration", () => {
     mocks.launchApp.mockRejectedValueOnce(new Error("Playnite odmówił uruchomienia."));
     render(<GamingHub onActivateGaming={vi.fn(async () => true)} />);
     fireEvent.click(await screen.findByRole("button", { name: "Fullscreen" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Playnite odmówił uruchomienia.");
+    expect((await screen.findByRole("alert")).textContent).toContain("Playnite odmówił uruchomienia.");
   });
 
   it("surfaces a Steam launch failure without claiming the game started", async () => {
@@ -89,6 +89,6 @@ describe("Gaming Hub and App Manager integration", () => {
     mocks.launchGame.mockRejectedValueOnce(new Error("Steam odmówił uruchomienia."));
     render(<GamingHub onActivateGaming={vi.fn(async () => true)} />);
     fireEvent.click(await screen.findByRole("button", { name: "Uruchom" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Steam odmówił uruchomienia.");
+    expect((await screen.findByRole("alert")).textContent).toContain("Steam odmówił uruchomienia.");
   });
 });
