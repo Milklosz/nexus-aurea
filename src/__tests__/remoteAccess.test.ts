@@ -14,11 +14,15 @@ describe("iPhone Remote fail-closed access gate", () => {
       paired: false,
       connected: false,
       endpointAvailable: false,
+      secureOriginAvailable: false,
+      pairingAvailable: false,
+      pairedDeviceCount: 0,
+      reason: "trustedHttpsRequired",
     });
   });
 
-  it("refuses pairing until a secure transport is implemented", async () => {
-    await expect(beginRemotePairing()).rejects.toThrow("nie wystawiamy endpointu");
+  it("refuses pairing until a trusted HTTPS origin exists", async () => {
+    await expect(beginRemotePairing()).rejects.toThrow("certyfikatem zaufanym przez iPhone'a");
   });
 
   it("rejects commands even when a caller claims authentication while transport is unavailable", () => {
@@ -34,6 +38,7 @@ describe("iPhone Remote fail-closed access gate", () => {
     expect(revokeRemoteAccess()).toEqual(getRemoteAccessStatus());
     expect(revokeRemoteAccess()).toEqual(getRemoteAccessStatus());
     expect(remoteConnectionLost()).toEqual(getRemoteAccessStatus());
-    expect("token" in getRemoteAccessStatus()).toBe(false);
+    expect(Object.keys(getRemoteAccessStatus())).not.toContain("token");
+    expect(Object.keys(getRemoteAccessStatus())).not.toContain("secret");
   });
 });

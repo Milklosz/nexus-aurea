@@ -6,7 +6,7 @@
   "display": "standalone",
   "background_color": "#090a0e",
   "theme_color": "#101116",
-  "description": "Podgląd mobilnego pilota NEXUS AUREA. Zdalne połączenie jest wyłączone.",
+  "description": "Podgląd mobilnego pilota NEXUS AUREA. Serwer LAN jest wyłączony; instalacja na iPhonie nie została zweryfikowana.",
   "icons": [
     {
       "src": "./icon.svg",

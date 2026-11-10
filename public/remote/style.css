@@ -22,6 +22,10 @@ button:focus-visible { outline: 2px solid #fff4df; outline-offset: 3px; }
 .eyebrow { margin: 0; color: var(--gold); font-size: 9px; letter-spacing: .25em; }
 h1 { margin: 10px 0; font-size: clamp(2rem, 8vw, 3rem); font-weight: 450; letter-spacing: -.045em; }
 .connection-copy, .remote-note { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.remote-status-list { display: grid; gap: 8px; margin: 16px 0; padding: 12px 14px; border: 1px solid rgba(255,255,255,.12); border-radius: 14px; background: rgba(255,255,255,.035); }
+.remote-status-list div { display: flex; justify-content: space-between; gap: 14px; font-size: 11px; }
+.remote-status-list dt { color: var(--muted); }
+.remote-status-list dd { margin: 0; text-align: right; }
 .remote-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; width: min(100%, 280px); margin: 22px auto 15px; }
 .remote-pad button { aspect-ratio: 1.35; font-size: 24px; }
 .remote-pad button[data-command="select"] { color: var(--gold); font-size: 14px; }
