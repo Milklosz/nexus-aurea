@@ -4,6 +4,8 @@ import type { CinemaProfile } from "../services/cinemaMode";
 import type { AmbientSettings } from "../services/ambient";
 import { nextAmbientDelay, AMBIENT_IDLE_OPTIONS } from "../services/ambient";
 import type { SystemVolumeAction } from "../services/musicBridge";
+import { GamingHub } from "./GamingHub";
+import { REMOTE_ACCESS_DISABLED_REASON } from "../services/remoteAccess";
 
 type ControlCenterProps = {
   profile: CinemaProfile;
@@ -151,6 +153,17 @@ export function ControlCenter(props: ControlCenterProps) {
       </p>}
       {status.foregroundProcess && <p>Aktywne okno: {status.foregroundProcess}</p>}
       {status.lastError && <p role="alert">{status.lastError}</p>}
+    </section>
+
+    <section className="cc-section" aria-label="Gaming Hub">
+      <h3>Gaming Hub</h3>
+      <GamingHub onActivateGaming={() => props.onProfileChange("gaming")} />
+    </section>
+
+    <section className="cc-section" aria-label="iPhone Remote">
+      <h3>iPhone Remote</h3>
+      <p>Zdalny serwer jest wyłączony. {REMOTE_ACCESS_DISABLED_REASON}</p>
+      <p>Podgląd PWA nie wysyła poleceń; wszystkie kontrolki pozostają niedostępne bez bezpiecznego transportu.</p>
     </section>
 
     {error && <p role="alert">{error}</p>}

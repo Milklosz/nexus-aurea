@@ -1,5 +1,7 @@
 use serde::Serialize;
-use std::path::PathBuf;
+#[cfg(target_os = "windows")]
+use std::fs;
+use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -23,6 +25,28 @@ pub struct AppManagerSnapshot {
     pub windows: bool,
     pub foreground_process: Option<String>,
     pub apps: Vec<ManagedAppStatus>,
+    pub games: Vec<ManagedGame>,
+    pub games_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedGame {
+    pub id: String,
+    pub name: String,
+    pub launcher: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedGameLaunchReceipt {
+    pub id: String,
+    pub launched: bool,
+}
+
+struct ParsedSteamManifest {
+    game: ManagedGame,
+    install_dir: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -79,10 +103,20 @@ pub fn get_app_manager_status() -> AppManagerSnapshot {
                 last_error,
             }
         }).collect();
+        let (games, games_error) = if app_path("steamBigPicture").is_some() {
+            match steam_games() {
+                Ok(games) => (games, None),
+                Err(error) => (Vec::new(), Some(error)),
+            }
+        } else {
+            (Vec::new(), None)
+        };
         AppManagerSnapshot {
             windows: true,
             foreground_process: crate::control_service::foreground_process_name(),
             apps,
+            games,
+            games_error,
         }
     }
 
@@ -91,6 +125,8 @@ pub fn get_app_manager_status() -> AppManagerSnapshot {
         AppManagerSnapshot {
             windows: false,
             foreground_process: None,
+            games: Vec::new(),
+            games_error: None,
             apps: APP_SPECS.iter().map(|spec| ManagedAppStatus {
                 id: spec.id.into(),
                 name: spec.name.into(),
@@ -142,6 +178,33 @@ pub fn launch_managed_app(app: AppHandle, id: String) -> Result<LaunchReceipt, S
     {
         let _ = (app, spec);
         Err("App Manager jest dostępny tylko w natywnej aplikacji Windows.".into())
+    }
+}
+
+#[tauri::command]
+pub fn launch_managed_game(id: String) -> Result<ManagedGameLaunchReceipt, String> {
+    if !is_valid_steam_app_id(&id) {
+        return Err("Nieprawidłowy identyfikator gry Steam.".into());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let game = steam_games()?.into_iter().find(|game| game.id == id)
+            .ok_or_else(|| format!("Gra Steam o ID {} nie znajduje się w dostępnej, zainstalowanej bibliotece.", id))?;
+        let executable = steam_path()
+            .ok_or_else(|| "Nie wykryto pliku wykonywalnego Steam.".to_string())?;
+        let child = Command::new(executable)
+            .args(["-applaunch", game.id.as_str()])
+            .spawn()
+            .map_err(|error| format!("Steam nie uruchomił gry {}: {error}", game.name))?;
+        drop(child);
+        Ok(ManagedGameLaunchReceipt { id: game.id, launched: true })
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = id;
+        Err("Gaming Hub wymaga natywnego App Managera Windows.".into())
     }
 }
 
@@ -211,6 +274,122 @@ fn firefox_path() -> Option<PathBuf> {
         }
     }
     first_existing(paths)
+}
+
+fn is_valid_steam_app_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 10
+        && id.bytes().all(|byte| byte.is_ascii_digit())
+        && id.parse::<u32>().map_or(false, |value| value > 0)
+}
+
+fn parse_vdf_quoted(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<String> {
+    while chars.peek().is_some_and(|character| character.is_whitespace()) {
+        chars.next();
+    }
+    if chars.next()? != '"' {
+        return None;
+    }
+    let mut value = String::new();
+    while let Some(character) = chars.next() {
+        if character == '\\' {
+            match chars.peek().copied() {
+                Some(next) if next == '\\' || next == '"' => {
+                    chars.next();
+                    value.push(next);
+                }
+                _ => value.push('\\'),
+            }
+        } else if character == '"' {
+            return Some(value);
+        } else {
+            value.push(character);
+        }
+    }
+    None
+}
+
+fn parse_vdf_pair(line: &str) -> Option<(String, String)> {
+    let mut chars = line.trim().chars().peekable();
+    let key = parse_vdf_quoted(&mut chars)?;
+    let value = parse_vdf_quoted(&mut chars)?;
+    Some((key, value))
+}
+
+fn parse_steam_manifest(contents: &str) -> Option<ParsedSteamManifest> {
+    let mut id = None;
+    let mut name = None;
+    let mut install_dir = None;
+    for line in contents.lines() {
+        if let Some((key, value)) = parse_vdf_pair(line) {
+            match key.as_str() {
+                "appid" => id = Some(value),
+                "name" => name = Some(value),
+                "installdir" => install_dir = Some(value),
+                _ => {}
+            }
+        }
+    }
+    let id = id?;
+    let name = name?.trim().to_string();
+    let install_dir = install_dir?;
+    if !is_valid_steam_app_id(&id) || name.is_empty() || install_dir.trim().is_empty()
+        || Path::new(&install_dir).components().any(|part| !matches!(part, Component::Normal(_)))
+    {
+        return None;
+    }
+    Some(ParsedSteamManifest {
+        game: ManagedGame { id, name, launcher: "Steam".into() },
+        install_dir,
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn steam_games() -> Result<Vec<ManagedGame>, String> {
+    let executable = steam_path().ok_or_else(|| "Nie wykryto Steam.".to_string())?;
+    let root = executable.parent().ok_or_else(|| "Nie można ustalić katalogu Steam.".to_string())?;
+    let mut libraries = vec![root.to_path_buf()];
+    if let Ok(contents) = fs::read_to_string(root.join("steamapps").join("libraryfolders.vdf")) {
+        for line in contents.lines() {
+            if let Some((key, value)) = parse_vdf_pair(line) {
+                if key == "path" || key.parse::<usize>().is_ok() {
+                    let library = PathBuf::from(value);
+                    if library.is_dir() && !libraries.contains(&library) {
+                        libraries.push(library);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut scanned = 0usize;
+    let mut games: Vec<ManagedGame> = Vec::new();
+    for library in libraries {
+        let steamapps = library.join("steamapps");
+        let entries = match fs::read_dir(&steamapps) {
+            Ok(entries) => { scanned += 1; entries }
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let file_name = entry.file_name().to_string_lossy().to_lowercase();
+            if !file_name.starts_with("appmanifest_") || !file_name.ends_with(".acf") {
+                continue;
+            }
+            let Ok(contents) = fs::read_to_string(entry.path()) else { continue; };
+            let Some(parsed) = parse_steam_manifest(&contents) else { continue; };
+            if !steamapps.join("common").join(&parsed.install_dir).is_dir() {
+                continue;
+            }
+            if !games.iter().any(|game| game.id == parsed.game.id) {
+                games.push(parsed.game);
+            }
+        }
+    }
+    if scanned == 0 {
+        return Err("Nie można odczytać katalogów bibliotek Steam.".into());
+    }
+    games.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    Ok(games)
 }
 
 fn first_existing(paths: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
@@ -288,13 +467,54 @@ fn watch_owned_process(app: AppHandle, id: String, mut child: Child) {
 
 #[cfg(test)]
 mod tests {
-    use super::{process_entry_matches, spec_for};
+    use super::{is_valid_steam_app_id, parse_steam_manifest, parse_vdf_pair, process_entry_matches, spec_for};
 
     #[test]
     fn app_registry_rejects_unlisted_ids() {
         assert!(spec_for("appleMusic").is_some());
         assert!(spec_for("C:\\Users\\someone\\app.exe").is_none());
         assert!(spec_for("arbitraryCommand").is_none());
+    }
+
+    #[test]
+    fn steam_app_ids_are_positive_numeric_and_bounded() {
+        assert!(is_valid_steam_app_id("440"));
+        assert!(!is_valid_steam_app_id("0"));
+        assert!(!is_valid_steam_app_id("44x"));
+        assert!(!is_valid_steam_app_id("4294967296"));
+        assert!(!is_valid_steam_app_id("12345678901"));
+    }
+
+    #[test]
+    fn steam_library_parser_preserves_legacy_and_escaped_windows_paths() {
+        assert_eq!(
+            parse_vdf_pair(r#""1" "D:\SteamLibrary""#),
+            Some(("1".into(), r"D:\SteamLibrary".into()))
+        );
+        assert_eq!(
+            parse_vdf_pair(r#""path" "E:\\Games\\Steam""#),
+            Some(("path".into(), r"E:\Games\Steam".into()))
+        );
+    }
+
+    #[test]
+    fn steam_manifest_parser_reads_game_metadata_and_rejects_traversal() {
+        let manifest = r#"
+            "AppState"
+            {
+                "appid" "440"
+                "name" "Team Fortress 2"
+                "installdir" "Team Fortress 2"
+            }
+        "#;
+        let parsed = parse_steam_manifest(manifest).expect("valid appmanifest");
+        assert_eq!(parsed.game.id, "440");
+        assert_eq!(parsed.game.name, "Team Fortress 2");
+        assert_eq!(parsed.game.launcher, "Steam");
+        let traversal = r#""appid" "440"
+            "name" "TF2"
+            "installdir" "../escape""#;
+        assert!(parse_steam_manifest(traversal).is_none());
     }
 
     #[test]

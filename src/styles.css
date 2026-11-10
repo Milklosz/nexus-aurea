@@ -117,3 +117,13 @@
 .music-mode-background { margin-top: .75rem; }
 @media (max-width: 1100px) { .music-mini-player { width: min(300px, 30vw); right: 3%; } }
 @media (max-height: 760px) { .music-mini-player { top: 14%; } }
+
+
+.gaming-hub { display: grid; gap: .7rem; }
+.gaming-launchers, .gaming-game-list { display: grid; gap: .5rem; }
+.gaming-launcher, .gaming-game-row { display: flex; align-items: center; justify-content: space-between; gap: .7rem; padding: .55rem .7rem; border: 1px solid #806e4955; border-radius: 12px; background: rgba(8,9,13,.46); }
+.gaming-launcher > div, .gaming-game-row > div { display: grid; gap: .2rem; min-width: 0; }
+.gaming-launcher span, .gaming-game-row span { color: #c8c0b1; font-size: .78rem; }
+.gaming-hub h4 { margin: .35rem 0 0; color: #e4c995; font-size: 9px; letter-spacing: .18em; text-transform: uppercase; }
+.gaming-hub button { flex: 0 0 auto; }
+.gaming-hub-note { color: #aaa399 !important; font-size: 10px !important; }

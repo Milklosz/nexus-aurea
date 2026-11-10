@@ -1,0 +1,32 @@
+:root {
+  color-scheme: dark;
+  --cream: #f5f0e7;
+  --muted: #c7c0b4;
+  --gold: #d2b484;
+  --panel: rgba(18, 19, 24, .82);
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { min-height: 100%; margin: 0; background: #090a0e; color: var(--cream); }
+body { min-height: 100svh; }
+button { min-height: 52px; border: 1px solid rgba(210,180,132,.5); border-radius: 18px; color: var(--cream); background: rgba(255,255,255,.065); font: inherit; font-size: 14px; font-weight: 600; touch-action: manipulation; }
+button:disabled { opacity: .38; cursor: not-allowed; }
+button:focus-visible { outline: 2px solid #fff4df; outline-offset: 3px; }
+.remote-shell { position: relative; isolation: isolate; display: flex; flex-direction: column; align-items: center; min-height: 100svh; padding: max(18px, env(safe-area-inset-top)) 18px max(18px, env(safe-area-inset-bottom)); overflow: hidden; background: radial-gradient(ellipse 70% 34% at 76% 17%, rgba(205,137,99,.28), transparent 78%), linear-gradient(160deg, #17151a, #090a0e 72%); }
+.remote-shell::before { content: ""; position: fixed; z-index: -1; top: 4%; right: -20%; width: 72vw; aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle, rgba(239,204,158,.12), transparent 70%); pointer-events: none; }
+.remote-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: min(100%, 520px); }
+.brand { letter-spacing: .2em; font-size: 12px; font-weight: 700; }
+.brand span { color: var(--gold); margin-left: 5px; font-size: 9px; }
+.connection-badge { padding: 7px 10px; border: 1px solid rgba(210,180,132,.45); border-radius: 15px; color: #e6cda5; font-size: 9px; letter-spacing: .09em; text-transform: uppercase; }
+.remote-card { width: min(100%, 520px); margin: auto 0; padding: 22px clamp(16px, 5vw, 30px); border: 1px solid rgba(255,255,255,.14); border-radius: 28px; background: var(--panel); box-shadow: 0 24px 80px #0008; backdrop-filter: blur(24px); }
+.eyebrow { margin: 0; color: var(--gold); font-size: 9px; letter-spacing: .25em; }
+h1 { margin: 10px 0; font-size: clamp(2rem, 8vw, 3rem); font-weight: 450; letter-spacing: -.045em; }
+.connection-copy, .remote-note { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.remote-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; width: min(100%, 280px); margin: 22px auto 15px; }
+.remote-pad button { aspect-ratio: 1.35; font-size: 24px; }
+.remote-pad button[data-command="select"] { color: var(--gold); font-size: 14px; }
+.remote-row, .profile-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin-top: 10px; }
+.remote-row button, .profile-row button { min-width: 0; padding: 6px 3px; font-size: 12px; }
+.remote-note { margin: 18px 0 0; padding-top: 14px; border-top: 1px solid rgba(255,255,255,.12); }
+footer { width: min(100%, 520px); padding-top: 18px; color: #8f8981; font-size: 9px; letter-spacing: .12em; text-align: center; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; } }
