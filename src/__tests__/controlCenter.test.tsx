@@ -67,7 +67,8 @@ describe("Control Center", () => {
     mocks.status = { ...mocks.status, windows: false };
     renderCenter();
     await waitFor(() => expect(screen.getByText(/backend Windows: niedostępny/i)).toBeTruthy());
-    expect(screen.getByRole("button", { name: "Głośność +" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.queryByRole("button", { name: "Głośność +" })).toBeNull();
+    expect(screen.getByText(/Regulacja głośności jest niedostępna/)).toBeTruthy();
   });
 
   it("uses the existing system volume actions when Windows is available", async () => {
