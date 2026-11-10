@@ -1,28 +1,24 @@
-# NEXUS AUREA v0.7.0
+# VELORA by Milklosh Studio — v0.9.2 · Grand Cinema
 
-Projekt React + TypeScript + Tauri oparty bezpośrednio na zatwierdzonym prototypie AUREA · Grand Cinema. Oryginalny plik jest zachowany w `design/aurea-prototype.html`, a arkusz `src/styles.css` został z niego przeniesiony bez zmiany bazowego układu, kolorów ani animacji.
+VELORA is the current product name for the Grand Cinema desktop launcher. The visual style and entertainment layout remain part of Grand Cinema.
 
-## Instalacja na Windows 11
+## Windows installation and data compatibility
 
-NEXUS AUREA jest budowany jako instalator NSIS `.exe` dla Windows x64. Instalator domyślnie instaluje aplikację dla bieżącego użytkownika, bez konieczności instalacji systemowej.
+The Windows build produces one per-user NSIS installer. When it finds the existing NEXUS AUREA installation, the installer updates that program folder in place and keeps the Tauri identifier `pl.nexus.aurea`. This preserves the existing stable profile at `%LOCALAPPDATA%\pl.nexus.aurea`; the identifier and executable filename remain legacy compatibility details.
 
-### Artefakt z GitHub Actions
+The separate Test profile at `%LOCALAPPDATA%\NEXUS-AUREA-Test` is not imported or deleted. The installer does not merge WebView profiles.
 
-1. Otwórz [przebiegi CI](https://github.com/Milklosz/nexus-aurea/actions/workflows/ci.yml) i wybierz ukończony przebieg z gałęzi `main`.
-2. W sekcji **Artifacts** pobierz `NEXUS-AUREA-Windows-x64-<SHA>` i rozpakuj pobrane archiwum ZIP.
-3. Uruchom instalator `NEXUS AUREA_<wersja>_x64-setup.exe` z pobranego artefaktu.
+### GitHub Actions artifact
 
-Artefakt jest tworzony po udanym buildzie Windows przy każdym ukończonym pushu na `main`. GitHub przechowuje go przez 30 dni. Pobranie artefaktu wymaga zalogowania do GitHuba i dostępu do repozytorium.
+1. Open the repository's completed CI run.
+2. Download `VELORA-Windows-x64-<SHA>` and extract the ZIP.
+3. Run the `VELORA_<version>_x64-setup.exe` installer.
 
-### GitHub Release
-
-Tag w formacie `v*` uruchamia pełne CI. Po pomyślnym zakończeniu testów, buildów macOS i Windows oraz przesłaniu instalatora workflow publikuje GitHub Release z plikiem `.exe`. Wydanie pobierzesz z [zakładki Releases](https://github.com/Milklosz/nexus-aurea/releases).
+The workflow builds one Windows installer artifact. It does not create a GitHub Release unless a version tag is pushed.
 
 ### SmartScreen
 
-Instalator nie jest podpisany certyfikatem wydawcy, więc Microsoft Defender SmartScreen może ostrzec, że wydawca jest nieznany. Instaluj tylko plik pobrany z repozytorium NEXUS AUREA. Jeśli standardowy ekran ostrzeżenia pokazuje opcję kontynuacji, użyj jej tylko po sprawdzeniu źródła. Na urządzeniach z aktywnym Smart App Control Windows 11 może zablokować niepodpisany plik bez możliwości uruchomienia go mimo ostrzeżenia; nie wyłączaj zabezpieczeń, aby to obejść. [Microsoft opisuje wpływ podpisu na SmartScreen i Smart App Control](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation).
-
-Windows 11 zwykle ma WebView2 wymagany przez aplikację. Przy pierwszym uruchomieniu aplikacji system może potrzebować połączenia internetowego, aby pobrać brakujący składnik WebView2.
+The installer is not publisher-signed, so Microsoft Defender SmartScreen may show an unknown-publisher warning. Use only a verified installer from this repository. Do not disable Windows security protections to bypass warnings.
 
 ## Uruchomienie developerskie na Macu
 

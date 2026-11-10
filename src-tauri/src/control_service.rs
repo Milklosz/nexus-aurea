@@ -97,7 +97,7 @@ impl ControlService {
         #[cfg(not(target_os = "windows"))]
         {
             let _ = app;
-            Err("NEXUS Control Service jest dostępny tylko w natywnej aplikacji Windows.".into())
+            Err("VELORA Control Service jest dostępny tylko w natywnej aplikacji Windows.".into())
         }
 
         #[cfg(target_os = "windows")]

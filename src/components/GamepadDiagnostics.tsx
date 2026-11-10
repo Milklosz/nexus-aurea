@@ -78,8 +78,8 @@ export function GamepadDiagnostics({
 
   return <dialog ref={dialog} className="diagnostics" onCancel={onClose} aria-labelledby="pad-title">
     <h2 id="pad-title">Diagnostyka pada PlayStation</h2>
-    <p>{supported ? "Gamepad API dostępne" : "Gamepad API niedostępne"} · Połączone: {pads.length} · Fokus NEXUS: {focused ? "aktywny" : "nieaktywny"}</p>
-    <p>Naciśnij przycisk pada, gdy NEXUS ma fokus. Windows może wykrywać urządzenie, zanim udostępni je Gamepad API.</p>
+    <p>{supported ? "Gamepad API dostępne" : "Gamepad API niedostępne"} · Połączone: {pads.length} · Fokus VELORA: {focused ? "aktywny" : "nieaktywny"}</p>
+    <p>Naciśnij przycisk pada, gdy VELORA ma fokus. Windows może wykrywać urządzenie, zanim udostępni je Gamepad API.</p>
     <p>← / → lub lewy analog porusza fokusem. ✕ wybiera, ◯ wraca, Options otwiera Control Center. F2 otwiera diagnostykę. Przytrzymanie kierunku powtarza ruch.</p>
     <button type="button" onClick={cycleProfile}>Mapowanie: {profileLabels[profile]} · zmień</button>
     {pads.map(pad => {

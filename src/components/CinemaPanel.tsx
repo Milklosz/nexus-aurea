@@ -13,7 +13,7 @@ const profileLabels: Record<CinemaProfile, string> = {
 };
 
 const profileNotes: Record<CinemaProfile, string> = {
-  cinema: "Streaming i multimedia · NEXUS w pełnym ekranie",
+  cinema: "Streaming i multimedia · VELORA w pełnym ekranie",
   gaming: "Steam i gry · mapowanie globalne pozostaje wyłączone",
   desktop: "Windows w oknie · ustawienia ekranu i audio bez zmian",
 };
@@ -32,6 +32,6 @@ export function CinemaPanel({ profile, onChange, onDesktop }: Props) {
       >{profileLabels[option]}</button>)}
       <button type="button" onClick={onDesktop}>Pokaż pulpit Windows</button>
     </div>
-    <p>Ostatni wybrany profil jest zapisywany lokalnie. NEXUS nie zmienia HDR, rozdzielczości, HDMI ani systemowego urządzenia audio.</p>
+    <p>Ostatni wybrany profil jest zapisywany lokalnie. VELORA nie zmienia HDR, rozdzielczości, HDMI ani systemowego urządzenia audio.</p>
   </section>;
 }

@@ -275,7 +275,7 @@ impl RemoteAccess {
             let now = OffsetDateTime::now_utc();
             params.not_before = now - TimeDuration::minutes(5);
             params.not_after = now + TimeDuration::days(365 * 5);
-            params.distinguished_name.push(DnType::CommonName, "NEXUS AUREA LAN Remote CA");
+            params.distinguished_name.push(DnType::CommonName, "VELORA LAN Remote CA");
             params.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));
             params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
             let key = KeyPair::generate().map_err(|_| "Nie udało się utworzyć certyfikatu zaufania.".to_string())?;
@@ -302,14 +302,14 @@ impl RemoteAccess {
 <plist version="1.0"><dict>
 <key>PayloadContent</key><array><dict>
 <key>PayloadContent</key><data>{}</data>
-<key>PayloadDescription</key><string>Trust NEXUS AUREA local HTTPS only when you approve this profile.</string>
-<key>PayloadDisplayName</key><string>NEXUS AUREA LAN Remote CA</string>
+<key>PayloadDescription</key><string>Trust VELORA local HTTPS only when you approve this profile.</string>
+<key>PayloadDisplayName</key><string>VELORA LAN Remote CA</string>
 <key>PayloadIdentifier</key><string>com.nexus.aurea.remote.ca</string>
 <key>PayloadType</key><string>com.apple.security.root</string>
 <key>PayloadUUID</key><string>{}</string>
 <key>PayloadVersion</key><integer>1</integer>
 </dict></array>
-<key>PayloadDisplayName</key><string>NEXUS AUREA LAN Remote</string>
+<key>PayloadDisplayName</key><string>VELORA LAN Remote</string>
 <key>PayloadIdentifier</key><string>com.nexus.aurea.remote.profile</string>
 <key>PayloadRemovalDisallowed</key><false/>
 <key>PayloadType</key><string>Configuration</string>
@@ -325,7 +325,7 @@ impl RemoteAccess {
             .download_dir()
             .map_err(|_| "Nie można otworzyć folderu Pobrane.".to_string())?;
         fs::create_dir_all(&profile_path).map_err(|_| "Nie można przygotować folderu Pobrane.".to_string())?;
-        profile_path.push("NEXUS-AUREA-LAN-Remote.mobileconfig");
+        profile_path.push("VELORA-LAN-Remote.mobileconfig");
         fs::write(&profile_path, profile).map_err(|_| "Nie udało się zapisać profilu zaufania.".to_string())?;
         let mut status = lock(&self.inner.status);
         status.ca_fingerprint = Some(fingerprint);
@@ -379,7 +379,7 @@ impl RemoteAccess {
             leaf_params.not_before = now - TimeDuration::minutes(5);
             leaf_params.not_after = now + TimeDuration::days(90);
             leaf_params.subject_alt_names = vec![SanType::IpAddress(IpAddr::V4(ip))];
-            leaf_params.distinguished_name.push(DnType::CommonName, "NEXUS AUREA LAN Remote");
+            leaf_params.distinguished_name.push(DnType::CommonName, "VELORA LAN Remote");
             leaf_params.is_ca = IsCa::NoCa;
             leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
             leaf_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];

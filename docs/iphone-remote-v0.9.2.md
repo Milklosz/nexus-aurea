@@ -1,13 +1,13 @@
-# NEXUS AUREA iPhone Remote — v0.9.2
+# VELORA iPhone Remote — v0.9.2
 
 ## Przygotowanie iPhone'a
 
 1. W Control Center wybierz **Przygotuj profil zaufania iPhone'a**. Aplikacja zapisze profil `.mobileconfig` w Pobranych i pokaże odcisk SHA-256 certyfikatu.
 2. Przenieś profil na iPhone'a zaufanym kanałem, na przykład AirDropem bezpośrednio do swojego urządzenia. Nie otwieraj profilu z nieznanego linku ani sieci publicznej.
-3. Na iPhonie otwórz **Ustawienia → Ogólne → VPN i zarządzanie urządzeniem**, wybierz profil NEXUS AUREA i zainstaluj go.
-4. Wybierz **Ustawienia → Ogólne → To urządzenie → Ustawienia zaufania certyfikatów** i włącz pełne zaufanie dla NEXUS AUREA LAN Remote CA.
+3. Na iPhonie otwórz **Ustawienia → Ogólne → VPN i zarządzanie urządzeniem**, wybierz profil VELORA i zainstaluj go.
+4. Wybierz **Ustawienia → Ogólne → To urządzenie → Ustawienia zaufania certyfikatów** i włącz pełne zaufanie dla VELORA LAN Remote CA.
 
-Pełne zaufanie certyfikatowi głównemu pozwala iPhone'owi ufać certyfikatom TLS wystawionym przez ten urząd certyfikacji na całym urządzeniu. Prywatny klucz urzędu pozostaje w Magazynie poświadczeń Windows i nigdy nie trafia do profilu. Instaluj certyfikat tylko wtedy, gdy ufasz MSI, na którym wygenerowano profil. Po zakończeniu testów usuń profil NEXUS z iPhone'a.
+Pełne zaufanie certyfikatowi głównemu pozwala iPhone'owi ufać certyfikatom TLS wystawionym przez ten urząd certyfikacji na całym urządzeniu. Prywatny klucz urzędu pozostaje w Magazynie poświadczeń Windows i nigdy nie trafia do profilu. Instaluj certyfikat tylko wtedy, gdy ufasz MSI, na którym wygenerowano profil. Po zakończeniu testów usuń profil VELORA z iPhone'a.
 
 ## Uruchomienie i parowanie
 

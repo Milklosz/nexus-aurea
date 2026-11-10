@@ -14,7 +14,7 @@ import {
 
 afterEach(() => vi.clearAllMocks());
 
-describe("NEXUS Music native bridge", () => {
+describe("VELORA Music native bridge", () => {
   it("reports browser preview without inventing Apple Music metadata", async () => {
     mocks.isTauri.mockReturnValue(false);
     await expect(getAppleMusicStatus()).resolves.toEqual(unavailableAppleMusicStatus);

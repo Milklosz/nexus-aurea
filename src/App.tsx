@@ -244,7 +244,7 @@ export default function App() {
     void listenForNexusControlReturn(() => {
       if (!active) return;
       void getCurrentWindow().setFocus().catch(() => {
-        showToast("Windows zablokował powrót do NEXUS. Wróć do aplikacji przez Alt+Tab.");
+        showToast("Windows zablokował powrót do VELORA. Wróć do aplikacji przez Alt+Tab.");
       });
     }).then((stopListening) => {
       if (active) unlisten = stopListening;
@@ -287,7 +287,7 @@ export default function App() {
     void listenForManagedAppExit((id) => {
       if (!active || id !== "playniteFullscreen") return;
       void getCurrentWindow().setFocus().catch(() => {
-        showToast("Playnite został zamknięty. Wróć do NEXUS przez Alt+Tab.");
+        showToast("Playnite został zamknięty. Wróć do VELORA przez Alt+Tab.");
       });
     }).then((stopListening) => {
       if (active) unlisten = stopListening;
@@ -315,7 +315,7 @@ export default function App() {
   );
 
   return (
-    <main className="screen" aria-label="NEXUS AUREA — ekran główny">
+    <main className="screen" aria-label="VELORA — ekran główny">
       <div className="sun" aria-hidden="true" />
       <div className="ridge" aria-hidden="true" />
       <div className="ridge back" aria-hidden="true" />
@@ -335,7 +335,7 @@ export default function App() {
           ◯ / <kbd>←</kbd> <kbd>→</kbd> &nbsp;PORUSZAJ &nbsp;·&nbsp; ✕ / <kbd>ENTER</kbd> &nbsp;WYBIERZ
           &nbsp;·&nbsp; OPTIONS / F2 &nbsp;PAD · F11 &nbsp;EKRAN · ESC &nbsp;OKNO
         </span>
-        <span className="version">AUREA &nbsp;/&nbsp; V{version}</span>
+        <span className="version">VELORA · BY MILKLOSH STUDIO &nbsp;/&nbsp; V{version}</span>
       </footer>
       <button className="diagnostics-trigger" onClick={showMenu}>Diagnostyka pada</button>
       {controlCenterOpen && <ControlCenter

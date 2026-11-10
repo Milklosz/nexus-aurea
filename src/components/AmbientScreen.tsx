@@ -7,8 +7,8 @@ export function AmbientScreen({ now }: AmbientScreenProps) {
     month: "long",
   }).format(now);
 
-  return <section className="ambient-screen" aria-label="AUREA Ambient" aria-live="off">
-    <span className="ambient-eyebrow">NEXUS · AUREA AMBIENT</span>
+  return <section className="ambient-screen" aria-label="VELORA Ambient" aria-live="off">
+    <span className="ambient-eyebrow">VELORA · AMBIENT</span>
     <time className="ambient-clock" dateTime={now.toISOString()}>{now.toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" })}</time>
     <span className="ambient-date">{date}</span>
     <span className="ambient-wake-hint">Porusz myszą, naciśnij klawisz lub przycisk kontrolera</span>

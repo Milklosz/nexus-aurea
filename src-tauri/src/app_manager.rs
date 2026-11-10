@@ -142,7 +142,7 @@ pub fn get_app_manager_status() -> AppManagerSnapshot {
 
 #[tauri::command]
 pub fn launch_managed_app(app: AppHandle, id: String) -> Result<LaunchReceipt, String> {
-    let spec = spec_for(&id).ok_or_else(|| "Aplikacja nie znajduje się na allowliście NEXUS.".to_string())?;
+    let spec = spec_for(&id).ok_or_else(|| "Aplikacja nie znajduje się na allowliście VELORA.".to_string())?;
 
     #[cfg(target_os = "windows")]
     {

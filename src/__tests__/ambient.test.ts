@@ -16,7 +16,7 @@ function memoryStorage() {
   };
 }
 
-describe("AUREA Ambient idle settings", () => {
+describe("VELORA Ambient idle settings", () => {
   it("starts opt-in with a five minute idle delay", () => {
     expect(readAmbientSettings({ getItem: () => null, setItem: () => {} })).toEqual(DEFAULT_AMBIENT_SETTINGS);
   });

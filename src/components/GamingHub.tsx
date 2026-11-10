@@ -48,7 +48,7 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
       if (!await onActivateGaming()) throw new Error("Nie udało się wybrać profilu Gaming.");
       const receipt = await launchManagedApp(id);
       setNotice(receipt.alreadyRunning
-        ? "Aplikacja już działa. NEXUS nie wymusza przełączenia fokusu."
+        ? "Aplikacja już działa. VELORA nie wymusza przełączenia fokusu."
         : "Wysłano żądanie uruchomienia " + (id === "steamBigPicture" ? "Steam Big Picture." : "Playnite Fullscreen."));
       await refresh();
     } catch (cause) {
@@ -74,15 +74,15 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
     }
   };
 
-  if (loading) return <section className="gaming-hub" aria-label="NEXUS Gaming Hub"><p role="status">Odczytuję stan App Managera…</p></section>;
+  if (loading) return <section className="gaming-hub" aria-label="VELORA Gaming Hub"><p role="status">Odczytuję stan App Managera…</p></section>;
 
-  if (!snapshot.windows) return <section className="gaming-hub" aria-label="NEXUS Gaming Hub">
+  if (!snapshot.windows) return <section className="gaming-hub" aria-label="VELORA Gaming Hub">
     <p>Wykrywanie bibliotek gier wymaga natywnego App Managera Windows. Podgląd webowy pozostaje tylko do odczytu.</p>
     {error && <p role="alert">{error}</p>}
     <button type="button" onClick={() => void refresh()}>Spróbuj ponownie</button>
   </section>;
 
-  return <section className="gaming-hub" aria-label="NEXUS Gaming Hub">
+  return <section className="gaming-hub" aria-label="VELORA Gaming Hub">
     <div className="gaming-launchers">
       <div className="gaming-launcher">
         <div><strong>Steam</strong><span>{steam?.installed ? "Wykryto" : "Nie wykryto"}</span></div>

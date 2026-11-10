@@ -48,7 +48,7 @@ function status(overrides: Partial<ControlServiceStatus> = {}): ControlServiceSt
     gameMode: false,
     controllerCount: 1,
     playstationControllerCount: 1,
-    foregroundProcess: "NEXUS AUREA.exe",
+    foregroundProcess: "nexus-aurea.exe",
     returnHotkeyRegistered: false,
     lastError: null,
     ...overrides,

@@ -81,13 +81,13 @@ describe("Control Center", () => {
     await waitFor(() => expect(volume).toHaveBeenCalledWith("up"));
   });
 
-  it("offers explicit return-to-NEXUS and desktop actions", async () => {
+  it("offers explicit return-to-VELORA and desktop actions", async () => {
     setupDialog();
     const showDesktop = vi.fn();
     const returnToNexus = vi.fn();
     renderCenter({ onShowDesktop: showDesktop, onReturnToNexus: returnToNexus });
     fireEvent.click(screen.getByRole("button", { name: "Pokaż pulpit" }));
-    fireEvent.click(screen.getByRole("button", { name: "Wróć do NEXUS" }));
+    fireEvent.click(screen.getByRole("button", { name: "Wróć do VELORA" }));
     expect(showDesktop).toHaveBeenCalledOnce();
     expect(returnToNexus).toHaveBeenCalledOnce();
   });

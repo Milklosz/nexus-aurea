@@ -1,12 +1,12 @@
 # iPhone Remote v0.9.1 — bezpieczny status
 
-**Status: transport wyłączony.** NEXUS nie otwiera portu, nie hostuje pilota w LAN, nie przyjmuje poleceń i nie zapisuje sekretów.
+**Status: transport wyłączony.** VELORA nie otwiera portu, nie hostuje pilota w LAN, nie przyjmuje poleceń i nie zapisuje sekretów.
 
 ## Dlaczego
 
-PWA z `public/remote/` jest wyłącznie podglądem interfejsu. Zwykły HTTP w sieci lokalnej nie daje zaufanego originu: ktoś w tej samej sieci mógłby podmienić JavaScript strony i przechwycić kod parowania lub sekret urządzenia. Service Worker i bezpieczne funkcje przeglądarki wymagają secure context; dla hosta LAN oznacza to HTTPS z certyfikatem zaufanym przez iPhone'a. `localhost` jest wyjątkiem dla lokalnego developmentu, ale na iPhonie wskazuje sam iPhone, a nie komputer NEXUS.
+PWA z `public/remote/` jest wyłącznie podglądem interfejsu. Zwykły HTTP w sieci lokalnej nie daje zaufanego originu: ktoś w tej samej sieci mógłby podmienić JavaScript strony i przechwycić kod parowania lub sekret urządzenia. Service Worker i bezpieczne funkcje przeglądarki wymagają secure context; dla hosta LAN oznacza to HTTPS z certyfikatem zaufanym przez iPhone'a. `localhost` jest wyjątkiem dla lokalnego developmentu, ale na iPhonie wskazuje sam iPhone, a nie komputer VELORA.
 
-Repozytorium nie ma serwera HTTPS, procedury wydania i zaufania certyfikatowi dla iPhone'a ani magazynu kluczy dla sekretów sparowanych urządzeń. Nie dodajemy samopodpisanego certyfikatu ani obejścia kontroli TLS. Dlatego PWA nie próbuje łączyć się z NEXUS, wszystkie komendy i parowanie pozostają niedostępne, a aplikacja nie wystawia listenera.
+Repozytorium nie ma serwera HTTPS, procedury wydania i zaufania certyfikatowi dla iPhone'a ani magazynu kluczy dla sekretów sparowanych urządzeń. Nie dodajemy samopodpisanego certyfikatu ani obejścia kontroli TLS. Dlatego PWA nie próbuje łączyć się z VELORA, wszystkie komendy i parowanie pozostają niedostępne, a aplikacja nie wystawia listenera.
 
 ## Stany widoczne w aplikacji
 

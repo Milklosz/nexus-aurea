@@ -1,12 +1,12 @@
 {
-  "name": "NEXUS AUREA Remote",
-  "short_name": "NEXUS Remote",
+  "name": "VELORA Remote",
+  "short_name": "VELORA",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "background_color": "#090a0e",
   "theme_color": "#101116",
-  "description": "Lokalny pilot NEXUS AUREA przez zaufane HTTPS i jednorazowe parowanie.",
+  "description": "Lokalny pilot VELORA przez zaufane HTTPS i jednorazowe parowanie.",
   "icons": [
     {
       "src": "./icon.svg",

@@ -67,10 +67,10 @@ export function ControlServicePanel() {
     }
   };
 
-  return <section className="control-service" aria-label="NEXUS Control Service">
-    <h3>NEXUS Control Service · prototyp Windows</h3>
+  return <section className="control-service" aria-label="VELORA Control Service">
+    <h3>VELORA Control Service · prototyp Windows</h3>
     {!status.windows
-      ? <p>Ta funkcja wymaga natywnej aplikacji NEXUS w Windows.</p>
+      ? <p>Ta funkcja wymaga natywnej aplikacji VELORA w Windows.</p>
       : <>
         <p role="status">
           Stan: {status.running ? (status.gameMode ? "tryb gry" : "aktywny") : "wyłączony"}
@@ -96,7 +96,7 @@ export function ControlServicePanel() {
             {status.gameMode ? "Wyłącz tryb gry" : "Włącz tryb gry"}
           </button>
         </div>
-        <p>Ctrl+Alt+N wraca do NEXUS. Ctrl+Alt+F12 natychmiast wyłącza usługę. Tryb gry zwalnia skrót powrotu i pozostawia wyłącznie awaryjne wyłączenie.</p>
+        <p>Ctrl+Alt+N wraca do VELORA. Ctrl+Alt+F12 natychmiast wyłącza usługę. Tryb gry zwalnia skrót powrotu i pozostawia wyłącznie awaryjne wyłączenie.</p>
         <p>Globalne mapowanie przycisków, ruch kursora i głośność są wyłączone w tym prototypie. Nie odczytujemy raportów pada.</p>
         {error && <p role="alert">{error}</p>}
         {notice && <p role="status">{notice}</p>}

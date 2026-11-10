@@ -67,7 +67,7 @@ describe("desktop recovery", () => {
     expect(native.setFullscreen).toHaveBeenCalledWith(false);
     expect(native.setDecorations.mock.invocationCallOrder[0]).toBeLessThan(native.setFullscreen.mock.invocationCallOrder[0]);
   });
-  it("minimizes NEXUS when showing the Windows desktop", async () => {
+  it("minimizes VELORA when showing the Windows desktop", async () => {
     await minimizeWindowToDesktop();
     expect(native.minimize).toHaveBeenCalledOnce();
   });

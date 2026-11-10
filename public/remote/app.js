@@ -100,7 +100,7 @@
       origin.textContent = "brak bezpiecznego kontekstu";
       pairingState.textContent = "parowanie wyłączone";
       updateControls();
-      showMessage("Otwórz dokładny adres HTTPS pokazany w NEXUS AUREA. Nie kontynuuj po ostrzeżeniu certyfikatu.", true);
+      showMessage("Otwórz dokładny adres HTTPS pokazany w VELORA. Nie kontynuuj po ostrzeżeniu certyfikatu.", true);
       return;
     }
 
@@ -123,7 +123,7 @@
         state.paired = false;
         state.record = null;
         pairingForm.hidden = true;
-        showMessage("Serwer LAN został wyłączony w NEXUS.");
+        showMessage("Serwer LAN został wyłączony w VELORA.");
       } else {
         state.record = await readRecord().catch(() => null);
         state.paired = Boolean(state.record && state.record.key && state.record.deviceId);
@@ -140,7 +140,7 @@
       origin.textContent = "HTTPS bez odpowiedzi";
       pairingState.textContent = "niedostępne";
       connection.textContent = "brak połączenia";
-      showMessage("Nie można połączyć z NEXUS. Sprawdź tę samą sieć Wi‑Fi i czy serwer LAN działa.", true);
+      showMessage("Nie można połączyć z VELORA. Sprawdź tę samą sieć Wi‑Fi i czy serwer LAN działa.", true);
     }
     updateControls();
   }
@@ -196,7 +196,7 @@
           : response.status === 409
             ? "Limit urządzeń został osiągnięty albo iPhone jest już sparowany. Odwołaj stare urządzenie w Control Center."
             : response.status >= 500
-              ? "NEXUS nie zapisał bezpiecznie parowania. Sprawdź Magazyn poświadczeń Windows i spróbuj ponownie."
+              ? "VELORA nie zapisała bezpiecznie parowania. Sprawdź Magazyn poświadczeń Windows i spróbuj ponownie."
               : "Kod wygasł lub jest nieprawidłowy. Wygeneruj nowy kod w Control Center.";
         showMessage(reason, true);
         return;
@@ -254,7 +254,7 @@
         connection.textContent = "wymagane parowanie";
         showMessage("Dostęp tego iPhone'a został odwołany. Sparuj urządzenie ponownie.", true);
       } else if (!response.ok) {
-        showMessage("NEXUS odrzucił polecenie. Połączenie pozostaje zabezpieczone.", true);
+        showMessage("VELORA odrzuciła polecenie. Połączenie pozostaje zabezpieczone.", true);
       } else {
         showMessage("Wysłano: " + command + ".");
       }

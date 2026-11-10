@@ -43,5 +43,5 @@ pub fn run() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running NEXUS AUREA");
+        .expect("error while running VELORA");
 }

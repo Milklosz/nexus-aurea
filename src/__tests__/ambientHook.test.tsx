@@ -16,7 +16,7 @@ function prepareBrowser() {
   vi.stubGlobal("navigator", { getGamepads: () => [] });
 }
 
-describe("AUREA Ambient activity and wake", () => {
+describe("VELORA Ambient activity and wake", () => {
   it("enters after the configured delay and wakes on keyboard input", () => {
     vi.useFakeTimers();
     prepareBrowser();

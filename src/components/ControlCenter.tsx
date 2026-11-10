@@ -150,7 +150,7 @@ export function ControlCenter(props: ControlCenterProps) {
     onCancel={(event) => { event.preventDefault(); props.onClose(); }}>
     <header className="control-center-header">
       <div>
-        <span className="control-center-eyebrow">NEXUS AUREA</span>
+        <span className="control-center-eyebrow">VELORA</span>
         <h2 id="control-center-title">Control Center</h2>
       </div>
       <button type="button" onClick={props.onClose} aria-label="Zamknij Control Center">Zamknij</button>
@@ -178,8 +178,8 @@ export function ControlCenter(props: ControlCenterProps) {
         : <p>Regulacja głośności jest niedostępna bez natywnego backendu Windows.</p>}
     </section>
 
-    <section className="cc-section" aria-label="AUREA Ambient">
-      <h3>AUREA Ambient</h3>
+    <section className="cc-section" aria-label="VELORA Ambient">
+      <h3>VELORA Ambient</h3>
       <div className="cc-actions">
         <button type="button" aria-pressed={props.ambientSettings.enabled}
           onClick={() => props.onAmbientSettingsChange({ ...props.ambientSettings, enabled: !props.ambientSettings.enabled })}>
@@ -189,8 +189,8 @@ export function ControlCenter(props: ControlCenterProps) {
       </div>
       <p>{props.mediaPlaying
         ? "Wykryto odtwarzanie Apple Music przez Windows SMTC. Ambient jest wstrzymany."
-        : "Ambient wstrzymuje się, gdy NEXUS traci fokus, oraz podczas wykrytego odtwarzania Apple Music. Inne gry i odtwarzacze nie mają wiarygodnego wskaźnika aktywności."}</p>
-      <p>Czas bezczynności: {AMBIENT_IDLE_OPTIONS.map(delayLabel).join(" · ")}. Wymaga fokusu NEXUS; nie wyłącza ekranu ani nie zmienia zasilania Windows.</p>
+        : "Ambient wstrzymuje się, gdy VELORA traci fokus, oraz podczas wykrytego odtwarzania Apple Music. Inne gry i odtwarzacze nie mają wiarygodnego wskaźnika aktywności."}</p>
+      <p>Czas bezczynności: {AMBIENT_IDLE_OPTIONS.map(delayLabel).join(" · ")}. Wymaga fokusu VELORA; nie wyłącza ekranu ani nie zmienia zasilania Windows.</p>
     </section>
 
     <section className="cc-section" aria-label="Stan systemu">
@@ -276,7 +276,7 @@ export function ControlCenter(props: ControlCenterProps) {
     <footer className="cc-footer">
       <button type="button" onClick={props.onOpenDiagnostics}>Diagnostyka</button>
       <button type="button" onClick={props.onShowDesktop}>Pokaż pulpit</button>
-      <button type="button" onClick={props.onReturnToNexus}>Wróć do NEXUS</button>
+      <button type="button" onClick={props.onReturnToNexus}>Wróć do VELORA</button>
     </footer>
     <p className="cc-hint">Klawiatura: Tab / Shift+Tab, F3 otwiera panel, Esc wraca. Pad: kierunki wybierają, ✕ zatwierdza, ◯ wraca.</p>
   </dialog>;

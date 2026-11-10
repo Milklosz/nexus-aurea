@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-describe("NEXUS iPhone Remote", () => {
+describe("VELORA iPhone Remote", () => {
   const html = readFileSync("public/remote/index.html", "utf8");
   const script = readFileSync("public/remote/app.js", "utf8");
 

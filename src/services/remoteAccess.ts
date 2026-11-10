@@ -44,17 +44,17 @@ export async function getRemoteAccessStatus(): Promise<RemoteAccessStatus> {
 }
 
 export async function prepareRemoteTrustProfile(): Promise<RemoteAccessStatus> {
-  if (!isTauri()) throw new Error("Profil zaufania można przygotować tylko w aplikacji NEXUS AUREA na Windows.");
+  if (!isTauri()) throw new Error("Profil zaufania można przygotować tylko w aplikacji VELORA na Windows.");
   return invoke<RemoteAccessStatus>("prepare_remote_trust_profile");
 }
 
 export async function startRemoteAccess(trustConfirmed: boolean): Promise<RemoteAccessStatus> {
-  if (!isTauri()) throw new Error("Serwer pilota można uruchomić tylko w aplikacji NEXUS AUREA na Windows.");
+  if (!isTauri()) throw new Error("Serwer pilota można uruchomić tylko w aplikacji VELORA na Windows.");
   return invoke<RemoteAccessStatus>("start_remote_access", { trustConfirmed });
 }
 
 export async function beginRemotePairing(): Promise<RemoteAccessStatus> {
-  if (!isTauri()) throw new Error("Parowanie można rozpocząć tylko w aplikacji NEXUS AUREA na Windows.");
+  if (!isTauri()) throw new Error("Parowanie można rozpocząć tylko w aplikacji VELORA na Windows.");
   return invoke<RemoteAccessStatus>("begin_remote_pairing");
 }
 
@@ -64,12 +64,12 @@ export async function stopRemoteAccess(): Promise<RemoteAccessStatus> {
 }
 
 export async function revokeAllRemoteDevices(): Promise<RemoteAccessStatus> {
-  if (!isTauri()) throw new Error("Dostęp można odwołać tylko w aplikacji NEXUS AUREA na Windows.");
+  if (!isTauri()) throw new Error("Dostęp można odwołać tylko w aplikacji VELORA na Windows.");
   return invoke<RemoteAccessStatus>("revoke_all_remote_devices");
 }
 
 export async function revokeRemoteDevice(deviceId: string): Promise<RemoteAccessStatus> {
-  if (!isTauri()) throw new Error("Dostęp można odwołać tylko w aplikacji NEXUS AUREA na Windows.");
+  if (!isTauri()) throw new Error("Dostęp można odwołać tylko w aplikacji VELORA na Windows.");
   return invoke<RemoteAccessStatus>("revoke_remote_device", { deviceId });
 }
 
