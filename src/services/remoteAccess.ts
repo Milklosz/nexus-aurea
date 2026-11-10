@@ -3,6 +3,10 @@ export type RemoteAccessStatus = {
   paired: false;
   connected: false;
   endpointAvailable: false;
+  secureOriginAvailable: false;
+  pairingAvailable: false;
+  pairedDeviceCount: 0;
+  reason: "trustedHttpsRequired";
 };
 
 export type RemoteCommandContext = {
@@ -13,13 +17,17 @@ export type RemoteCommandContext = {
 };
 
 export const REMOTE_ACCESS_DISABLED_REASON =
-  "Bez sprawdzonego parowania i uwierzytelnionego transportu nie wystawiamy endpointu w sieci lokalnej.";
+  "Brak HTTPS z certyfikatem zaufanym przez iPhone'a. HTTP w sieci lokalnej pozwoliłoby podmienić stronę i przechwycić kod parowania, więc serwer i komendy są wyłączone.";
 
 const DISABLED_STATUS: RemoteAccessStatus = Object.freeze({
   enabled: false,
   paired: false,
   connected: false,
   endpointAvailable: false,
+  secureOriginAvailable: false,
+  pairingAvailable: false,
+  pairedDeviceCount: 0,
+  reason: "trustedHttpsRequired",
 });
 
 export function getRemoteAccessStatus(): RemoteAccessStatus {

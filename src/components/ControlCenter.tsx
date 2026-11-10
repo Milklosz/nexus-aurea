@@ -162,8 +162,14 @@ export function ControlCenter(props: ControlCenterProps) {
 
     <section className="cc-section" aria-label="iPhone Remote">
       <h3>iPhone Remote</h3>
+      <ul className="remote-access-status" aria-label="Stan iPhone Remote">
+        <li>Serwer LAN: wyłączony</li>
+        <li>Bezpieczny HTTPS: niedostępny</li>
+        <li>Parowanie: niedostępne</li>
+        <li>Sparowane urządzenia: brak</li>
+      </ul>
       <p>Zdalny serwer jest wyłączony. {REMOTE_ACCESS_DISABLED_REASON}</p>
-      <p>Podgląd PWA nie wysyła poleceń; wszystkie kontrolki pozostają niedostępne bez bezpiecznego transportu.</p>
+      <p>Podgląd PWA nie wysyła poleceń ani nie przechowuje sekretów. Nie otwieramy portu sieciowego.</p>
     </section>
 
     {error && <p role="alert">{error}</p>}

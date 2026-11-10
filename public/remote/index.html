@@ -4,8 +4,6 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#101116">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="NEXUS Remote">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icon.svg">
@@ -17,13 +15,20 @@
   <main class="remote-shell">
     <header class="remote-header">
       <div class="brand">NEXUS <span>AUREA</span></div>
-      <div class="connection-badge" id="connection-state" role="status" aria-live="polite">endpoint niedostępny</div>
+      <div class="connection-badge" id="connection-state" role="status" aria-live="polite">serwer LAN: wyłączony</div>
     </header>
 
     <section class="remote-card" aria-labelledby="remote-title">
-      <p class="eyebrow">LOCAL COMPANION · v0.9</p>
+      <p class="eyebrow">LOCAL COMPANION · v0.9.1</p>
       <h1 id="remote-title">NEXUS Remote</h1>
-      <p class="connection-copy">Ta wersja zawiera podgląd interfejsu PWA. Bez gotowego, bezpiecznego parowania NEXUS nie uruchamia serwera sterowania w sieci.</p>
+      <p class="connection-copy">To podgląd interfejsu pilota. NEXUS nie udostępnia go w sieci lokalnej i nie przyjmuje poleceń.</p>
+
+      <dl class="remote-status-list" aria-label="Stan połączenia">
+        <div><dt>Serwer LAN</dt><dd id="server-state">Wyłączony</dd></div>
+        <div><dt>Bezpieczny origin</dt><dd id="origin-state">Sprawdzam…</dd></div>
+        <div><dt>Parowanie</dt><dd>Niedostępne</dd></div>
+        <div><dt>Sparowane urządzenia</dt><dd>Brak</dd></div>
+      </dl>
 
       <div class="remote-pad" role="group" aria-label="Nawigacja NEXUS">
         <span></span><button type="button" data-command="up" aria-label="Góra" disabled>↑</button><span></span>
@@ -51,7 +56,8 @@
         <button type="button" data-command="profile-desktop" aria-label="Desktop" disabled>Desktop</button>
       </div>
 
-      <p class="remote-note" id="pairing-state">Parowanie i polecenia są wyłączone. Ten podgląd nie łączy się z NEXUS ani nie przechowuje tokenów.</p>
+      <p class="remote-note" id="pairing-state">Brak HTTPS z certyfikatem zaufanym przez iPhone'a. Serwer, parowanie i polecenia pozostają wyłączone.</p>
+      <p class="remote-note">Dodanie do ekranu początkowego i działanie PWA na iPhonie nie zostały zweryfikowane na urządzeniu.</p>
     </section>
     <footer>Grand Cinema · kremowa typografia · złote akcenty</footer>
   </main>

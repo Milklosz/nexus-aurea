@@ -12,12 +12,17 @@ describe("NEXUS iPhone Remote PWA shell", () => {
   });
 
   it("keeps actions disabled while no secure endpoint or pairing exists", () => {
-    expect(html).toContain("endpoint niedostępny");
+    expect(html).toContain("serwer LAN: wyłączony");
     const buttons = [...html.matchAll(/<button\b[^>]*>/g)].map(([tag]) => tag);
     expect(buttons.length).toBeGreaterThan(0);
     expect(buttons.every((tag) => /\bdisabled\b/.test(tag))).toBe(true);
     expect(script).toContain("endpointAvailable: false");
-    expect(script).not.toMatch(/WebSocket|EventSource|XMLHttpRequest|fetch\s*\(/);
+    expect(script).not.toMatch(/WebSocket|EventSource|XMLHttpRequest|fetch\s*\(|sendBeacon|localStorage|sessionStorage|indexedDB/);
+    expect(script).toContain("Origin jest bezpieczny, ale NEXUS nie udostępnia endpointu");
+    expect(script).toContain("nie ma zaufanego HTTPS");
+    expect(html).toContain("Bezpieczny origin");
+    expect(html).toContain("Parowanie");
+    expect(html).toContain("nie zostały zweryfikowane na urządzeniu");
   });
 
   it("declares a standalone PWA manifest and an offline local shell", () => {
@@ -25,5 +30,6 @@ describe("NEXUS iPhone Remote PWA shell", () => {
     expect(manifest.display).toBe("standalone");
     expect(manifest.scope).toBe("./");
     expect(readFileSync("public/remote/sw.js", "utf8")).toContain("nexus-aurea-remote-v0.9");
+    expect(script).toContain("window.isSecureContext");
   });
 });

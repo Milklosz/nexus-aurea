@@ -7,8 +7,16 @@
   });
   const connection = document.getElementById("connection-state");
   const pairing = document.getElementById("pairing-state");
-  if (connection) connection.textContent = "endpoint niedostępny";
-  if (pairing) pairing.textContent = "Parowanie i polecenia są wyłączone. Ten podgląd nie łączy się z NEXUS ani nie przechowuje tokenów.";
+  const origin = document.getElementById("origin-state");
+  if (connection) connection.textContent = "serwer LAN: wyłączony";
+  if (origin) origin.textContent = window.isSecureContext
+    ? "bezpieczny kontekst przeglądarki; serwer NEXUS nadal wyłączony"
+    : "wymaga HTTPS zaufanego przez iPhone'a";
+  if (pairing) {
+    pairing.textContent = window.isSecureContext
+      ? "Origin jest bezpieczny, ale NEXUS nie udostępnia endpointu. Serwer, parowanie i polecenia pozostają wyłączone."
+      : "Ta strona nie ma zaufanego HTTPS. Serwer, parowanie i polecenia pozostają wyłączone.";
+  }
   window.NEXUS_REMOTE_PREVIEW_STATE = state;
 
   if ("serviceWorker" in navigator && window.isSecureContext) {

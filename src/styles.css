@@ -127,3 +127,4 @@
 .gaming-hub h4 { margin: .35rem 0 0; color: #e4c995; font-size: 9px; letter-spacing: .18em; text-transform: uppercase; }
 .gaming-hub button { flex: 0 0 auto; }
 .gaming-hub-note { color: #aaa399 !important; font-size: 10px !important; }
+.remote-access-status { display: grid; gap: .2rem; margin: .6rem 0; padding-left: 1.2rem; color: #c8c0b1; font-size: .85rem; }
