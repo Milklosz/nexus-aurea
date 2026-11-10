@@ -703,7 +703,7 @@ dependencies = [
 
 [[package]]
 name = "dirs-sys"
-version = "0.6.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e01a3366d27ee9890022452ee61b2b63a67e6f13f58900b651ff5665f0bb1fab"
 dependencies = [
@@ -2062,7 +2062,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "nexus-aurea"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde",
  "tauri",
