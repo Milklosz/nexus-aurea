@@ -3,6 +3,7 @@ import {
   emptyAppManagerSnapshot,
   getAppManagerStatus,
   launchManagedApp,
+  managedAppErrorMessage,
   type AppManagerSnapshot,
   type ManagedAppId,
 } from "../services/appManager";
@@ -41,7 +42,7 @@ export function AppManagerPanel() {
       }
       await refresh();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Uruchomienie aplikacji nie powiodło się.");
+      setError(managedAppErrorMessage(cause));
     } finally {
       setBusyId(null);
     }

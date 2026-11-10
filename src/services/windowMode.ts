@@ -9,3 +9,8 @@ export async function windowMode(fullscreen?: boolean) {
   await win.setFullscreen(next);
   if (next) await win.setDecorations(false);
 }
+
+export async function minimizeWindowToDesktop() {
+  if (!isTauri()) return;
+  await getCurrentWindow().minimize();
+}

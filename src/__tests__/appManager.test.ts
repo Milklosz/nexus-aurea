@@ -4,11 +4,18 @@ const mocks = vi.hoisted(() => ({ isTauri: vi.fn(() => true), invoke: vi.fn(), l
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: mocks.isTauri, invoke: mocks.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen }));
 
-import { emptyAppManagerSnapshot, getAppManagerStatus, launchManagedApp, listenForManagedAppExit } from "../services/appManager";
+import { emptyAppManagerSnapshot, getAppManagerStatus, launchManagedApp, listenForManagedAppExit, managedAppErrorMessage } from "../services/appManager";
 
 afterEach(() => vi.clearAllMocks());
 
 describe("App Manager bridge", () => {
+  it("preserves useful native launch error messages", () => {
+    expect(managedAppErrorMessage("Windows nie uruchomił Google Chrome: błąd systemu.")).toBe("Windows nie uruchomił Google Chrome: błąd systemu.");
+    expect(managedAppErrorMessage(new Error("Uruchomienie zostało odrzucone."))).toBe("Uruchomienie zostało odrzucone.");
+    expect(managedAppErrorMessage({ message: "Aplikacja już działa." })).toBe("Aplikacja już działa.");
+    expect(managedAppErrorMessage({})).toBe("Uruchomienie aplikacji nie powiodło się.");
+  });
+
   it("keeps browser preview read-only and empty", async () => {
     mocks.isTauri.mockReturnValue(false);
     await expect(getAppManagerStatus()).resolves.toEqual(emptyAppManagerSnapshot);

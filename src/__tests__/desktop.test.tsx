@@ -7,13 +7,14 @@ import { useNavigation } from "../hooks/useNavigation";
 import { useFocusRestoreOnClose } from "../hooks/useFocusRestoreOnClose";
 import { useGamepad } from "../hooks/useGamepad";
 import { gamepadSnapshot } from "../services/gamepadSnapshot";
-import { windowMode } from "../services/windowMode";
+import { minimizeWindowToDesktop, windowMode } from "../services/windowMode";
 import { readFileSync } from "node:fs";
 
 const native = vi.hoisted(() => ({
   setFullscreen: vi.fn(),
   setDecorations: vi.fn(),
   isFullscreen: vi.fn(),
+  minimize: vi.fn(),
   invoke: vi.fn(() => new Promise(() => {})),
   controlStatus: { windows: false, running: false, gameMode: false, controllerCount: 0, playstationControllerCount: 0, foregroundProcess: null, returnHotkeyRegistered: false, lastError: null },
   getControlStatus: vi.fn(() => Promise.resolve(native.controlStatus)),
@@ -65,6 +66,10 @@ describe("desktop recovery", () => {
     expect(native.setDecorations).toHaveBeenCalledWith(true);
     expect(native.setFullscreen).toHaveBeenCalledWith(false);
     expect(native.setDecorations.mock.invocationCallOrder[0]).toBeLessThan(native.setFullscreen.mock.invocationCallOrder[0]);
+  });
+  it("minimizes NEXUS when showing the Windows desktop", async () => {
+    await minimizeWindowToDesktop();
+    expect(native.minimize).toHaveBeenCalledOnce();
   });
   it("uses one app version and starts fullscreen", () => {
     const json = (path: string) => JSON.parse(readFileSync(path, "utf8"));

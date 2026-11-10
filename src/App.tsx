@@ -1,6 +1,6 @@
 import { GamepadDiagnostics } from "./components/GamepadDiagnostics";
 import { useAppVersion } from "./hooks/useAppVersion";
-import { windowMode } from "./services/windowMode";
+import { minimizeWindowToDesktop, windowMode } from "./services/windowMode";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppDock } from "./components/AppDock";
 import { HeroPanel } from "./components/HeroPanel";
@@ -119,7 +119,7 @@ export default function App() {
       // The selected mapping remains active for this session.
     }
   }, []);
-  const changeCinemaProfile = useCallback(async (nextProfile: CinemaProfile) => {
+  const changeCinemaProfile = useCallback(async (nextProfile: CinemaProfile): Promise<boolean> => {
     const previous = cinemaProfile;
     try {
       if (nextProfile === "cinema") await windowMode(true);
@@ -130,13 +130,21 @@ export default function App() {
       }
     } catch {
       showToast("Nie udało się zastosować całego profilu. Sprawdź tryb okna i Control Service.");
-      return;
+      return false;
     }
     setCinemaProfile(nextProfile);
     saveCinemaProfile(nextProfile);
     showToast(nextProfile === "desktop" ? "Profil Desktop · pulpit Windows." : `Profil ${nextProfile === "cinema" ? "Cinema" : "Gaming"} aktywny.`);
+    return true;
   }, [cinemaProfile, showToast]);
-  const showDesktop = useCallback(() => void changeCinemaProfile("desktop"), [changeCinemaProfile]);
+  const showDesktop = useCallback(async () => {
+    if (!await changeCinemaProfile("desktop")) return;
+    try {
+      await minimizeWindowToDesktop();
+    } catch {
+      showToast("Nie udało się pokazać pulpitu Windows.");
+    }
+  }, [changeCinemaProfile, showToast]);
   const refreshMusicStatus = useCallback(async () => {
     setMusicStatus(await getAppleMusicStatus());
   }, []);

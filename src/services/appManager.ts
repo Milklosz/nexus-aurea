@@ -25,6 +25,15 @@ export type LaunchReceipt = {
 
 export type ManagedAppId = "steamBigPicture" | "appleMusic" | "playniteFullscreen" | "chrome" | "edge" | "firefox";
 
+export function managedAppErrorMessage(cause: unknown, fallback = "Uruchomienie aplikacji nie powiodło się."): string {
+  if (typeof cause === "string" && cause.trim()) return cause;
+  if (cause instanceof Error && cause.message) return cause.message;
+  if (typeof cause === "object" && cause !== null && "message" in cause && typeof cause.message === "string" && cause.message) {
+    return cause.message;
+  }
+  return fallback;
+}
+
 export const emptyAppManagerSnapshot: AppManagerSnapshot = {
   windows: false,
   foregroundProcess: null,
