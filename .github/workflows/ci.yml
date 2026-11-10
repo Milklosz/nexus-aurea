@@ -53,6 +53,14 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - name: Export Cargo lockfile to job log (temporary)
+        if: always()
+        shell: bash
+        run: |
+          echo LOCK_BEGIN
+          cat src-tauri/Cargo.lock
+          echo LOCK_END
+
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
 

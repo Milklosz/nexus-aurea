@@ -940,7 +940,7 @@ mod tests {
     #[test]
     fn pair_and_command_rate_limits_are_bounded() {
         let mut pair = HashMap::new();
-        let ip = "192.168.1.4".parse().unwrap();
+        let ip: IpAddr = "192.168.1.4".parse().unwrap();
         for _ in 0..PAIRING_ATTEMPTS {
             assert!(allow_rate(&mut pair, ip, PAIRING_WINDOW, PAIRING_ATTEMPTS, 64));
         }
