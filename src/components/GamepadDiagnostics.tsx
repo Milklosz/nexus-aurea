@@ -3,7 +3,9 @@ import { gamepadSnapshot } from "../services/gamepadSnapshot";
 import { ControlServicePanel } from "./ControlServicePanel";
 import { AppManagerPanel } from "./AppManagerPanel";
 import { CinemaPanel } from "./CinemaPanel";
+import { MusicPanel } from "./MusicPanel";
 import type { CinemaProfile } from "../services/cinemaMode";
+import type { AppleMusicAction, AppleMusicStatus, SystemVolumeAction } from "../services/musicBridge";
 import {
   resolveControllerProfile,
   type ControllerProfile,
@@ -15,6 +17,13 @@ type GamepadDiagnosticsProps = {
   cinemaProfile: CinemaProfile;
   onCinemaProfileChange: (profile: CinemaProfile) => void;
   onShowDesktop: () => void;
+  musicStatus: AppleMusicStatus;
+  musicBackgroundMode: boolean;
+  onMusicBackgroundModeChange: (enabled: boolean) => void;
+  onMusicRefresh: () => Promise<void>;
+  onMusicControl: (action: AppleMusicAction) => Promise<void>;
+  onSystemVolume: (action: SystemVolumeAction) => Promise<void>;
+  onOpenAppleMusic: () => Promise<void>;
   onClose: () => void;
 };
 
@@ -32,6 +41,13 @@ export function GamepadDiagnostics({
   cinemaProfile,
   onCinemaProfileChange,
   onShowDesktop,
+  musicStatus,
+  musicBackgroundMode,
+  onMusicBackgroundModeChange,
+  onMusicRefresh,
+  onMusicControl,
+  onSystemVolume,
+  onOpenAppleMusic,
   onClose,
 }: GamepadDiagnosticsProps) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -82,6 +98,16 @@ export function GamepadDiagnostics({
     })}
     <CinemaPanel profile={cinemaProfile} onChange={onCinemaProfileChange} onDesktop={onShowDesktop} />
     <AppManagerPanel />
+    <MusicPanel
+      status={musicStatus}
+      profile={cinemaProfile}
+      backgroundMode={musicBackgroundMode}
+      onBackgroundModeChange={onMusicBackgroundModeChange}
+      onRefresh={onMusicRefresh}
+      onControl={onMusicControl}
+      onVolume={onSystemVolume}
+      onOpenAppleMusic={onOpenAppleMusic}
+    />
     <ControlServicePanel />
     <button type="button" onClick={onClose} autoFocus>Zamknij (Esc / ◯)</button>
   </dialog>;

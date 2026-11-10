@@ -21,6 +21,24 @@ const native = vi.hoisted(() => ({
   setControlGameMode: vi.fn(() => Promise.resolve(native.controlStatus)),
   stopControlService: vi.fn(() => Promise.resolve(native.controlStatus)),
 }));
+const musicStatus = {
+  windows: false,
+  bridgeAvailable: false,
+  appleSessionFound: false,
+  title: null,
+  artist: null,
+  album: null,
+  playbackState: null,
+  positionSeconds: null,
+  durationSeconds: null,
+  canTogglePlayPause: false,
+  canNext: false,
+  canPrevious: false,
+  artworkSupported: false,
+  audioDeviceName: null,
+  bluetoothLatencyMs: null,
+  message: "not available",
+} as const;
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => true, invoke: native.invoke }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => native }));
 vi.mock("../services/controlService", () => ({
@@ -69,7 +87,7 @@ describe("gamepad without hardware", () => {
     Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: vi.fn() });
     vi.stubGlobal("navigator", { getGamepads: () => [null, pad] });
     const close = vi.fn();
-    render(<GamepadDiagnostics profile="auto" onProfileChange={vi.fn()} cinemaProfile="cinema" onCinemaProfileChange={vi.fn()} onShowDesktop={vi.fn()} onClose={close} />);
+    render(<GamepadDiagnostics profile="auto" onProfileChange={vi.fn()} cinemaProfile="cinema" onCinemaProfileChange={vi.fn()} onShowDesktop={vi.fn()} musicStatus={musicStatus} musicBackgroundMode={false} onMusicBackgroundModeChange={vi.fn()} onMusicRefresh={vi.fn(async () => {})} onMusicControl={vi.fn(async () => {})} onSystemVolume={vi.fn(async () => {})} onOpenAppleMusic={vi.fn(async () => {})} onClose={close} />);
     expect(screen.getByText(/Połączone: 1/)).toBeTruthy();
     expect(screen.getByText(/B0: 1.00/).getAttribute("data-pressed")).toBe("true");
     expect(screen.getByText(/A0: -0.750/)).toBeTruthy();
@@ -80,7 +98,7 @@ describe("gamepad without hardware", () => {
     Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: vi.fn(function(this: HTMLDialogElement) { this.setAttribute("open", ""); }) });
     Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: vi.fn() });
     vi.stubGlobal("navigator", {});
-    render(<GamepadDiagnostics profile="auto" onProfileChange={vi.fn()} cinemaProfile="cinema" onCinemaProfileChange={vi.fn()} onShowDesktop={vi.fn()} onClose={() => {}} />);
+    render(<GamepadDiagnostics profile="auto" onProfileChange={vi.fn()} cinemaProfile="cinema" onCinemaProfileChange={vi.fn()} onShowDesktop={vi.fn()} musicStatus={musicStatus} musicBackgroundMode={false} onMusicBackgroundModeChange={vi.fn()} onMusicRefresh={vi.fn(async () => {})} onMusicControl={vi.fn(async () => {})} onSystemVolume={vi.fn(async () => {})} onOpenAppleMusic={vi.fn(async () => {})} onClose={() => {}} />);
     expect(screen.getByText(/Gamepad API niedostępne/)).toBeTruthy();
   });
   it("moves relative to selection and wraps", () => {

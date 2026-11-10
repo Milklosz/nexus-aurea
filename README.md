@@ -1,4 +1,4 @@
-# NEXUS AUREA v0.5.0
+# NEXUS AUREA v0.7.0
 
 Projekt React + TypeScript + Tauri oparty bezpośrednio na zatwierdzonym prototypie AUREA · Grand Cinema. Oryginalny plik jest zachowany w `design/aurea-prototype.html`, a arkusz `src/styles.css` został z niego przeniesiony bez zmiany bazowego układu, kolorów ani animacji.
 
@@ -120,3 +120,26 @@ Only a Playnite Fullscreen process started directly by NEXUS is monitored for ex
 - NOT TESTED: Steam/Apple Music/Playnite/browser discovery and launch on the MSI; app window lifecycle and Windows foreground permissions; profile switching with the PlayStation controller on the Panasonic display.
 
 Known v0.5 limitations remain: Control Service detects HID metadata and provides return/emergency keyboard shortcuts, but global controller mapping and system volume control are not implemented. The v0.6 manager does not expose an unrestricted custom executable path, and Playnite focus restoration requires hardware acceptance before it can be considered reliable on the MSI.
+
+## v0.7.0 — NEXUS Music and Windows audio controls
+
+NEXUS Music requests Windows Global System Media Transport Controls (SMTC) sessions and accepts metadata only from a session whose app user model ID matches Apple Music. When available, it reports title, artist, album, playback state, and timeline position, then routes play/pause/next/previous to that Apple Music session. If Windows does not expose the Apple session or denies SMTC access, track fields remain empty and transport controls remain disabled; the explicit fallback opens the installed official Apple Music app. NEXUS never sends media commands to another app's session.
+
+Music Mode presents the available track data in a full-screen AUREA-styled overlay. Background Mode is opt-in and remembered locally; it displays an optional mini-player while the Grand Cinema home screen stays in place. Controller transport is available from the diagnostics panel; the home-screen mini-player also has mouse/keyboard buttons. In Gaming profile NEXUS disables track transport controls while leaving already-playing audio alone. The album art thumbnail is intentionally not read in this prototype, so the UI states that it is unavailable rather than showing sample art.
+
+System audio buttons send standard Windows volume-up, volume-down, and mute keyboard events. They affect the current Windows default output and do not read a numeric volume value, choose an endpoint, pair Bluetooth devices, or change audio settings. If the user selects JBL PartyBox Encore as the Windows default device, these buttons follow that routing. The current device name and Bluetooth latency are not reported by this prototype.
+
+### Apple and Windows integration limits
+
+Microsoft documents SMTC as exposing only sessions that integrate with those APIs, and marks `globalMediaControl` as a capability needed by some session APIs. The current NEXUS build is an unpackaged NSIS desktop installer, so SMTC access can vary by Windows build and package identity; runtime access failures are surfaced and use the official-app fallback. Album-art byte extraction and system-device enumeration are not implemented. See [Microsoft SMTC sessions](https://learn.microsoft.com/en-us/uwp/api/windows.media.control.globalsystemmediatransportcontrolssession), [the SMTC session manager](https://learn.microsoft.com/en-us/uwp/api/windows.media.control.globalsystemmediatransportcontrolssessionmanager), and [Windows app capability declarations](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/app-capability-declarations).
+
+MusicKit / Apple Music API is a future option for catalog and personal-library features, not part of v0.7. Apple requires a signed ES256 developer token; personalized library requests also require a Music User Token. MusicKit on the Web manages subscriber authorization for web apps, but NEXUS has no configured Apple Developer signing key or user authorization flow and does not claim WebView2 playback support. No Apple ID password, private key, token, DRM content, or subscription data is collected by NEXUS. See [Apple Music API](https://developer.apple.com/documentation/AppleMusicAPI), [developer-token requirements](https://developer.apple.com/documentation/AppleMusicAPI/generating-developer-tokens), and [MusicKit user authentication](https://developer.apple.com/documentation/applemusicapi/user-authentication-for-musickit).
+
+`src/services/musicBridge.ts` is the narrow frontend boundary for SMTC status, track transport, and system-volume actions. Future MusicKit, iPhone PWA, iCloud Calendar, and System Manager modules can each add explicit services and native commands behind focused UI entry points. No generic plugin registry or automatic background integration is introduced.
+
+### v0.7 validation status
+
+- PASS locally: React/TypeScript tests, production frontend build, and whitespace checks.
+- CI REQUIRED: Windows and macOS Rust checks, including the native Windows SMTC code, and the Windows NSIS installer artifact.
+- NOT TESTED: Apple Music SMTC metadata/commands, full-screen media presentation, JBL volume routing, Bluetooth latency, PlayStation navigation through Music Mode, Panasonic display rendering, and any Apple Music/MusicKit authentication or playback.
+- NOT IMPLEMENTED: album artwork, lyrics, current endpoint name, endpoint selection, Bluetooth pairing/latency, and an Apple Music-specific MediaKit streaming client.
