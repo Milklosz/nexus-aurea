@@ -106,3 +106,17 @@ Global gamepad button mapping, cursor movement, Windows actions, volume, automat
 Synthetic tests cover the disabled default, Sony HID classification, hotkey bridge state, game-mode shortcut behavior, emergency-stop UI updates, focus restoration after closing diagnostics, controller reconnects, and keyboard traversal across the five dock tiles. They do not prove HID enumeration, global hotkey delivery, HDMI/fullscreen behavior, Steam Input coexistence, or controller mapping on the MSI. These remain manual MSI acceptance checks before any global button mapping is added.
 
 For the first MSI acceptance pass, open diagnostics and start the service manually; confirm USB and Bluetooth pad enumeration, switch to another app and test `Ctrl+Alt+N`, enable game mode and confirm that shortcut is released, then test `Ctrl+Alt+F12` and verify the status returns to disabled. Repeat once with Steam Input active to confirm the prototype observes device metadata without consuming controller reports. No v0.5 installer is to be installed automatically.
+
+## v0.6.0 — App Manager and Cinema Mode
+
+The diagnostics panel includes Cinema, Gaming, and Desktop profiles and a fixed Windows application allowlist for Steam Big Picture, Apple Music, Playnite Fullscreen, Chrome, Edge, and Firefox. Discovery checks known per-user and Program Files locations; Apple Music uses its WindowsApps execution alias. Launch requests use fixed executable paths and fixed arguments. The process diagnostic uses `tasklist` with an exact image-name filter, has a two-second timeout, and does not read window titles or process command lines. Existing applications are reported rather than launched a second time when their process is already visible to that check. NEXUS never terminates an application.
+
+Only a Playnite Fullscreen process started directly by NEXUS is monitored for exit. Focus is requested only if Windows has returned to Explorer or NEXUS; Steam, Apple Music, and browsers may delegate to existing processes, so their lifecycle is reported as unsupported. Windows can still deny foreground activation. Profiles are saved in local WebView storage. Cinema requests NEXUS fullscreen and Desktop requests a decorated window; Gaming only activates the existing Control Service game mode if that service was already explicitly enabled. No service is enabled on startup, and Gaming does not add global controller mapping. No HDR, resolution, HDMI, or audio-device setting is changed.
+
+### v0.6 validation status
+
+- PASS locally: React/TypeScript unit tests, production TypeScript/Vite build, and whitespace checks.
+- CI REQUIRED: Rust unit tests, Windows/MSVC backend check, macOS backend check, and Windows NSIS build.
+- NOT TESTED: Steam/Apple Music/Playnite/browser discovery and launch on the MSI; app window lifecycle and Windows foreground permissions; profile switching with the PlayStation controller on the Panasonic display.
+
+Known v0.5 limitations remain: Control Service detects HID metadata and provides return/emergency keyboard shortcuts, but global controller mapping and system volume control are not implemented. The v0.6 manager does not expose an unrestricted custom executable path, and Playnite focus restoration requires hardware acceptance before it can be considered reliable on the MSI.

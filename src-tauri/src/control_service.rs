@@ -38,6 +38,13 @@ fn is_playstation_controller(vendor_id: u32, usage_page: u16, usage: u16) -> boo
     vendor_id == 0x054c && is_controller_collection(usage_page, usage)
 }
 
+pub(crate) fn foreground_process_name() -> Option<String> {
+    #[cfg(target_os = "windows")]
+    { windows::foreground_process_name() }
+    #[cfg(not(target_os = "windows"))]
+    { None }
+}
+
 struct Worker {
     enabled: Arc<std::sync::atomic::AtomicBool>,
     game_mode: Arc<std::sync::atomic::AtomicBool>,
@@ -618,7 +625,7 @@ mod windows {
         Err("Lista urządzeń HID zmieniała się podczas odczytu; usługę wyłączono.".into())
     }
 
-    fn foreground_process_name() -> Option<String> {
+    pub(super) fn foreground_process_name() -> Option<String> {
         let window = unsafe { GetForegroundWindow() };
         if window.is_null() {
             return None;

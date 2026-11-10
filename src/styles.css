@@ -86,3 +86,9 @@
 .launcher-actions { display: flex; flex-wrap: wrap; gap: .7rem; }
 .diagnostics button:focus-visible { outline: 2px solid #e4c37c; outline-offset: 3px; }
 .diagnostics button:disabled { cursor: not-allowed; opacity: .5; }
+.cinema-panel, .app-manager { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #806e49; }
+.profile-active { border-color: #e4c37c !important; color: #e4c37c; box-shadow: inset 0 0 0 1px #e4c37c66; }
+.managed-app-list { display: grid; gap: .45rem; margin: .8rem 0; }
+.managed-app-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .55rem .7rem; border: 1px solid #806e4955; border-radius: 8px; background: #101216; }
+.managed-app-row > div { display: grid; gap: .25rem; }
+.managed-app-row span { color: #c8c0b1; font-size: .85rem; }
