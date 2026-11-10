@@ -168,7 +168,7 @@ export function ControlCenter(props: ControlCenterProps) {
         <li>Parowanie: niedostępne</li>
         <li>Sparowane urządzenia: brak</li>
       </ul>
-      <p>{REMOTE_ACCESS_DISABLED_REASON}</p>
+      <p>Zdalny serwer jest wyłączony. {REMOTE_ACCESS_DISABLED_REASON}</p>
       <p>Podgląd PWA nie wysyła poleceń ani nie przechowuje sekretów. Nie otwieramy portu sieciowego.</p>
     </section>
 
