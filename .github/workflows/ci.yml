@@ -47,8 +47,14 @@ jobs:
       - name: Run tests
         run: pnpm test
 
+      - name: Run Rust unit tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
+
       - name: Build React and TypeScript
         run: pnpm build
+
+      - name: Check patch whitespace
+        run: git diff --check
 
       - name: Check Rust backend (Windows MSVC)
         if: runner.os == 'Windows'

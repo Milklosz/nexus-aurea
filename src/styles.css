@@ -72,3 +72,17 @@
       .app { min-height: 106px; }
     }
     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }
+
+.diagnostics-trigger { position: fixed; right: 2rem; bottom: 4rem; color: #d7bf86; background: #17191d; border: 1px solid #8c7446; padding: .5rem 1rem; cursor: pointer; }
+.diagnostics { color: #eee3ca; background: #17191d; border: 1px solid #b79b62; border-radius: 12px; max-width: 800px; width: 85vw; max-height: 80vh; overflow: auto; padding: 2rem; }
+.diagnostics::backdrop { background: #000b; }
+.diagnostics button { padding: .7rem 1.4rem; cursor: pointer; }
+.pad-values { display: flex; flex-wrap: wrap; gap: .7rem; }
+.pad-values span { border: 1px solid #806e49; padding: .3rem; }
+.pad-values [data-pressed="true"] { color: #17191d; background: #e4c37c; }
+.launcher-panel { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #806e49; }
+.control-service { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #806e49; }
+.control-service p { max-width: 70rem; }
+.launcher-actions { display: flex; flex-wrap: wrap; gap: .7rem; }
+.diagnostics button:focus-visible { outline: 2px solid #e4c37c; outline-offset: 3px; }
+.diagnostics button:disabled { cursor: not-allowed; opacity: .5; }

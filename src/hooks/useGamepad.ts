@@ -1,47 +1,64 @@
 import { useEffect, useRef } from "react";
+import {
+  ControllerEngine,
+  readControllerSample,
+  type ControllerAction,
+  type ControllerProfile,
+} from "../services/controllerEngine";
 
-export function useGamepad(focusApp: (index: number) => void, onActivate: () => void, onMenu: () => void) {
-  const activateRef = useRef(onActivate);
-  const menuRef = useRef(onMenu);
+export type ControllerActions = {
+  move: (delta: -1 | 1) => void;
+  confirm: () => void;
+  back: () => void;
+  options: () => void;
+};
+
+export function useGamepad(
+  actions: ControllerActions,
+  enabled = true,
+  profile: ControllerProfile = "auto",
+) {
+  const actionsRef = useRef(actions);
 
   useEffect(() => {
-    activateRef.current = onActivate;
-  }, [onActivate]);
+    actionsRef.current = actions;
+  }, [actions]);
 
   useEffect(() => {
-    menuRef.current = onMenu;
-  }, [onMenu]);
-
-  useEffect(() => {
-    if (!navigator.getGamepads) return;
+    if (!enabled || typeof navigator.getGamepads !== "function") return;
 
     let frame = 0;
-    let previous = { left: false, right: false, open: false, menu: false };
-
+    let selectedPad = "";
+    const engine = new ControllerEngine();
+    const dispatch = (action: ControllerAction) => {
+      if (action.type === "move") actionsRef.current.move(action.delta);
+      else actionsRef.current[action.type]();
+    };
     const poll = () => {
-      const pads = Array.from(navigator.getGamepads() ?? []).filter((pad) => pad?.connected);
-      const pad = pads[0];
-
-      if (!pad) {
-        previous = { left: false, right: false, open: false, menu: false };
-      } else {
-        const horizontal = pad.axes[0] ?? 0;
-        const left = Boolean(pad.buttons[14]?.pressed || horizontal < -0.6);
-        const right = Boolean(pad.buttons[15]?.pressed || horizontal > 0.6);
-        const open = Boolean(pad.buttons[0]?.pressed);
-        const menu = Boolean(pad.buttons[9]?.pressed);
-
-        if (left && !previous.left) focusApp(-1);
-        else if (right && !previous.right) focusApp(1);
-        if (open && !previous.open) activateRef.current();
-        if (menu && !previous.menu) menuRef.current();
-        previous = { left, right, open, menu };
+      const focused = document.hasFocus() && document.visibilityState === "visible";
+      let pads: Gamepad[] = [];
+      try {
+        pads = Array.from(navigator.getGamepads() ?? []).filter(
+          (pad): pad is Gamepad => Boolean(pad?.connected),
+        );
+      } catch {
+        engine.reset();
       }
-
+      const pad = focused ? pads.find((candidate) => readControllerSample(candidate, profile)) : undefined;
+      const identity = pad ? pad.index + ":" + pad.id : "";
+      if (identity !== selectedPad) {
+        engine.reset();
+        selectedPad = identity;
+      }
+      const samples = engine.update(pad ? readControllerSample(pad, profile) : null, performance.now(), focused);
+      for (const action of samples) dispatch(action);
       frame = window.requestAnimationFrame(poll);
     };
 
     frame = window.requestAnimationFrame(poll);
-    return () => window.cancelAnimationFrame(frame);
-  }, [focusApp]);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      engine.reset();
+    };
+  }, [enabled, profile]);
 }
