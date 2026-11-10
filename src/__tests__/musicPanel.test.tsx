@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
-import { MusicPanel } from "../components/MusicPanel";
+import { MusicMiniPlayer, MusicPanel } from "../components/MusicPanel";
 import type { AppleMusicStatus } from "../services/musicBridge";
 
 afterEach(cleanup);
@@ -41,6 +41,17 @@ function renderPanel(overrides: Partial<ComponentProps<typeof MusicPanel>> = {})
 }
 
 describe("Apple Music honest fallback", () => {
+  it("reports a failed background command and allows retry", async () => {
+    const control = vi.fn().mockRejectedValueOnce(new Error("session lost")).mockResolvedValueOnce(undefined);
+    render(<MusicMiniPlayer status={{ ...status, appleSessionFound: true, canNext: true }} profile="cinema" onControl={control} />);
+    const next = screen.getByRole("button", { name: "Następny utwór" });
+    fireEvent.click(next);
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    await waitFor(() => expect(next.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(next);
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(control).toHaveBeenCalledTimes(2);
+  });
   it("shows no fake track metadata and keeps transport unavailable without an Apple session", () => {
     renderPanel();
     expect(screen.getByText("Brak aktywnej sesji Apple Music.")).toBeTruthy();
@@ -64,3 +75,4 @@ describe("Apple Music honest fallback", () => {
     expect(screen.getByText(/Tryb Gaming/)).toBeTruthy();
   });
 });
+

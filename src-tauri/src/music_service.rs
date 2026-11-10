@@ -182,9 +182,7 @@ mod windows {
             playback_state: Some(playback_state(playback.PlaybackStatus().map_err(|error| error.to_string())?).into()),
             position_seconds: ticks_to_seconds(position_ticks),
             duration_seconds: ticks_to_seconds(duration_ticks),
-            can_toggle_play_pause: controls.IsPlayPauseToggleEnabled().unwrap_or(false)
-                || controls.IsPlayEnabled().unwrap_or(false)
-                || controls.IsPauseEnabled().unwrap_or(false),
+            can_toggle_play_pause: controls.IsPlayPauseToggleEnabled().unwrap_or(false),
             can_next: controls.IsNextEnabled().unwrap_or(false),
             can_previous: controls.IsPreviousEnabled().unwrap_or(false),
             // Thumbnail is exposed by SMTC but is not read by this prototype; no artwork is fabricated.
@@ -275,3 +273,4 @@ mod tests {
         assert!(status.position_seconds.is_none());
     }
 }
+

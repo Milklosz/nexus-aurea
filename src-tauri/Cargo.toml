@@ -1,6 +1,6 @@
 [package]
 name = "nexus-aurea"
-version = "0.7.0"
+version = "0.7.1"
 description = "NEXUS AUREA — Grand Cinema entertainment launcher"
 authors = ["NEXUS"]
 edition = "2021"
@@ -21,3 +21,4 @@ serde = { version = "1", features = ["derive"] }
 [target.'cfg(windows)'.dependencies]
 futures-lite = "2"
 windows = { version = "0.62.2", features = ["Foundation", "Foundation_Collections", "Media_Control", "Win32_System_WinRT"] }
+

@@ -121,8 +121,6 @@ export default function App() {
   }, []);
   const changeCinemaProfile = useCallback(async (nextProfile: CinemaProfile) => {
     const previous = cinemaProfile;
-    setCinemaProfile(nextProfile);
-    saveCinemaProfile(nextProfile);
     try {
       if (nextProfile === "cinema") await windowMode(true);
       if (nextProfile === "desktop") await windowMode(false);
@@ -131,9 +129,11 @@ export default function App() {
         if (status.running) await setControlGameMode(nextProfile === "gaming");
       }
     } catch {
-      showToast("Nie udało się zastosować całego profilu. Control Service pozostaje w bezpiecznym stanie.");
+      showToast("Nie udało się zastosować całego profilu. Sprawdź tryb okna i Control Service.");
       return;
     }
+    setCinemaProfile(nextProfile);
+    saveCinemaProfile(nextProfile);
     showToast(nextProfile === "desktop" ? "Profil Desktop · pulpit Windows." : `Profil ${nextProfile === "cinema" ? "Cinema" : "Gaming"} aktywny.`);
   }, [cinemaProfile, showToast]);
   const showDesktop = useCallback(() => void changeCinemaProfile("desktop"), [changeCinemaProfile]);
@@ -163,7 +163,7 @@ export default function App() {
   const openAppleMusic = useCallback(async () => {
     const receipt = await launchManagedApp("appleMusic");
     showToast(receipt.alreadyRunning ? "Apple Music już działa." : "Uruchamiam oficjalną aplikację Apple Music.");
-    window.setTimeout(() => void refreshMusicStatus(), 1800);
+    window.setTimeout(() => void refreshMusicStatus().catch(() => showToast("Nie udało się odczytać sesji Windows SMTC.")), 1800);
   }, [refreshMusicStatus, showToast]);
   useGamepad({
     move: moveControllerFocus,
@@ -279,3 +279,4 @@ export default function App() {
     </main>
   );
 }
+
