@@ -1,4 +1,8 @@
 import { GamepadDiagnostics } from "./components/GamepadDiagnostics";
+import { ControlCenter } from "./components/ControlCenter";
+import { AmbientScreen } from "./components/AmbientScreen";
+import { useAmbient } from "./hooks/useAmbient";
+import { readAmbientSettings, saveAmbientSettings, type AmbientSettings } from "./services/ambient";
 import { useAppVersion } from "./hooks/useAppVersion";
 import { minimizeWindowToDesktop, windowMode } from "./services/windowMode";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -46,15 +50,23 @@ function savedControllerProfile(): ControllerProfile {
 export default function App() {
   const version = useAppVersion();
   const [diagnostics, setDiagnostics] = useState(false);
+  const [controlCenterOpen, setControlCenterOpen] = useState(false);
   const [controllerProfile, setControllerProfile] = useState<ControllerProfile>(savedControllerProfile);
   const [cinemaProfile, setCinemaProfile] = useState<CinemaProfile>(readCinemaProfile);
   const [musicBackgroundMode, setMusicBackgroundMode] = useState(readMusicBackgroundMode);
   const [musicStatus, setMusicStatus] = useState<AppleMusicStatus>(unavailableAppleMusicStatus);
+  const [ambientSettings, setAmbientSettings] = useState<AmbientSettings>(readAmbientSettings);
+  const mediaIsPlaying = musicStatus.appleSessionFound && musicStatus.playbackState === "playing";
+  const ambient = useAmbient(ambientSettings, mediaIsPlaying);
   const { now, time } = useClock();
   const { label: weatherLabel, title: weatherTitle } = useWeather();
   const { message, showToast } = useToast();
   const activeServiceRef = useRef(0);
-  const showMenu = useCallback(() => setDiagnostics(true), []);
+  const showMenu = useCallback(() => { setControlCenterOpen(false); setDiagnostics(true); }, []);
+  const toggleControlCenter = useCallback(() => {
+    setDiagnostics(false);
+    setControlCenterOpen((open) => !open);
+  }, []);
   const showRecommendation = useCallback(
     () => showToast("„Nocna zmiana” to karta demonstracyjna. Wybierz usługę z docka."),
     [showToast],
@@ -73,6 +85,19 @@ export default function App() {
   );
   const activateSelected = useCallback(() => void openService(activeServiceRef.current), [openService]);
   const navigation = useNavigation(streamingServices.length, activateSelected, showMenu);
+  const closeControlCenter = useCallback(() => {
+    setControlCenterOpen(false);
+    window.requestAnimationFrame(() => navigation.focusApp(activeServiceRef.current));
+  }, [navigation.focusApp]);
+  const returnToNexus = useCallback(() => {
+    setControlCenterOpen(false);
+    setDiagnostics(false);
+    window.requestAnimationFrame(() => navigation.focusApp(activeServiceRef.current));
+  }, [navigation.focusApp]);
+  const openDiagnosticsFromCenter = useCallback(() => {
+    setControlCenterOpen(false);
+    setDiagnostics(true);
+  }, []);
   const restoreSelectedFocus = useCallback(
     () => navigation.focusApp(activeServiceRef.current),
     [navigation.focusApp],
@@ -104,13 +129,16 @@ export default function App() {
     activateSelected();
   }, [activateSelected]);
   const backControllerFocus = useCallback(() => {
-    if (document.querySelector("dialog[open]")) {
+    if (controlCenterOpen) {
+      closeControlCenter();
+      return;
+    }
+    if (diagnostics) {
       closeDiagnostics();
       return;
     }
     navigation.focusApp(0);
-  }, [closeDiagnostics, navigation.focusApp]);
-  const toggleDiagnostics = useCallback(() => setDiagnostics((open) => !open), []);
+  }, [closeControlCenter, closeDiagnostics, controlCenterOpen, diagnostics, navigation.focusApp]);
   const updateControllerProfile = useCallback((profile: ControllerProfile) => {
     setControllerProfile(profile);
     try {
@@ -121,11 +149,13 @@ export default function App() {
   }, []);
   const changeCinemaProfile = useCallback(async (nextProfile: CinemaProfile): Promise<boolean> => {
     const previous = cinemaProfile;
+    let controlServiceRunning = false;
     try {
       if (nextProfile === "cinema") await windowMode(true);
       if (nextProfile === "desktop") await windowMode(false);
       if ((nextProfile === "gaming" || previous === "gaming") && nextProfile !== previous) {
         const status = await getControlServiceStatus();
+        controlServiceRunning = status.running;
         if (status.running) await setControlGameMode(nextProfile === "gaming");
       }
     } catch {
@@ -134,10 +164,16 @@ export default function App() {
     }
     setCinemaProfile(nextProfile);
     saveCinemaProfile(nextProfile);
-    showToast(nextProfile === "desktop" ? "Profil Desktop · pulpit Windows." : `Profil ${nextProfile === "cinema" ? "Cinema" : "Gaming"} aktywny.`);
+    showToast(nextProfile === "desktop"
+      ? "Profil Desktop · pulpit Windows."
+      : nextProfile === "gaming" && !controlServiceRunning
+        ? "Profil Gaming wybrany. Control Service jest wyłączony; ustawienia systemowe nie zostały zmienione."
+        : nextProfile === "cinema" ? "Profil Cinema aktywny." : "Profil Gaming aktywny.");
     return true;
   }, [cinemaProfile, showToast]);
   const showDesktop = useCallback(async () => {
+    setControlCenterOpen(false);
+    setDiagnostics(false);
     if (!await changeCinemaProfile("desktop")) return;
     try {
       await minimizeWindowToDesktop();
@@ -149,7 +185,7 @@ export default function App() {
     setMusicStatus(await getAppleMusicStatus());
   }, []);
   useEffect(() => {
-    if (!diagnostics && !musicBackgroundMode) return;
+    if (!diagnostics && !musicBackgroundMode && !ambientSettings.enabled) return;
     let active = true;
     const refresh = () => void getAppleMusicStatus().then(status => { if (active) setMusicStatus(status); }).catch(() => {
       if (active) setMusicStatus({ ...unavailableAppleMusicStatus, windows: true, message: "Nie udało się odczytać sesji Windows SMTC." });
@@ -157,7 +193,7 @@ export default function App() {
     refresh();
     const timer = window.setInterval(refresh, 2500);
     return () => { active = false; window.clearInterval(timer); };
-  }, [diagnostics, musicBackgroundMode]);
+  }, [ambientSettings.enabled, diagnostics, musicBackgroundMode]);
   const changeMusicBackgroundMode = useCallback((enabled: boolean) => {
     setMusicBackgroundMode(enabled);
     saveMusicBackgroundMode(enabled);
@@ -168,6 +204,10 @@ export default function App() {
     await refreshMusicStatus();
   }, [refreshMusicStatus]);
   const handleSystemVolume = useCallback((action: SystemVolumeAction) => adjustSystemVolume(action), []);
+  const updateAmbientSettings = useCallback((next: AmbientSettings) => {
+    setAmbientSettings(next);
+    saveAmbientSettings(next);
+  }, []);
   const openAppleMusic = useCallback(async () => {
     const receipt = await launchManagedApp("appleMusic");
     showToast(receipt.alreadyRunning ? "Apple Music już działa." : "Uruchamiam oficjalną aplikację Apple Music.");
@@ -177,22 +217,29 @@ export default function App() {
     move: moveControllerFocus,
     confirm: confirmControllerFocus,
     back: backControllerFocus,
-    options: toggleDiagnostics,
-  }, true, controllerProfile);
+    options: toggleControlCenter,
+  }, !ambient.active && !ambient.controllerSuppressed, controllerProfile, () => ambient.controllerSuppressedRef.current);
   useEffect(() => {
     const recover = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && document.querySelector("dialog[open]")) {
+        event.preventDefault();
+        if (controlCenterOpen) closeControlCenter();
+        else closeDiagnostics();
+        return;
+      }
       if (event.key === "Escape" || event.key === "F11") {
         event.preventDefault();
         void windowMode(event.key === "Escape" ? false : undefined)
           .catch(() => showToast("Nie udało się zmienić trybu okna. Uruchom z --windowed."));
       }
-      if (event.key === "F2") setDiagnostics(true);
+      if (event.key === "F2") showMenu();
+      if (event.key === "F3") { setDiagnostics(false); setControlCenterOpen(true); }
     };
     const restore = () => { if (!diagnostics) navigation.focusApp(activeServiceRef.current); };
     window.addEventListener("keydown", recover);
     window.addEventListener("focus", restore);
     return () => { window.removeEventListener("keydown", recover); window.removeEventListener("focus", restore); };
-  }, [diagnostics, navigation.focusApp, showToast]);
+  }, [closeControlCenter, closeDiagnostics, controlCenterOpen, diagnostics, navigation.focusApp, showMenu, showToast]);
 
   useEffect(() => {
     let active = true;
@@ -251,6 +298,7 @@ export default function App() {
       <div className="ridge" aria-hidden="true" />
       <div className="ridge back" aria-hidden="true" />
       <StatusBar now={now} time={time} weatherLabel={weatherLabel} weatherTitle={weatherTitle} />
+      <button type="button" className="quick-settings-trigger" onClick={toggleControlCenter} aria-label="Otwórz Control Center">Control Center <kbd>F3</kbd></button>
       <HeroPanel onWatch={showRecommendation} />
       <AppDock
         services={streamingServices}
@@ -268,6 +316,19 @@ export default function App() {
         <span className="version">AUREA &nbsp;/&nbsp; V{version}</span>
       </footer>
       <button className="diagnostics-trigger" onClick={showMenu}>Diagnostyka pada</button>
+      {controlCenterOpen && <ControlCenter
+        profile={cinemaProfile}
+        onProfileChange={changeCinemaProfile}
+        onShowDesktop={showDesktop}
+        onSystemVolume={handleSystemVolume}
+        ambientSettings={ambientSettings}
+        onAmbientSettingsChange={updateAmbientSettings}
+        mediaPlaying={mediaIsPlaying}
+        onOpenDiagnostics={openDiagnosticsFromCenter}
+        onReturnToNexus={returnToNexus}
+        onClose={closeControlCenter}
+      />}
+      {ambient.active && <AmbientScreen now={now} />}
       {diagnostics && <GamepadDiagnostics
         profile={controllerProfile}
         onProfileChange={updateControllerProfile}
