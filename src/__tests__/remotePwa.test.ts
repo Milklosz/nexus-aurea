@@ -13,9 +13,9 @@ describe("NEXUS iPhone Remote PWA shell", () => {
 
   it("keeps actions disabled while no secure endpoint or pairing exists", () => {
     expect(html).toContain("endpoint niedostępny");
-    const buttons = [...html.matchAll(/<button\\b[^>]*>/g)].map(([tag]) => tag);
+    const buttons = [...html.matchAll(/<button\b[^>]*>/g)].map(([tag]) => tag);
     expect(buttons.length).toBeGreaterThan(0);
-    expect(buttons.every((tag) => /\\bdisabled\\b/.test(tag))).toBe(true);
+    expect(buttons.every((tag) => /\bdisabled\b/.test(tag))).toBe(true);
     expect(script).toContain("endpointAvailable: false");
     expect(script).not.toMatch(/WebSocket|EventSource|XMLHttpRequest|fetch\s*\(/);
   });
