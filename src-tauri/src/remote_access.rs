@@ -364,30 +364,32 @@ impl RemoteAccess {
         let fingerprint = prepared.ca_fingerprint.ok_or("Brak certyfikatu zaufania.")?;
         self.ensure_vault_loaded()?;
         let (ip, host, origin) = local_remote_address()?;
-        let vault = lock(&self.inner.vault);
-        let ca_cert = vault.ca_cert_pem.as_ref().ok_or("Brak certyfikatu zaufania.")?;
-        let ca_key_pem = vault.ca_key_pem.as_ref().ok_or("Brak klucza certyfikatu.")?;
-        let ca_key = KeyPair::from_pem(ca_key_pem).map_err(|_| "Nie można odczytać klucza certyfikatu.".to_string())?;
-        let issuer_params = CertificateParams::from_ca_cert_pem(ca_cert)
-            .map_err(|_| "Nie można odczytać wystawcy certyfikatu.".to_string())?;
-        let issuer = issuer_params.self_signed(&ca_key)
-            .map_err(|_| "Nie można odtworzyć wystawcy certyfikatu.".to_string())?;
-        let now = OffsetDateTime::now_utc();
-        let mut leaf_params = CertificateParams::default();
-        leaf_params.not_before = now - TimeDuration::minutes(5);
-        leaf_params.not_after = now + TimeDuration::days(90);
-        leaf_params.subject_alt_names = vec![SanType::IpAddress(IpAddr::V4(ip))];
-        leaf_params.distinguished_name.push(DnType::CommonName, "NEXUS AUREA LAN Remote");
-        leaf_params.is_ca = IsCa::NoCa;
-        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
-        leaf_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
-        leaf_params.use_authority_key_identifier_extension = true;
-        let leaf_key = KeyPair::generate().map_err(|_| "Nie udało się utworzyć certyfikatu HTTPS.".to_string())?;
-        let leaf_cert = leaf_params.signed_by(&leaf_key, &issuer, &ca_key)
-            .map_err(|_| "Nie udało się podpisać certyfikatu HTTPS.".to_string())?;
-        let cert_pem = leaf_cert.pem();
-        let key_pem = leaf_key.serialize_pem();
-        drop(vault);
+        let (cert_pem, key_pem) = {
+            let vault = lock(&self.inner.vault);
+            let ca_cert = vault.ca_cert_pem.as_ref().ok_or("Brak certyfikatu zaufania.")?;
+            let ca_key_pem = vault.ca_key_pem.as_ref().ok_or("Brak klucza certyfikatu.")?;
+            let ca_key = KeyPair::from_pem(ca_key_pem)
+                .map_err(|_| "Nie można odczytać klucza certyfikatu.".to_string())?;
+            let issuer_params = CertificateParams::from_ca_cert_pem(ca_cert)
+                .map_err(|_| "Nie można odczytać wystawcy certyfikatu.".to_string())?;
+            let issuer = issuer_params.self_signed(&ca_key)
+                .map_err(|_| "Nie można odtworzyć wystawcy certyfikatu.".to_string())?;
+            let now = OffsetDateTime::now_utc();
+            let mut leaf_params = CertificateParams::default();
+            leaf_params.not_before = now - TimeDuration::minutes(5);
+            leaf_params.not_after = now + TimeDuration::days(90);
+            leaf_params.subject_alt_names = vec![SanType::IpAddress(IpAddr::V4(ip))];
+            leaf_params.distinguished_name.push(DnType::CommonName, "NEXUS AUREA LAN Remote");
+            leaf_params.is_ca = IsCa::NoCa;
+            leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+            leaf_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+            leaf_params.use_authority_key_identifier_extension = true;
+            let leaf_key = KeyPair::generate()
+                .map_err(|_| "Nie udało się utworzyć certyfikatu HTTPS.".to_string())?;
+            let leaf_cert = leaf_params.signed_by(&leaf_key, &issuer, &ca_key)
+                .map_err(|_| "Nie udało się podpisać certyfikatu HTTPS.".to_string())?;
+            (leaf_cert.pem(), leaf_key.serialize_pem())
+        };
         let tls = RustlsConfig::from_pem(cert_pem.into_bytes(), key_pem.into_bytes())
             .await
             .map_err(|_| "Nie udało się skonfigurować HTTPS.".to_string())?;
