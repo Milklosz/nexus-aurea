@@ -64,6 +64,15 @@ jobs:
         if: runner.os == 'macOS'
         run: cargo check --locked --manifest-path src-tauri/Cargo.toml
 
+      - name: Clear cached NSIS installers
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bundleDirectory = 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis'
+          if (Test-Path -LiteralPath $bundleDirectory) {
+            Get-ChildItem -LiteralPath $bundleDirectory -Filter '*-setup.exe' -File | Remove-Item -Force
+          }
+
       - name: Build Windows x64 NSIS installer
         if: runner.os == 'Windows'
         run: pnpm tauri build --ci --target x86_64-pc-windows-msvc
@@ -78,6 +87,19 @@ jobs:
         with:
           name: NEXUS-AUREA-Windows-x64-${{ github.sha }}
           path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Build isolated Test Windows x64 NSIS installer
+        if: runner.os == 'Windows'
+        run: pnpm tauri build --ci --target x86_64-pc-windows-msvc --config src-tauri/tauri.test.conf.json
+
+      - name: Upload isolated Test installer artifact
+        if: runner.os == 'Windows' && success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: NEXUS-AUREA-Test-Windows-x64-${{ github.sha }}
+          path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*Test*-setup.exe
           if-no-files-found: error
           retention-days: 30
 
@@ -109,3 +131,4 @@ jobs:
               --generate-notes \
               --verify-tag
           fi
+
