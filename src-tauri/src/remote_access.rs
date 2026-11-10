@@ -347,9 +347,9 @@ impl RemoteAccess {
         app: tauri::AppHandle,
         trust_confirmed: bool,
     ) -> Result<RemoteAccessStatus, String> {
-        use axum::{extract::ConnectInfo, middleware, routing::{get, post}, Json, Router};
+        use axum::{middleware, routing::{get, post}, Router};
         use axum_server::tls_rustls::RustlsConfig;
-        use rcgen::{CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair, KeyUsagePurpose, SanType};
+        use rcgen::{CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose, SanType};
         use std::net::{TcpListener, SocketAddr};
         use tauri::Emitter;
         use time::{Duration as TimeDuration, OffsetDateTime};
@@ -368,8 +368,10 @@ impl RemoteAccess {
         let ca_cert = vault.ca_cert_pem.as_ref().ok_or("Brak certyfikatu zaufania.")?;
         let ca_key_pem = vault.ca_key_pem.as_ref().ok_or("Brak klucza certyfikatu.")?;
         let ca_key = KeyPair::from_pem(ca_key_pem).map_err(|_| "Nie można odczytać klucza certyfikatu.".to_string())?;
-        let issuer = Issuer::from_ca_cert_pem(ca_cert, ca_key)
+        let issuer_params = CertificateParams::from_ca_cert_pem(ca_cert)
             .map_err(|_| "Nie można odczytać wystawcy certyfikatu.".to_string())?;
+        let issuer = issuer_params.self_signed(&ca_key)
+            .map_err(|_| "Nie można odtworzyć wystawcy certyfikatu.".to_string())?;
         let now = OffsetDateTime::now_utc();
         let mut leaf_params = CertificateParams::default();
         leaf_params.not_before = now - TimeDuration::minutes(5);
@@ -379,8 +381,9 @@ impl RemoteAccess {
         leaf_params.is_ca = IsCa::NoCa;
         leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
         leaf_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+        leaf_params.use_authority_key_identifier_extension = true;
         let leaf_key = KeyPair::generate().map_err(|_| "Nie udało się utworzyć certyfikatu HTTPS.".to_string())?;
-        let leaf_cert = leaf_params.signed_by(&leaf_key, &issuer)
+        let leaf_cert = leaf_params.signed_by(&leaf_key, &issuer, &ca_key)
             .map_err(|_| "Nie udało się podpisać certyfikatu HTTPS.".to_string())?;
         let cert_pem = leaf_cert.pem();
         let key_pem = leaf_key.serialize_pem();
@@ -416,7 +419,6 @@ impl RemoteAccess {
             .layer(middleware::from_fn_with_state(context, validate_request));
         let handle = axum_server::Handle::new();
         let server = axum_server::from_tcp_rustls(listener, tls)
-            .map_err(|_| "Nie udało się przygotować serwera HTTPS.".to_string())?
             .handle(handle.clone())
             .serve(router.into_make_service_with_connect_info::<SocketAddr>());
         {
