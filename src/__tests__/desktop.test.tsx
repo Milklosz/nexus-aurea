@@ -8,8 +8,13 @@ import { gamepadSnapshot } from "../services/gamepadSnapshot";
 import { windowMode } from "../services/windowMode";
 import { readFileSync } from "node:fs";
 
-const native = vi.hoisted(() => ({ setFullscreen: vi.fn(), setDecorations: vi.fn(), isFullscreen: vi.fn() }));
-vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => true }));
+const native = vi.hoisted(() => ({
+  setFullscreen: vi.fn(),
+  setDecorations: vi.fn(),
+  isFullscreen: vi.fn(),
+  invoke: vi.fn(() => new Promise(() => {})),
+}));
+vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => true, invoke: native.invoke }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => native }));
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const pad = { connected: true, index: 0, id: "Wireless Controller", mapping: "standard", buttons: [{ pressed: true, value: 1 }], axes: [-0.75, 0.3] } as unknown as Gamepad;
@@ -42,32 +47,41 @@ describe("gamepad without hardware", () => {
     Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: vi.fn() });
     vi.stubGlobal("navigator", { getGamepads: () => [null, pad] });
     const close = vi.fn();
-    render(<GamepadDiagnostics onClose={close} />);
+    render(<GamepadDiagnostics profile="auto" onProfileChange={vi.fn()} onLaunch={vi.fn(async () => {})} onClose={close} />);
     expect(screen.getByText(/Połączone: 1/)).toBeTruthy();
     expect(screen.getByText(/B0: 1.00/).getAttribute("data-pressed")).toBe("true");
     expect(screen.getByText(/A0: -0.750/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button"));
+    fireEvent.click(screen.getByRole("button", { name: /Zamknij/ }));
     expect(close).toHaveBeenCalledOnce();
   });
   it("reports unsupported API without failing", () => {
     Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: vi.fn(function(this: HTMLDialogElement) { this.setAttribute("open", ""); }) });
     Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: vi.fn() });
     vi.stubGlobal("navigator", {});
-    render(<GamepadDiagnostics onClose={() => {}} />);
+    render(<GamepadDiagnostics profile="auto" onProfileChange={vi.fn()} onLaunch={vi.fn(async () => {})} onClose={() => {}} />);
     expect(screen.getByText(/Gamepad API niedostępne/)).toBeTruthy();
   });
   it("moves relative to selection and wraps", () => {
     const { result } = renderHook(() => useNavigation(5, vi.fn(), vi.fn()));
-    act(() => result.current.focusApp(2));
-    act(() => result.current.moveApp(1));
-    expect(result.current.activeIndex).toBe(3);
-    act(() => result.current.moveApp(2));
+    act(() => result.current.focusApp(0));
+    const visited = [];
+    for (let i = 0; i < 5; i += 1) {
+      act(() => result.current.moveApp(1));
+      visited.push(result.current.activeIndex);
+    }
+    expect(visited).toEqual([1, 2, 3, 4, 0]);
+    for (let i = 0; i < 5; i += 1) act(() => result.current.moveApp(-1));
     expect(result.current.activeIndex).toBe(0);
   });
   it("does not poll while diagnostics disable navigation", () => {
     const getGamepads = vi.fn(() => [pad]);
     vi.stubGlobal("navigator", { getGamepads });
-    renderHook(() => useGamepad(vi.fn(), vi.fn(), vi.fn(), false));
+    renderHook(() => useGamepad({
+      move: vi.fn(),
+      confirm: vi.fn(),
+      back: vi.fn(),
+      options: vi.fn(),
+    }, false));
     expect(getGamepads).not.toHaveBeenCalled();
   });
 });

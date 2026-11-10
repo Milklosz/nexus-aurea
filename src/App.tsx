@@ -13,11 +13,24 @@ import { useNavigation } from "./hooks/useNavigation";
 import { useToast } from "./hooks/useToast";
 import { useWeather } from "./hooks/useWeather";
 import { openStreamingService } from "./services/openStreamingService";
+import { launchPlatform, type PlatformLauncherId } from "./services/platformLaunchers";
+import type { ControllerProfile } from "./services/controllerEngine";
 import "./styles.css";
+
+function savedControllerProfile(): ControllerProfile {
+  try {
+    const value = localStorage.getItem("nexus.controllerProfile");
+    if (value === "standard" || value === "playstation") return value;
+  } catch {
+    // Storage can be unavailable in restricted webviews; automatic mapping still works.
+  }
+  return "auto";
+}
 
 export default function App() {
   const version = useAppVersion();
   const [diagnostics, setDiagnostics] = useState(false);
+  const [controllerProfile, setControllerProfile] = useState<ControllerProfile>(savedControllerProfile);
   const { now, time } = useClock();
   const { label: weatherLabel, title: weatherTitle } = useWeather();
   const { message, showToast } = useToast();
@@ -41,7 +54,61 @@ export default function App() {
   );
   const activateSelected = useCallback(() => void openService(activeServiceRef.current), [openService]);
   const navigation = useNavigation(streamingServices.length, activateSelected, showMenu);
-  useGamepad(navigation.moveApp, activateSelected, showMenu, !diagnostics);
+  const moveControllerFocus = useCallback((delta: -1 | 1) => {
+    const dialog = document.querySelector("dialog[open]");
+    if (!dialog) {
+      navigation.moveApp(delta);
+      return;
+    }
+    const controls = Array.from(dialog.querySelectorAll<HTMLElement>(
+      "button:not(:disabled), select:not(:disabled)",
+    ));
+    const index = controls.indexOf(document.activeElement as HTMLElement);
+    const nextIndex = index < 0
+      ? (delta > 0 ? 0 : controls.length - 1)
+      : (index + delta + controls.length) % controls.length;
+    controls[nextIndex]?.focus({ preventScroll: true });
+  }, [navigation.moveApp]);
+  const confirmControllerFocus = useCallback(() => {
+    const dialog = document.querySelector("dialog[open]");
+    const active = document.activeElement;
+    if (dialog && active instanceof HTMLElement && dialog.contains(active)) {
+      active.click();
+      return;
+    }
+    activateSelected();
+  }, [activateSelected]);
+  const backControllerFocus = useCallback(() => {
+    if (document.querySelector("dialog[open]")) {
+      setDiagnostics(false);
+      navigation.focusApp(activeServiceRef.current);
+      return;
+    }
+    navigation.focusApp(0);
+  }, [navigation.focusApp]);
+  const toggleDiagnostics = useCallback(() => setDiagnostics((open) => !open), []);
+  const updateControllerProfile = useCallback((profile: ControllerProfile) => {
+    setControllerProfile(profile);
+    try {
+      localStorage.setItem("nexus.controllerProfile", profile);
+    } catch {
+      // The selected mapping remains active for this session.
+    }
+  }, []);
+  const handlePlatformLaunch = useCallback(async (launcher: PlatformLauncherId) => {
+    try {
+      await launchPlatform(launcher);
+      showToast(launcher === "steamBigPicture" ? "Uruchamiam Steam Big Picture." : "Uruchamiam Playnite Fullscreen.");
+    } catch {
+      showToast("Nie udało się uruchomić tej aplikacji. Sprawdź, czy jest zainstalowana.");
+    }
+  }, [showToast]);
+  useGamepad({
+    move: moveControllerFocus,
+    confirm: confirmControllerFocus,
+    back: backControllerFocus,
+    options: toggleDiagnostics,
+  }, true, controllerProfile);
   useEffect(() => {
     const recover = (event: KeyboardEvent) => {
       if (event.key === "Escape" || event.key === "F11") {
@@ -94,7 +161,12 @@ export default function App() {
         <span className="version">AUREA &nbsp;/&nbsp; V{version}</span>
       </footer>
       <button className="diagnostics-trigger" onClick={showMenu}>Diagnostyka pada</button>
-      {diagnostics && <GamepadDiagnostics onClose={() => { setDiagnostics(false); navigation.focusApp(activeServiceRef.current); }} />}
+      {diagnostics && <GamepadDiagnostics
+        profile={controllerProfile}
+        onProfileChange={updateControllerProfile}
+        onLaunch={handlePlatformLaunch}
+        onClose={() => { setDiagnostics(false); navigation.focusApp(activeServiceRef.current); }}
+      />}
       <Toast message={message} />
     </main>
   );
