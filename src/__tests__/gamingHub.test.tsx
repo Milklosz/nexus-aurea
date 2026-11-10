@@ -23,7 +23,7 @@ afterEach(() => { cleanup(); vi.clearAllMocks(); });
 function windowsSnapshot(games = [{ id: "440", name: "Team Fortress 2", launcher: "Steam" }]) {
   return {
     windows: true,
-    foregroundProcess: "NEXUS AUREA.exe",
+    foregroundProcess: "nexus-aurea.exe",
     games,
     gamesError: null,
     apps: [

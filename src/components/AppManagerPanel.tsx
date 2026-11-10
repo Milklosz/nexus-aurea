@@ -34,7 +34,7 @@ export function AppManagerPanel() {
       const receipt = await launchManagedApp(id);
       const app = snapshot.apps.find(candidate => candidate.id === id);
       if (receipt.alreadyRunning) {
-        setNotice(`${app?.name ?? id} już działa. Przejdź do niego przez Alt+Tab; NEXUS nie wymusza fokusu.`);
+        setNotice(`${app?.name ?? id} już działa. Przejdź do niego przez Alt+Tab; VELORA nie wymusza fokusu.`);
       } else if (receipt.focusRestoreSupported) {
         setNotice(`${app?.name ?? id} uruchomiono. Powrót fokusu będzie możliwy po zakończeniu monitorowanego procesu.`);
       } else {
@@ -49,8 +49,8 @@ export function AppManagerPanel() {
   };
 
   const byId = new Map(snapshot.apps.map(app => [app.id, app]));
-  return <section className="app-manager" aria-label="NEXUS App Manager">
-    <h3>NEXUS App Manager</h3>
+  return <section className="app-manager" aria-label="VELORA App Manager">
+    <h3>VELORA App Manager</h3>
     {!snapshot.windows
       ? <p>Wykrywanie i uruchamianie aplikacji wymaga natywnej wersji Windows.</p>
       : <>
@@ -71,7 +71,7 @@ export function AppManagerPanel() {
           })}
         </div>
         <button type="button" onClick={() => void refresh()}>Odśwież diagnostykę</button>
-        <p>Steam, Apple Music i przeglądarki mogą przekazać uruchomienie do już istniejącego procesu. Automatyczny powrót fokusu jest deklarowany tylko dla monitorowanego Playnite Fullscreen. Procesów użytkownika NEXUS nie kończy.</p>
+        <p>Steam, Apple Music i przeglądarki mogą przekazać uruchomienie do już istniejącego procesu. Automatyczny powrót fokusu jest deklarowany tylko dla monitorowanego Playnite Fullscreen. Procesów użytkownika VELORA nie kończy.</p>
       </>}
     {error && <p role="alert">{error}</p>}
     {notice && <p role="status">{notice}</p>}

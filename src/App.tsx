@@ -34,6 +34,8 @@ import {
 } from "./services/musicBridge";
 import { MusicMiniPlayer } from "./components/MusicPanel";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listenForRemoteCommand } from "./services/remoteAccess";
+import { dispatchRemoteCommand } from "./services/remoteCommand";
 import type { ControllerProfile } from "./services/controllerEngine";
 import "./styles.css";
 
@@ -67,11 +69,6 @@ export default function App() {
     setDiagnostics(false);
     setControlCenterOpen((open) => !open);
   }, []);
-  const showRecommendation = useCallback(
-    () => showToast("„Nocna zmiana” to karta demonstracyjna. Wybierz usługę z docka."),
-    [showToast],
-  );
-
   const openService = useCallback(
     async (index: number) => {
       const service = streamingServices[index];
@@ -247,7 +244,7 @@ export default function App() {
     void listenForNexusControlReturn(() => {
       if (!active) return;
       void getCurrentWindow().setFocus().catch(() => {
-        showToast("Windows zablokował powrót do NEXUS. Wróć do aplikacji przez Alt+Tab.");
+        showToast("Windows zablokował powrót do VELORA. Wróć do aplikacji przez Alt+Tab.");
       });
     }).then((stopListening) => {
       if (active) unlisten = stopListening;
@@ -262,10 +259,35 @@ export default function App() {
   useEffect(() => {
     let active = true;
     let unlisten: (() => void) | undefined;
+    void listenForRemoteCommand((command) => {
+      if (!active) return;
+      dispatchRemoteCommand(command, {
+        navigate: moveControllerFocus,
+        select: confirmControllerFocus,
+        back: backControllerFocus,
+        home: returnToNexus,
+        volume: (action) => {
+          void handleSystemVolume(action).catch(() => showToast("Nie udało się zmienić głośności Windows."));
+        },
+        profile: (profile) => { void changeCinemaProfile(profile); },
+      });
+    }).then((stopListening) => {
+      if (active) unlisten = stopListening;
+      else stopListening();
+    }).catch(() => {});
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [backControllerFocus, changeCinemaProfile, confirmControllerFocus, handleSystemVolume, moveControllerFocus, returnToNexus, showToast]);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
     void listenForManagedAppExit((id) => {
       if (!active || id !== "playniteFullscreen") return;
       void getCurrentWindow().setFocus().catch(() => {
-        showToast("Playnite został zamknięty. Wróć do NEXUS przez Alt+Tab.");
+        showToast("Playnite został zamknięty. Wróć do VELORA przez Alt+Tab.");
       });
     }).then((stopListening) => {
       if (active) unlisten = stopListening;
@@ -293,13 +315,13 @@ export default function App() {
   );
 
   return (
-    <main className="screen" aria-label="NEXUS AUREA — ekran główny">
+    <main className="screen" aria-label="VELORA — ekran główny">
       <div className="sun" aria-hidden="true" />
       <div className="ridge" aria-hidden="true" />
       <div className="ridge back" aria-hidden="true" />
       <StatusBar now={now} time={time} weatherLabel={weatherLabel} weatherTitle={weatherTitle} />
       <button type="button" className="quick-settings-trigger" onClick={toggleControlCenter} aria-label="Otwórz Control Center">Control Center <kbd>F3</kbd></button>
-      <HeroPanel onWatch={showRecommendation} />
+      <HeroPanel />
       <AppDock
         services={streamingServices}
         activeIndex={navigation.activeIndex}
@@ -313,7 +335,7 @@ export default function App() {
           ◯ / <kbd>←</kbd> <kbd>→</kbd> &nbsp;PORUSZAJ &nbsp;·&nbsp; ✕ / <kbd>ENTER</kbd> &nbsp;WYBIERZ
           &nbsp;·&nbsp; OPTIONS / F2 &nbsp;PAD · F11 &nbsp;EKRAN · ESC &nbsp;OKNO
         </span>
-        <span className="version">AUREA &nbsp;/&nbsp; V{version}</span>
+        <span className="version">VELORA · BY MILKLOSH STUDIO &nbsp;/&nbsp; V{version}</span>
       </footer>
       <button className="diagnostics-trigger" onClick={showMenu}>Diagnostyka pada</button>
       {controlCenterOpen && <ControlCenter

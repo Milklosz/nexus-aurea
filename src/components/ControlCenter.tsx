@@ -5,7 +5,19 @@ import type { AmbientSettings } from "../services/ambient";
 import { nextAmbientDelay, AMBIENT_IDLE_OPTIONS } from "../services/ambient";
 import type { SystemVolumeAction } from "../services/musicBridge";
 import { GamingHub } from "./GamingHub";
-import { REMOTE_ACCESS_DISABLED_REASON } from "../services/remoteAccess";
+import {
+  beginRemotePairing,
+  disabledRemoteAccessStatus,
+  getRemoteAccessStatus,
+  listenForRemoteAccessStatus,
+  prepareRemoteTrustProfile,
+  REMOTE_ACCESS_DISABLED_REASON,
+  revokeAllRemoteDevices,
+  revokeRemoteDevice,
+  startRemoteAccess,
+  stopRemoteAccess,
+  type RemoteAccessStatus,
+} from "../services/remoteAccess";
 
 type ControlCenterProps = {
   profile: CinemaProfile;
@@ -35,6 +47,11 @@ export function ControlCenter(props: ControlCenterProps) {
   const [status, setStatus] = useState<ControlServiceStatus>(disabledControlServiceStatus);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [remoteStatus, setRemoteStatus] = useState<RemoteAccessStatus>(disabledRemoteAccessStatus);
+  const [remoteBusy, setRemoteBusy] = useState(false);
+  const [trustConfirmed, setTrustConfirmed] = useState(false);
+  const [remoteError, setRemoteError] = useState("");
+  const [remoteNotice, setRemoteNotice] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -57,6 +74,41 @@ export function ControlCenter(props: ControlCenterProps) {
       if (element?.open) element.close();
     };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void getRemoteAccessStatus().then((next) => {
+      if (active) setRemoteStatus(next);
+    }).catch(() => {});
+    void listenForRemoteAccessStatus((next) => {
+      if (active) setRemoteStatus(next);
+    }).then((stopListening) => {
+      if (active) unlisten = stopListening;
+      else stopListening();
+    }).catch(() => {});
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
+
+  const runRemoteAction = async (
+    action: () => Promise<RemoteAccessStatus>,
+    success: string,
+  ) => {
+    setRemoteBusy(true);
+    setRemoteError("");
+    setRemoteNotice("");
+    try {
+      setRemoteStatus(await action());
+      setRemoteNotice(success);
+    } catch (cause) {
+      setRemoteError(cause instanceof Error ? cause.message : "Nie udało się zmienić ustawień iPhone Remote.");
+    } finally {
+      setRemoteBusy(false);
+    }
+  };
 
   const chooseProfile = async (profile: CinemaProfile) => {
     if (profile === props.profile || busy) return;
@@ -98,7 +150,7 @@ export function ControlCenter(props: ControlCenterProps) {
     onCancel={(event) => { event.preventDefault(); props.onClose(); }}>
     <header className="control-center-header">
       <div>
-        <span className="control-center-eyebrow">NEXUS AUREA</span>
+        <span className="control-center-eyebrow">VELORA</span>
         <h2 id="control-center-title">Control Center</h2>
       </div>
       <button type="button" onClick={props.onClose} aria-label="Zamknij Control Center">Zamknij</button>
@@ -126,8 +178,8 @@ export function ControlCenter(props: ControlCenterProps) {
         : <p>Regulacja głośności jest niedostępna bez natywnego backendu Windows.</p>}
     </section>
 
-    <section className="cc-section" aria-label="AUREA Ambient">
-      <h3>AUREA Ambient</h3>
+    <section className="cc-section" aria-label="VELORA Ambient">
+      <h3>VELORA Ambient</h3>
       <div className="cc-actions">
         <button type="button" aria-pressed={props.ambientSettings.enabled}
           onClick={() => props.onAmbientSettingsChange({ ...props.ambientSettings, enabled: !props.ambientSettings.enabled })}>
@@ -137,8 +189,8 @@ export function ControlCenter(props: ControlCenterProps) {
       </div>
       <p>{props.mediaPlaying
         ? "Wykryto odtwarzanie Apple Music przez Windows SMTC. Ambient jest wstrzymany."
-        : "Ambient wstrzymuje się, gdy NEXUS traci fokus, oraz podczas wykrytego odtwarzania Apple Music. Inne gry i odtwarzacze nie mają wiarygodnego wskaźnika aktywności."}</p>
-      <p>Czas bezczynności: {AMBIENT_IDLE_OPTIONS.map(delayLabel).join(" · ")}. Wymaga fokusu NEXUS; nie wyłącza ekranu ani nie zmienia zasilania Windows.</p>
+        : "Ambient wstrzymuje się, gdy VELORA traci fokus, oraz podczas wykrytego odtwarzania Apple Music. Inne gry i odtwarzacze nie mają wiarygodnego wskaźnika aktywności."}</p>
+      <p>Czas bezczynności: {AMBIENT_IDLE_OPTIONS.map(delayLabel).join(" · ")}. Wymaga fokusu VELORA; nie wyłącza ekranu ani nie zmienia zasilania Windows.</p>
     </section>
 
     <section className="cc-section" aria-label="Stan systemu">
@@ -163,13 +215,60 @@ export function ControlCenter(props: ControlCenterProps) {
     <section className="cc-section" aria-label="iPhone Remote">
       <h3>iPhone Remote</h3>
       <ul className="remote-access-status" aria-label="Stan iPhone Remote">
-        <li>Serwer LAN: wyłączony</li>
-        <li>Bezpieczny HTTPS: niedostępny</li>
-        <li>Parowanie: niedostępne</li>
-        <li>Sparowane urządzenia: brak</li>
+        <li>Serwer LAN: {remoteStatus.enabled ? "włączony" : "wyłączony"}</li>
+        <li>HTTPS: {remoteStatus.secureOriginAvailable ? "aktywny; Safari musi ufać certyfikatowi" : "wyłączony"}</li>
+        <li>Parowanie: {remoteStatus.pairingCode
+          ? `kod jednorazowy · ${remoteStatus.pairingExpiresInSeconds}s`
+          : remoteStatus.pairingAvailable ? "gotowe po wygenerowaniu kodu" : "wyłączone"}</li>
+        <li>Sparowane urządzenia: {remoteStatus.pairedDeviceCount}</li>
       </ul>
-      <p>Zdalny serwer jest wyłączony. {REMOTE_ACCESS_DISABLED_REASON}</p>
-      <p>Podgląd PWA nie wysyła poleceń ani nie przechowuje sekretów. Nie otwieramy portu sieciowego.</p>
+      {!remoteStatus.enabled && <>
+        <button type="button" disabled={remoteBusy} onClick={() => void runRemoteAction(
+          prepareRemoteTrustProfile,
+          "Profil zaufania jest gotowy do bezpiecznego przeniesienia na iPhone'a.",
+        )}>Przygotuj profil zaufania iPhone'a</button>
+        {remoteStatus.trustProfilePath && <>
+          <p>Profil: <code>{remoteStatus.trustProfilePath}</code></p>
+          <p>SHA-256 certyfikatu: <code className="remote-fingerprint">{remoteStatus.caFingerprint}</code></p>
+          <p>Przenieś profil z MSI na iPhone'a zaufanym kanałem. W iPhonie zainstaluj profil w Ustawienia &gt; Ogólne &gt; VPN i zarządzanie urządzeniem, a następnie włącz pełne zaufanie w Ustawienia &gt; Ogólne &gt; To urządzenie &gt; Ustawienia zaufania certyfikatów.</p>
+          <p role="note">Pełne zaufanie obejmie certyfikaty TLS wystawiane przez ten urząd certyfikacji na całym iPhonie. Klucz prywatny zostaje w Magazynie poświadczeń Windows. Zainstaluj profil tylko dla zaufanego MSI; po testach usuń profil z iPhone'a.</p>
+          <label className="remote-trust-confirmation">
+            <input type="checkbox" checked={trustConfirmed} onChange={(event) => setTrustConfirmed(event.target.checked)} />
+            Profil został przeniesiony zaufanym kanałem, zainstalowany na iPhonie i ręcznie oznaczony jako zaufany.
+          </label>
+          <button type="button" disabled={remoteBusy || !trustConfirmed} onClick={() => void runRemoteAction(
+            () => startRemoteAccess(trustConfirmed),
+            "Serwer HTTPS został włączony tylko dla prywatnego interfejsu sieciowego.",
+          )}>Uruchom serwer HTTPS</button>
+        </>}
+        <p>{REMOTE_ACCESS_DISABLED_REASON} Serwer domyślnie nie nasłuchuje w sieci.</p>
+      </>}
+      {remoteStatus.enabled && <>
+        <p>Adres iPhone'a: <code>{remoteStatus.origin}</code></p>
+        <button type="button" disabled={remoteBusy} onClick={() => void runRemoteAction(
+          beginRemotePairing,
+          "Kod jednorazowy wygasa po 60 sekundach.",
+        )}>Wygeneruj kod parowania</button>
+        {remoteStatus.pairingCode && <p className="remote-pairing-code" role="status">Kod iPhone: {remoteStatus.pairingCode} · {remoteStatus.pairingExpiresInSeconds}s</p>}
+        <button type="button" disabled={remoteBusy} onClick={() => void runRemoteAction(
+          stopRemoteAccess,
+          "Serwer LAN został wyłączony.",
+        )}>Wyłącz serwer LAN</button>
+      </>}
+      {remoteStatus.pairedDevices.map((device) => <div className="remote-device-row" key={device.id}>
+        <span>{device.name}</span>
+        <button type="button" disabled={remoteBusy} onClick={() => void runRemoteAction(
+          () => revokeRemoteDevice(device.id),
+          `Dostęp dla ${device.name} został odwołany.`,
+        )}>Odwołaj</button>
+      </div>)}
+      {remoteStatus.pairedDeviceCount > 0 && <button type="button" disabled={remoteBusy} onClick={() => void runRemoteAction(
+        revokeAllRemoteDevices,
+        "Dostęp wszystkich sparowanych urządzeń został odwołany.",
+      )}>Odwołaj wszystkie urządzenia</button>}
+      {remoteError && <p role="alert">{remoteError}</p>}
+      {remoteNotice && <p role="status">{remoteNotice}</p>}
+      <p>Komendy pilota ograniczone są do nawigacji, wyboru, wstecz, Home, głośności i profili. Nie klikaj obejścia ostrzeżenia TLS w Safari.</p>
     </section>
 
     {error && <p role="alert">{error}</p>}
@@ -177,7 +276,7 @@ export function ControlCenter(props: ControlCenterProps) {
     <footer className="cc-footer">
       <button type="button" onClick={props.onOpenDiagnostics}>Diagnostyka</button>
       <button type="button" onClick={props.onShowDesktop}>Pokaż pulpit</button>
-      <button type="button" onClick={props.onReturnToNexus}>Wróć do NEXUS</button>
+      <button type="button" onClick={props.onReturnToNexus}>Wróć do VELORA</button>
     </footer>
     <p className="cc-hint">Klawiatura: Tab / Shift+Tab, F3 otwiera panel, Esc wraca. Pad: kierunki wybierają, ✕ zatwierdza, ◯ wraca.</p>
   </dialog>;

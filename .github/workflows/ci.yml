@@ -85,21 +85,8 @@ jobs:
         if: runner.os == 'Windows' && success()
         uses: actions/upload-artifact@v7
         with:
-          name: NEXUS-AUREA-Windows-x64-${{ github.sha }}
+          name: VELORA-Windows-x64-${{ github.sha }}
           path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Build isolated Test Windows x64 NSIS installer
-        if: runner.os == 'Windows'
-        run: pnpm tauri build --ci --target x86_64-pc-windows-msvc --config src-tauri/tauri.test.conf.json
-
-      - name: Upload isolated Test installer artifact
-        if: runner.os == 'Windows' && success()
-        uses: actions/upload-artifact@v7
-        with:
-          name: NEXUS-AUREA-Test-Windows-x64-${{ github.sha }}
-          path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*Test*-setup.exe
           if-no-files-found: error
           retention-days: 30
 
@@ -115,7 +102,7 @@ jobs:
       - name: Download Windows installer artifact
         uses: actions/download-artifact@v8
         with:
-          name: NEXUS-AUREA-Windows-x64-${{ github.sha }}
+          name: VELORA-Windows-x64-${{ github.sha }}
           path: dist/installers
 
       - name: Create or update GitHub Release
@@ -127,7 +114,7 @@ jobs:
             gh release upload "$GITHUB_REF_NAME" dist/installers/*.exe --clobber
           else
             gh release create "$GITHUB_REF_NAME" dist/installers/*.exe \
-              --title "NEXUS AUREA $GITHUB_REF_NAME" \
+              --title "VELORA $GITHUB_REF_NAME" \
               --generate-notes \
               --verify-tag
           fi

@@ -1,4 +1,4 @@
-const CACHE_NAME = "nexus-aurea-remote-v0.9";
+const CACHE_NAME = "nexus-aurea-remote-v0.9.2-velora";
 const SHELL = [
   "./",
   "./index.html",
@@ -9,11 +9,15 @@ const SHELL = [
 ];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL)));
+  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(caches.keys()
+    .then((keys) => Promise.all(keys
+      .filter((key) => key.startsWith("nexus-aurea-remote-") && key !== CACHE_NAME)
+      .map((key) => caches.delete(key))))
+    .then(() => self.clients.claim()));
 });
 
 self.addEventListener("fetch", (event) => {

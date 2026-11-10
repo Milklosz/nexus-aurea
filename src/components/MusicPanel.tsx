@@ -46,8 +46,8 @@ export function MusicPanel(props: Props) {
     <button type="button" disabled={busy || inGameMode || !status.appleSessionFound || !status.canNext} onClick={() => void run(() => props.onControl("next"))}>Następny ⏭</button>
   </div>;
 
-  return <section className="music-panel" aria-label="NEXUS Music">
-    <h3>NEXUS Music · Apple Music</h3>
+  return <section className="music-panel" aria-label="VELORA Music">
+    <h3>VELORA Music · Apple Music</h3>
     <p role="status">{status.appleSessionFound
       ? `Sesja Apple Music · ${status.playbackState ?? "stan niedostępny"}`
       : status.message ?? "Nie znaleziono aktywnej sesji Apple Music."}</p>
@@ -60,7 +60,7 @@ export function MusicPanel(props: Props) {
     </>}
     <p>Okładka albumu: {status.artworkSupported ? "dostępna przez SMTC" : "niedostępna w tym prototypie"}.</p>
     {controls("panel")}
-    <div className="launcher-actions" role="group" aria-label="Tryby NEXUS Music">
+    <div className="launcher-actions" role="group" aria-label="Tryby VELORA Music">
       <button type="button" onClick={() => setMusicMode(true)}>Otwórz Music Mode</button>
       <button type="button" aria-pressed={props.backgroundMode} onClick={() => props.onBackgroundModeChange(!props.backgroundMode)}>
         {props.backgroundMode ? "Wyłącz Background Mode" : "Włącz Background Mode"}
@@ -68,10 +68,10 @@ export function MusicPanel(props: Props) {
       <button type="button" disabled={busy} onClick={() => void run(props.onOpenAppleMusic)}>Otwórz oficjalną aplikację Apple Music</button>
       <button type="button" disabled={busy} onClick={() => void run(props.onRefresh)}>Odśwież sesję SMTC</button>
     </div>
-    {inGameMode && <p role="status">Tryb Gaming: NEXUS nie wysyła poleceń odtwarzania, aby nie zakłócać gry. Muzyka już odtwarzana może grać dalej.</p>}
+    {inGameMode && <p role="status">Tryb Gaming: VELORA nie wysyła poleceń odtwarzania, aby nie zakłócać gry. Muzyka już odtwarzana może grać dalej.</p>}
     <section className="system-audio" aria-label="System audio">
       <h4>System audio</h4>
-      <p>Wyjście: domyślne urządzenie Windows · nazwa urządzenia i opóźnienie Bluetooth niedostępne. Zmiany urządzenia w Windows są respektowane; NEXUS nie paruje ani nie przełącza JBL.</p>
+      <p>Wyjście: domyślne urządzenie Windows · nazwa urządzenia i opóźnienie Bluetooth niedostępne. Zmiany urządzenia w Windows są respektowane; VELORA nie paruje ani nie przełącza JBL.</p>
       <div className="launcher-actions" role="group" aria-label="Głośność Windows">
         <button type="button" disabled={busy} onClick={() => void run(() => props.onVolume("down"))}>Głośność −</button>
         <button type="button" disabled={busy} onClick={() => void run(() => props.onVolume("up"))}>Głośność +</button>
@@ -93,7 +93,7 @@ export function MusicPanel(props: Props) {
     >
       <div className="music-mode-art" aria-hidden="true"><span>♪</span></div>
       <button className="music-mode-close" type="button" onClick={() => setMusicMode(false)}>Zamknij Music Mode</button>
-      <p className="music-mode-eyebrow">NEXUS MUSIC · APPLE MUSIC</p>
+      <p className="music-mode-eyebrow">VELORA MUSIC · APPLE MUSIC</p>
       <h2>{status.title ?? (status.appleSessionFound ? "Tytuł niedostępny" : "Apple Music")}</h2>
       <p className="music-mode-artist">{status.artist ?? (status.appleSessionFound ? "Wykonawca niedostępny" : "Brak aktywnej sesji SMTC")}</p>
       <p className="music-mode-album">{status.album ? `Album · ${status.album}` : "Album i okładka niedostępne"}</p>
