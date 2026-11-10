@@ -41,6 +41,18 @@ jobs:
         with:
           workspaces: ./src-tauri -> target
 
+      - name: Bootstrap Cargo lockfile (temporary)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+      - name: Upload resolved Cargo lockfile (temporary)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cargo-lock-${{ runner.os }}-${{ github.sha }}
+          path: src-tauri/Cargo.lock
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
 

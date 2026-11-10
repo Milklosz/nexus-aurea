@@ -1,27 +1,291 @@
 (() => {
-  const state = Object.freeze({
-    enabled: false,
+  const databaseName = "nexus-aurea-remote-v1";
+  const storeName = "device";
+  const state = {
+    secure: window.isSecureContext && window.location.protocol === "https:",
+    serverReady: false,
     paired: false,
-    connected: false,
-    endpointAvailable: false,
-  });
+    inFlight: false,
+    record: null,
+  };
   const connection = document.getElementById("connection-state");
-  const pairing = document.getElementById("pairing-state");
+  const server = document.getElementById("server-state");
   const origin = document.getElementById("origin-state");
-  if (connection) connection.textContent = "serwer LAN: wyłączony";
-  if (origin) origin.textContent = window.isSecureContext
-    ? "bezpieczny kontekst przeglądarki; serwer NEXUS nadal wyłączony"
-    : "wymaga HTTPS zaufanego przez iPhone'a";
-  if (pairing) {
-    pairing.textContent = window.isSecureContext
-      ? "Origin jest bezpieczny, ale NEXUS nie udostępnia endpointu. Serwer, parowanie i polecenia pozostają wyłączone."
-      : "Ta strona nie ma zaufanego HTTPS. Serwer, parowanie i polecenia pozostają wyłączone.";
-  }
-  window.NEXUS_REMOTE_PREVIEW_STATE = state;
+  const pairingState = document.getElementById("pairing-state");
+  const pairedCount = document.getElementById("paired-count");
+  const message = document.getElementById("remote-message");
+  const pairingForm = document.getElementById("pairing-form");
+  const pairButton = document.getElementById("pair-button");
+  const commandButtons = [...document.querySelectorAll("[data-command]")];
 
-  if ("serviceWorker" in navigator && window.isSecureContext) {
-    navigator.serviceWorker.register("./sw.js").catch(() => {
-      if (pairing) pairing.textContent = "Podgląd działa bez trybu offline. Zdalne sterowanie pozostaje wyłączone.";
+  function showMessage(text, error = false) {
+    if (!message) return;
+    message.textContent = text;
+    message.dataset.kind = error ? "error" : "normal";
+  }
+
+  function updateControls() {
+    const canSend = state.secure && state.serverReady && state.paired && navigator.onLine && !state.inFlight;
+    for (const button of commandButtons) button.disabled = !canSend;
+    pairButton.disabled = !state.secure || !state.serverReady || state.paired || !navigator.onLine || state.inFlight;
+  }
+
+  function bytesToBase64Url(bytes) {
+    let binary = "";
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  }
+
+  function randomHex(byteCount) {
+    const bytes = crypto.getRandomValues(new Uint8Array(byteCount));
+    return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+
+  function openDatabase() {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(databaseName, 1);
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains(storeName)) {
+          request.result.createObjectStore(storeName);
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(new Error("Pamięć bezpiecznego klucza jest niedostępna."));
     });
   }
+
+  async function readRecord() {
+    const database = await openDatabase();
+    return new Promise((resolve, reject) => {
+      const transaction = database.transaction(storeName, "readonly");
+      const request = transaction.objectStore(storeName).get("active");
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(new Error("Nie można odczytać klucza pilota."));
+      transaction.oncomplete = () => database.close();
+      transaction.onerror = () => reject(new Error("Nie można odczytać klucza pilota."));
+    });
+  }
+
+  async function writeRecord(record) {
+    const database = await openDatabase();
+    return new Promise((resolve, reject) => {
+      const transaction = database.transaction(storeName, "readwrite");
+      transaction.objectStore(storeName).put(record, "active");
+      transaction.oncomplete = () => {
+        database.close();
+        resolve();
+      };
+      transaction.onerror = () => reject(new Error("Nie można zapisać klucza na tym iPhonie."));
+      transaction.onabort = () => reject(new Error("Nie można zapisać klucza na tym iPhonie."));
+    });
+  }
+
+  async function clearRecord() {
+    const database = await openDatabase();
+    return new Promise((resolve, reject) => {
+      const transaction = database.transaction(storeName, "readwrite");
+      transaction.objectStore(storeName).delete("active");
+      transaction.oncomplete = () => {
+        database.close();
+        resolve();
+      };
+      transaction.onerror = () => reject(new Error("Nie można usunąć klucza pilota."));
+    });
+  }
+
+  async function refreshStatus() {
+    if (!state.secure) {
+      connection.textContent = "wymaga zaufanego HTTPS";
+      server.textContent = "wyłączony";
+      origin.textContent = "brak bezpiecznego kontekstu";
+      pairingState.textContent = "parowanie wyłączone";
+      updateControls();
+      showMessage("Otwórz dokładny adres HTTPS pokazany w NEXUS AUREA. Nie kontynuuj po ostrzeżeniu certyfikatu.", true);
+      return;
+    }
+
+    try {
+      const response = await fetch("./api/status", {
+        method: "GET",
+        cache: "no-store",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+      });
+      if (!response.ok) throw new Error("Serwer pilota jest niedostępny.");
+      const remote = await response.json();
+      state.serverReady = remote.enabled === true;
+      server.textContent = state.serverReady ? "włączony" : "wyłączony";
+      origin.textContent = "HTTPS";
+      pairingState.textContent = state.serverReady ? "oczekuje na parowanie" : "niedostępne";
+      pairedCount.textContent = String(Number.isInteger(remote.pairedDeviceCount) ? remote.pairedDeviceCount : 0);
+      connection.textContent = state.serverReady ? "HTTPS · lokalnie" : "serwer LAN wyłączony";
+      if (!state.serverReady) {
+        state.paired = false;
+        state.record = null;
+        pairingForm.hidden = true;
+        showMessage("Serwer LAN został wyłączony w NEXUS.");
+      } else {
+        state.record = await readRecord().catch(() => null);
+        state.paired = Boolean(state.record && state.record.key && state.record.deviceId);
+        pairingForm.hidden = state.paired;
+        if (state.paired) showMessage("Pilot jest sparowany. Każda komenda wymaga podpisu urządzenia.");
+        else showMessage("Wpisz jednorazowy kod wygenerowany w Control Center.");
+      }
+    } catch {
+      state.serverReady = false;
+      state.paired = false;
+      state.record = null;
+      pairingForm.hidden = true;
+      server.textContent = "niedostępny";
+      origin.textContent = "HTTPS bez odpowiedzi";
+      pairingState.textContent = "niedostępne";
+      connection.textContent = "brak połączenia";
+      showMessage("Nie można połączyć z NEXUS. Sprawdź tę samą sieć Wi‑Fi i czy serwer LAN działa.", true);
+    }
+    updateControls();
+  }
+
+  async function pair(event) {
+    event.preventDefault();
+    if (!state.secure || !state.serverReady || state.inFlight) return;
+    const code = document.getElementById("pairing-code").value.trim();
+    const name = document.getElementById("device-name").value.trim().slice(0, 32);
+    if (!/^\d{6}$/.test(code) || !name) {
+      showMessage("Wpisz sześciocyfrowy kod z Control Center.", true);
+      return;
+    }
+
+    state.inFlight = true;
+    updateControls();
+    const tokenBytes = crypto.getRandomValues(new Uint8Array(32));
+    const token = bytesToBase64Url(tokenBytes);
+    const deviceId = randomHex(16);
+    try {
+      const key = await crypto.subtle.importKey(
+        "raw",
+        tokenBytes,
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["sign"],
+      );
+      const record = { deviceId, key, sequence: 0 };
+      await writeRecord(record);
+      let response;
+      try {
+        response = await fetch("./api/pair", {
+          method: "POST",
+          cache: "no-store",
+          credentials: "omit",
+          referrerPolicy: "no-referrer",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code, deviceId, deviceName: name, token }),
+        });
+      } catch {
+        state.record = record;
+        state.paired = true;
+        pairingForm.hidden = true;
+        showMessage("Parowanie przerwane. Klucz został zachowany; sprawdź połączenie i spróbuj polecenia.", true);
+        return;
+      }
+      if (response.status !== 201) {
+        await clearRecord();
+        state.record = null;
+        state.paired = false;
+        const reason = response.status === 429
+          ? "Za dużo prób. Wygeneruj nowy kod później."
+          : response.status === 409
+            ? "Limit urządzeń został osiągnięty albo iPhone jest już sparowany. Odwołaj stare urządzenie w Control Center."
+            : response.status >= 500
+              ? "NEXUS nie zapisał bezpiecznie parowania. Sprawdź Magazyn poświadczeń Windows i spróbuj ponownie."
+              : "Kod wygasł lub jest nieprawidłowy. Wygeneruj nowy kod w Control Center.";
+        showMessage(reason, true);
+        return;
+      }
+      state.record = record;
+      state.paired = true;
+      pairingForm.hidden = true;
+      pairedCount.textContent = String(Number(pairedCount.textContent || "0") + 1);
+      pairingState.textContent = "sparowane";
+      connection.textContent = "HTTPS · sparowano";
+      showMessage("iPhone sparowany. Klucz podpisu zapisano jako nieeksportowalny klucz WebCrypto.");
+    } catch {
+      showMessage("Nie udało się utworzyć bezpiecznego klucza na tym iPhonie.", true);
+    } finally {
+      tokenBytes.fill(0);
+      state.inFlight = false;
+      updateControls();
+    }
+  }
+
+  async function sendCommand(command) {
+    if (!state.record || state.inFlight || !navigator.onLine) return;
+    state.inFlight = true;
+    updateControls();
+    const record = state.record;
+    const sequence = record.sequence + 1;
+    record.sequence = sequence;
+    try {
+      await writeRecord(record);
+      const payload = ["NEXUS-AUREA-REMOTE-V1", record.deviceId, String(sequence), command].join("\n");
+      const signature = await crypto.subtle.sign(
+        "HMAC",
+        record.key,
+        new TextEncoder().encode(payload),
+      );
+      const response = await fetch("./api/command", {
+        method: "POST",
+        cache: "no-store",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          deviceId: record.deviceId,
+          sequence,
+          command,
+          signature: bytesToBase64Url(new Uint8Array(signature)),
+        }),
+      });
+      if (response.status === 401) {
+        await clearRecord();
+        state.record = null;
+        state.paired = false;
+        pairingForm.hidden = false;
+        pairingState.textContent = "odwołane lub ponownie wymagane";
+        connection.textContent = "wymagane parowanie";
+        showMessage("Dostęp tego iPhone'a został odwołany. Sparuj urządzenie ponownie.", true);
+      } else if (!response.ok) {
+        showMessage("NEXUS odrzucił polecenie. Połączenie pozostaje zabezpieczone.", true);
+      } else {
+        showMessage("Wysłano: " + command + ".");
+      }
+    } catch {
+      showMessage("Połączenie przerwane. Polecenie nie zostało automatycznie ponowione.", true);
+    } finally {
+      state.inFlight = false;
+      updateControls();
+    }
+  }
+
+  if (!state.secure || !window.crypto?.subtle || !window.indexedDB) {
+    state.secure = false;
+    showMessage("Ten iPhone nie udostępnia bezpiecznego HTTPS, WebCrypto i IndexedDB. Pilot pozostaje wyłączony.", true);
+  } else {
+    pairingForm.addEventListener("submit", pair);
+    for (const button of commandButtons) {
+      button.addEventListener("click", () => void sendCommand(button.dataset.command));
+    }
+    void refreshStatus();
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("./sw.js").catch(() => {
+        showMessage("Połączenie HTTPS działa, ale tryb offline nie jest dostępny.", true);
+      });
+    }
+  }
+
+  window.addEventListener("offline", () => {
+    connection.textContent = "offline";
+    showMessage("iPhone jest offline. Polecenia są wstrzymane.", true);
+    updateControls();
+  });
+  window.addEventListener("online", () => void refreshStatus());
 })();

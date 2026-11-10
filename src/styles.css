@@ -128,3 +128,8 @@
 .gaming-hub button { flex: 0 0 auto; }
 .gaming-hub-note { color: #aaa399 !important; font-size: 10px !important; }
 .remote-access-status { display: grid; gap: .2rem; margin: .6rem 0; padding-left: 1.2rem; color: #c8c0b1; font-size: .85rem; }
+.remote-trust-confirmation { display: flex; align-items: flex-start; gap: .55rem; margin: .75rem 0; color: #d5cec1; font-size: .82rem; line-height: 1.45; }
+.remote-trust-confirmation input { flex: 0 0 auto; margin-top: .12rem; accent-color: #d2b484; }
+.remote-fingerprint { overflow-wrap: anywhere; color: #d2b484; font-size: .78rem; }
+.remote-pairing-code { color: #e4c995; font-size: 1.15rem; font-weight: 700; letter-spacing: .15em; }
+.remote-device-row { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin: .45rem 0; padding: .45rem .6rem; border: 1px solid #806e4955; border-radius: 8px; }

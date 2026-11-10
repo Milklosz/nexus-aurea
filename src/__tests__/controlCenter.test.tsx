@@ -92,12 +92,14 @@ describe("Control Center", () => {
     expect(returnToNexus).toHaveBeenCalledOnce();
   });
 
-  it("includes the Gaming Hub and keeps iPhone Remote visibly unavailable", async () => {
+  it("includes the Gaming Hub and keeps the LAN server off until trust is confirmed", async () => {
     setupDialog();
     renderCenter();
     expect(screen.getByRole("heading", { name: "Gaming Hub" })).toBeTruthy();
-    expect(screen.getByText(/Zdalny serwer jest wyłączony/)).toBeTruthy();
-    expect(screen.getByText(/Podgląd PWA nie wysyła poleceń/)).toBeTruthy();
+    expect(screen.getByText(/Serwer LAN: wyłączony/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Uruchom serwer HTTPS" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Przygotuj profil zaufania iPhone'a" })).toBeTruthy();
+    expect(screen.getByText(/Serwer domyślnie nie nasłuchuje w sieci/)).toBeTruthy();
   });
 
   it("cycles the Ambient idle interval through supported values", async () => {

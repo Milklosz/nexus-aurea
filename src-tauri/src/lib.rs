@@ -1,6 +1,7 @@
 use tauri::Manager;
 
 mod control_service;
+mod remote_access;
 mod app_manager;
 mod music_service;
 mod platform_launchers;
@@ -10,6 +11,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(control_service::ControlService::default())
+        .manage(remote_access::RemoteAccess::default())
         .invoke_handler(tauri::generate_handler![
             platform_launchers::get_platform_launcher_status,
             platform_launchers::launch_platform,
@@ -17,6 +19,13 @@ pub fn run() {
             control_service::start_control_service,
             control_service::set_control_game_mode,
             control_service::stop_control_service,
+            remote_access::get_remote_access_status,
+            remote_access::prepare_remote_trust_profile,
+            remote_access::start_remote_access,
+            remote_access::begin_remote_pairing,
+            remote_access::stop_remote_access,
+            remote_access::revoke_all_remote_devices,
+            remote_access::revoke_remote_device,
             app_manager::get_app_manager_status,
             app_manager::launch_managed_app,
             app_manager::launch_managed_game,

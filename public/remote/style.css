@@ -26,11 +26,21 @@ h1 { margin: 10px 0; font-size: clamp(2rem, 8vw, 3rem); font-weight: 450; letter
 .remote-status-list div { display: flex; justify-content: space-between; gap: 14px; font-size: 11px; }
 .remote-status-list dt { color: var(--muted); }
 .remote-status-list dd { margin: 0; text-align: right; }
+.pairing-form { display: grid; gap: 8px; margin-top: 18px; padding: 14px; border: 1px solid rgba(210,180,132,.25); border-radius: 14px; background: rgba(210,180,132,.045); }
+.pairing-form[hidden] { display: none; }
+.pairing-form label { color: var(--muted); font-size: 11px; }
+.pairing-form input { width: 100%; min-height: 42px; padding: 9px 11px; border: 1px solid rgba(255,255,255,.18); border-radius: 9px; background: rgba(0,0,0,.3); color: var(--cream); font: inherit; }
+.pairing-form input:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.pairing-title { margin: 0 0 4px; color: var(--gold); font-size: 11px; letter-spacing: .12em; }
+.pairing-form button { min-height: 42px; margin-top: 3px; font-size: 12px; }
 .remote-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; width: min(100%, 280px); margin: 22px auto 15px; }
 .remote-pad button { aspect-ratio: 1.35; font-size: 24px; }
 .remote-pad button[data-command="select"] { color: var(--gold); font-size: 14px; }
 .remote-row, .profile-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin-top: 10px; }
 .remote-row button, .profile-row button { min-width: 0; padding: 6px 3px; font-size: 12px; }
+.remote-row > span { min-width: 0; }
 .remote-note { margin: 18px 0 0; padding-top: 14px; border-top: 1px solid rgba(255,255,255,.12); }
+.remote-note[data-kind="error"] { color: #e9b1a7; }
+button:disabled { cursor: not-allowed; opacity: .42; }
 footer { width: min(100%, 520px); padding-top: 18px; color: #8f8981; font-size: 9px; letter-spacing: .12em; text-align: center; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; } }

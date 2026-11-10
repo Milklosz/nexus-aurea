@@ -34,6 +34,8 @@ import {
 } from "./services/musicBridge";
 import { MusicMiniPlayer } from "./components/MusicPanel";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listenForRemoteCommand } from "./services/remoteAccess";
+import { dispatchRemoteCommand } from "./services/remoteCommand";
 import type { ControllerProfile } from "./services/controllerEngine";
 import "./styles.css";
 
@@ -67,11 +69,6 @@ export default function App() {
     setDiagnostics(false);
     setControlCenterOpen((open) => !open);
   }, []);
-  const showRecommendation = useCallback(
-    () => showToast("„Nocna zmiana” to karta demonstracyjna. Wybierz usługę z docka."),
-    [showToast],
-  );
-
   const openService = useCallback(
     async (index: number) => {
       const service = streamingServices[index];
@@ -262,6 +259,31 @@ export default function App() {
   useEffect(() => {
     let active = true;
     let unlisten: (() => void) | undefined;
+    void listenForRemoteCommand((command) => {
+      if (!active) return;
+      dispatchRemoteCommand(command, {
+        navigate: moveControllerFocus,
+        select: confirmControllerFocus,
+        back: backControllerFocus,
+        home: returnToNexus,
+        volume: (action) => {
+          void handleSystemVolume(action).catch(() => showToast("Nie udało się zmienić głośności Windows."));
+        },
+        profile: (profile) => { void changeCinemaProfile(profile); },
+      });
+    }).then((stopListening) => {
+      if (active) unlisten = stopListening;
+      else stopListening();
+    }).catch(() => {});
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [backControllerFocus, changeCinemaProfile, confirmControllerFocus, handleSystemVolume, moveControllerFocus, returnToNexus, showToast]);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
     void listenForManagedAppExit((id) => {
       if (!active || id !== "playniteFullscreen") return;
       void getCurrentWindow().setFocus().catch(() => {
@@ -299,7 +321,7 @@ export default function App() {
       <div className="ridge back" aria-hidden="true" />
       <StatusBar now={now} time={time} weatherLabel={weatherLabel} weatherTitle={weatherTitle} />
       <button type="button" className="quick-settings-trigger" onClick={toggleControlCenter} aria-label="Otwórz Control Center">Control Center <kbd>F3</kbd></button>
-      <HeroPanel onWatch={showRecommendation} />
+      <HeroPanel />
       <AppDock
         services={streamingServices}
         activeIndex={navigation.activeIndex}
