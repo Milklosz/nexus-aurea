@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({ isTauri: vi.fn(() => true), invoke: vi.fn(), l
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: mocks.isTauri, invoke: mocks.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen }));
 
-import { emptyAppManagerSnapshot, getAppManagerStatus, launchManagedApp, listenForManagedAppExit, managedAppErrorMessage } from "../services/appManager";
+import { emptyAppManagerSnapshot, getAppManagerStatus, launchManagedApp, launchManagedGame, listenForManagedAppExit, managedAppErrorMessage } from "../services/appManager";
 
 afterEach(() => vi.clearAllMocks());
 
@@ -35,5 +35,24 @@ describe("App Manager bridge", () => {
     const callback = vi.fn();
     await listenForManagedAppExit(callback);
     expect(mocks.listen).toHaveBeenCalledWith("managed-app-exited", expect.any(Function));
+  });
+
+  it("passes a numeric Steam app ID to the native verified launcher", async () => {
+    mocks.isTauri.mockReturnValue(true);
+    mocks.invoke.mockResolvedValue({ id: "440", launched: true });
+    await expect(launchManagedGame("440")).resolves.toMatchObject({ id: "440", launched: true });
+    expect(mocks.invoke).toHaveBeenCalledWith("launch_managed_game", { id: "440" });
+  });
+
+  it("rejects arbitrary game identifiers before invoking the native layer", async () => {
+    mocks.isTauri.mockReturnValue(true);
+    await expect(launchManagedGame("steam://run/440")).rejects.toThrow("Nieprawidłowy identyfikator");
+    expect(mocks.invoke).not.toHaveBeenCalled();
+  });
+
+  it("keeps game launching unavailable in browser preview", async () => {
+    mocks.isTauri.mockReturnValue(false);
+    await expect(launchManagedGame("440")).rejects.toThrow("natywnego App Managera Windows");
+    expect(mocks.invoke).not.toHaveBeenCalled();
   });
 });

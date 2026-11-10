@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#101116">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="NEXUS Remote">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icon.svg">
+  <link rel="stylesheet" href="./style.css">
+  <title>NEXUS AUREA Remote</title>
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <main class="remote-shell">
+    <header class="remote-header">
+      <div class="brand">NEXUS <span>AUREA</span></div>
+      <div class="connection-badge" id="connection-state" role="status" aria-live="polite">endpoint niedostępny</div>
+    </header>
+
+    <section class="remote-card" aria-labelledby="remote-title">
+      <p class="eyebrow">LOCAL COMPANION · v0.9</p>
+      <h1 id="remote-title">NEXUS Remote</h1>
+      <p class="connection-copy">Ta wersja zawiera podgląd interfejsu PWA. Bez gotowego, bezpiecznego parowania NEXUS nie uruchamia serwera sterowania w sieci.</p>
+
+      <div class="remote-pad" role="group" aria-label="Nawigacja NEXUS">
+        <span></span><button type="button" data-command="up" aria-label="Góra" disabled>↑</button><span></span>
+        <button type="button" data-command="left" aria-label="Lewo" disabled>←</button>
+        <button type="button" data-command="select" aria-label="Wybierz" disabled>OK</button>
+        <button type="button" data-command="right" aria-label="Prawo" disabled>→</button>
+        <span></span><button type="button" data-command="down" aria-label="Dół" disabled>↓</button><span></span>
+      </div>
+
+      <div class="remote-row" role="group" aria-label="Nawigacja główna">
+        <button type="button" data-command="back" aria-label="Wstecz" disabled>Wstecz</button>
+        <button type="button" data-command="home" aria-label="Home" disabled>Home</button>
+        <button type="button" data-command="control-center" aria-label="Control Center" disabled>Control Center</button>
+      </div>
+
+      <div class="remote-row" role="group" aria-label="Głośność">
+        <button type="button" data-command="volume-down" aria-label="Ciszej" disabled>−</button>
+        <button type="button" data-command="mute" aria-label="Wycisz" disabled>Wycisz</button>
+        <button type="button" data-command="volume-up" aria-label="Głośniej" disabled>+</button>
+      </div>
+
+      <div class="profile-row" role="group" aria-label="Profile">
+        <button type="button" data-command="profile-cinema" aria-label="Cinema" disabled>Cinema</button>
+        <button type="button" data-command="profile-gaming" aria-label="Gaming" disabled>Gaming</button>
+        <button type="button" data-command="profile-desktop" aria-label="Desktop" disabled>Desktop</button>
+      </div>
+
+      <p class="remote-note" id="pairing-state">Parowanie i polecenia są wyłączone. Ten podgląd nie łączy się z NEXUS ani nie przechowuje tokenów.</p>
+    </section>
+    <footer>Grand Cinema · kremowa typografia · złote akcenty</footer>
+  </main>
+</body>
+</html>

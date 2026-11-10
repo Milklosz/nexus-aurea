@@ -11,10 +11,14 @@ export type ManagedApp = {
   lastError: string | null;
 };
 
+export type ManagedGame = { id: string; name: string; launcher: string };
+
 export type AppManagerSnapshot = {
   windows: boolean;
   foregroundProcess: string | null;
   apps: ManagedApp[];
+  games: ManagedGame[];
+  gamesError: string | null;
 };
 
 export type LaunchReceipt = {
@@ -38,6 +42,8 @@ export const emptyAppManagerSnapshot: AppManagerSnapshot = {
   windows: false,
   foregroundProcess: null,
   apps: [],
+  games: [],
+  gamesError: null,
 };
 
 export async function getAppManagerStatus(): Promise<AppManagerSnapshot> {
@@ -48,6 +54,15 @@ export async function getAppManagerStatus(): Promise<AppManagerSnapshot> {
 export async function launchManagedApp(id: ManagedAppId): Promise<LaunchReceipt> {
   if (!isTauri()) throw new Error("App Manager wymaga natywnej aplikacji Windows.");
   return invoke<LaunchReceipt>("launch_managed_app", { id });
+}
+
+export async function launchManagedGame(id: string): Promise<{ id: string; launched: boolean }> {
+  const numericId = Number(id);
+  if (!/^[1-9][0-9]{0,9}$/.test(id) || !Number.isSafeInteger(numericId) || numericId > 4294967295) {
+    throw new Error("Nieprawidłowy identyfikator gry Steam.");
+  }
+  if (!isTauri()) throw new Error("Uruchamianie gier wymaga natywnego App Managera Windows.");
+  return invoke<{ id: string; launched: boolean }>("launch_managed_game", { id });
 }
 
 export async function listenForManagedAppExit(callback: (id: string) => void): Promise<() => void> {

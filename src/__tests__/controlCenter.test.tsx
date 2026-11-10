@@ -92,6 +92,14 @@ describe("Control Center", () => {
     expect(returnToNexus).toHaveBeenCalledOnce();
   });
 
+  it("includes the Gaming Hub and keeps iPhone Remote visibly unavailable", async () => {
+    setupDialog();
+    renderCenter();
+    expect(screen.getByRole("heading", { name: "Gaming Hub" })).toBeTruthy();
+    expect(screen.getByText(/Zdalny serwer jest wyłączony/)).toBeTruthy();
+    expect(screen.getByText(/Podgląd PWA nie wysyła poleceń/)).toBeTruthy();
+  });
+
   it("cycles the Ambient idle interval through supported values", async () => {
     setupDialog();
     const update = vi.fn();

@@ -19,6 +19,7 @@ pub fn run() {
             control_service::stop_control_service,
             app_manager::get_app_manager_status,
             app_manager::launch_managed_app,
+            app_manager::launch_managed_game,
             music_service::get_apple_music_status,
             music_service::control_apple_music,
             music_service::adjust_system_volume,
