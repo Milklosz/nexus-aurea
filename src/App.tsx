@@ -15,8 +15,20 @@ import { useToast } from "./hooks/useToast";
 import { useWeather } from "./hooks/useWeather";
 import { openStreamingService } from "./services/openStreamingService";
 import { getControlServiceStatus, listenForNexusControlReturn, setControlGameMode } from "./services/controlService";
-import { listenForManagedAppExit } from "./services/appManager";
+import { launchManagedApp, listenForManagedAppExit } from "./services/appManager";
 import { readCinemaProfile, saveCinemaProfile, type CinemaProfile } from "./services/cinemaMode";
+import {
+  adjustSystemVolume,
+  controlAppleMusic,
+  getAppleMusicStatus,
+  readMusicBackgroundMode,
+  saveMusicBackgroundMode,
+  unavailableAppleMusicStatus,
+  type AppleMusicAction,
+  type AppleMusicStatus,
+  type SystemVolumeAction,
+} from "./services/musicBridge";
+import { MusicMiniPlayer } from "./components/MusicPanel";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ControllerProfile } from "./services/controllerEngine";
 import "./styles.css";
@@ -36,6 +48,8 @@ export default function App() {
   const [diagnostics, setDiagnostics] = useState(false);
   const [controllerProfile, setControllerProfile] = useState<ControllerProfile>(savedControllerProfile);
   const [cinemaProfile, setCinemaProfile] = useState<CinemaProfile>(readCinemaProfile);
+  const [musicBackgroundMode, setMusicBackgroundMode] = useState(readMusicBackgroundMode);
+  const [musicStatus, setMusicStatus] = useState<AppleMusicStatus>(unavailableAppleMusicStatus);
   const { now, time } = useClock();
   const { label: weatherLabel, title: weatherTitle } = useWeather();
   const { message, showToast } = useToast();
@@ -123,6 +137,34 @@ export default function App() {
     showToast(nextProfile === "desktop" ? "Profil Desktop · pulpit Windows." : `Profil ${nextProfile === "cinema" ? "Cinema" : "Gaming"} aktywny.`);
   }, [cinemaProfile, showToast]);
   const showDesktop = useCallback(() => void changeCinemaProfile("desktop"), [changeCinemaProfile]);
+  const refreshMusicStatus = useCallback(async () => {
+    setMusicStatus(await getAppleMusicStatus());
+  }, []);
+  useEffect(() => {
+    if (!diagnostics && !musicBackgroundMode) return;
+    let active = true;
+    const refresh = () => void getAppleMusicStatus().then(status => { if (active) setMusicStatus(status); }).catch(() => {
+      if (active) setMusicStatus({ ...unavailableAppleMusicStatus, windows: true, message: "Nie udało się odczytać sesji Windows SMTC." });
+    });
+    refresh();
+    const timer = window.setInterval(refresh, 2500);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [diagnostics, musicBackgroundMode]);
+  const changeMusicBackgroundMode = useCallback((enabled: boolean) => {
+    setMusicBackgroundMode(enabled);
+    saveMusicBackgroundMode(enabled);
+    showToast(enabled ? "Apple Music Background Mode włączony." : "Apple Music Background Mode wyłączony.");
+  }, [showToast]);
+  const handleMusicControl = useCallback(async (action: AppleMusicAction) => {
+    await controlAppleMusic(action);
+    await refreshMusicStatus();
+  }, [refreshMusicStatus]);
+  const handleSystemVolume = useCallback((action: SystemVolumeAction) => adjustSystemVolume(action), []);
+  const openAppleMusic = useCallback(async () => {
+    const receipt = await launchManagedApp("appleMusic");
+    showToast(receipt.alreadyRunning ? "Apple Music już działa." : "Uruchamiam oficjalną aplikację Apple Music.");
+    window.setTimeout(() => void refreshMusicStatus(), 1800);
+  }, [refreshMusicStatus, showToast]);
   useGamepad({
     move: moveControllerFocus,
     confirm: confirmControllerFocus,
@@ -209,6 +251,7 @@ export default function App() {
         onFocus={handleFocus}
         onActivate={handleActivate}
       />
+      {musicBackgroundMode && <MusicMiniPlayer status={musicStatus} profile={cinemaProfile} onControl={handleMusicControl} />}
       <footer className="controls">
         <span>
           ◯ / <kbd>←</kbd> <kbd>→</kbd> &nbsp;PORUSZAJ &nbsp;·&nbsp; ✕ / <kbd>ENTER</kbd> &nbsp;WYBIERZ
@@ -223,6 +266,13 @@ export default function App() {
         cinemaProfile={cinemaProfile}
         onCinemaProfileChange={(profile) => void changeCinemaProfile(profile)}
         onShowDesktop={showDesktop}
+        musicStatus={musicStatus}
+        musicBackgroundMode={musicBackgroundMode}
+        onMusicBackgroundModeChange={changeMusicBackgroundMode}
+        onMusicRefresh={refreshMusicStatus}
+        onMusicControl={handleMusicControl}
+        onSystemVolume={handleSystemVolume}
+        onOpenAppleMusic={openAppleMusic}
         onClose={closeDiagnostics}
       />}
       <Toast message={message} />
