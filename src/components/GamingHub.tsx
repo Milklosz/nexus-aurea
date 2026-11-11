@@ -16,6 +16,7 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
   const [snapshot, setSnapshot] = useState<AppManagerSnapshot>(emptyAppManagerSnapshot);
   const [loading, setLoading] = useState(true);
   const [retrying, setRetrying] = useState(false);
+  const [statusUnavailable, setStatusUnavailable] = useState(false);
   const refreshRequestInFlight = useRef(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -29,8 +30,10 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
     setLoading(true);
     try {
       setSnapshot(await getAppManagerStatus());
+      setStatusUnavailable(false);
     } catch (cause) {
-      setSnapshot(emptyAppManagerSnapshot);
+      setSnapshot((current) => current.windows ? current : emptyAppManagerSnapshot);
+      setStatusUnavailable(true);
       setError(managedAppErrorMessage(cause, "Nie udało się odczytać Steam i Playnite."));
     } finally {
       setLoading(false);
@@ -107,14 +110,14 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
     <div className="gaming-launchers">
       <div className="gaming-launcher">
         <div><strong>Steam</strong><span>{steam?.installed ? "Wykryto" : "Nie wykryto"}</span></div>
-        <button type="button" aria-busy={busy === "steamBigPicture"} disabled={!steam?.installed || Boolean(steam.lastError) || busy !== null}
+        <button type="button" aria-busy={busy === "steamBigPicture"} disabled={!steam?.installed || Boolean(steam.lastError) || statusUnavailable || busy !== null}
           onClick={() => void launchLauncher("steamBigPicture")}>
           {busy === "steamBigPicture" ? "Uruchamiam…" : "Big Picture"}
         </button>
       </div>
       <div className="gaming-launcher">
         <div><strong>Playnite</strong><span>{playnite?.installed ? "Wykryto" : "Nie wykryto"}</span></div>
-        <button type="button" aria-busy={busy === "playniteFullscreen"} disabled={!playnite?.installed || Boolean(playnite.lastError) || busy !== null}
+        <button type="button" aria-busy={busy === "playniteFullscreen"} disabled={!playnite?.installed || Boolean(playnite.lastError) || statusUnavailable || busy !== null}
           onClick={() => void launchLauncher("playniteFullscreen")}>
           {busy === "playniteFullscreen" ? "Uruchamiam…" : "Fullscreen"}
         </button>
@@ -130,7 +133,7 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
       ? <div className="gaming-game-list">
         {games.map((game) => <div className="gaming-game-row" key={game.id}>
           <div><strong>{game.name}</strong><span>{game.launcher} · App ID {game.id}</span></div>
-          <button type="button" aria-busy={busy === game.id} disabled={!steam?.installed || Boolean(snapshot.gamesError) || busy !== null}
+          <button type="button" aria-busy={busy === game.id} disabled={!steam?.installed || Boolean(snapshot.gamesError) || statusUnavailable || busy !== null}
             onClick={() => void launchGame(game)}>
             {busy === game.id ? "Uruchamiam…" : "Uruchom"}
           </button>

@@ -225,11 +225,19 @@ describe("Gaming Hub and App Manager integration", () => {
 
     rejectStatus(new Error("App Manager jest chwilowo niedostępny."));
 
-    const retryButton = await screen.findByRole("button", { name: "Spróbuj ponownie" });
+    const retryButton = await screen.findByRole("button", { name: "Odśwież biblioteki" });
     expect(screen.getByRole("alert").textContent).toContain("App Manager jest chwilowo niedostępny.");
+    expect(await screen.findByText("Team Fortress 2")).toBeTruthy();
     expect(retryButton).toBe(refreshButton);
     expect(document.activeElement).toBe(refreshButton);
     expect(refreshButton.getAttribute("aria-busy")).toBe("false");
+    expect(screen.getByRole("button", { name: "Big Picture" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Uruchom" }).hasAttribute("disabled")).toBe(true);
+
+    fireEvent.click(refreshButton);
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(screen.getByRole("button", { name: "Big Picture" }).hasAttribute("disabled")).toBe(false);
+    expect(screen.getByRole("button", { name: "Uruchom" }).hasAttribute("disabled")).toBe(false);
   });
 
   it("ignores repeated refresh activations while a status request is pending", async () => {
