@@ -76,12 +76,12 @@ Updated: 2026-11-11 (Europe/Warsaw)
 
 ## Artifact record
 
-- Latest Windows CI artifact for stage 26 from run [43051591281](https://github.com/Milklosz/nexus-aurea/actions/runs/43051591281), artifact ID `13870450916`: `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-78b508367a26cb34872d751627898fa15bb9a490.zip`.
-- ZIP SHA-256: `7f6e48aa33a08d1575988be3d7cf2d697f683c2d608d32dd00ea1801d2c108f1` (matches the GitHub artifact digest).
-- Extracted installer (not run): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-78b508367a26cb34872d751627898fa15bb9a490-extracted\VELORA_0.9.2_x64-setup.exe`.
-- Installer SHA-256: `5704b5578e07a47b77cb710d0155f10a78771024550041b662dace365c3efc1b`; Authenticode status: `NotSigned`.
-- Checksum sidecar: `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-78b508367a26cb34872d751627898fa15bb9a490-SHA256.txt`.
-- The stage-26 artifact digest matches the GitHub Actions artifact record; no installer was run or installed. The MSI installation remains untouched.
+- Latest Windows CI artifact for stage 29 from run [43054839359](https://github.com/Milklosz/nexus-aurea/actions/runs/43054839359), artifact ID `13870378276`: `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-1468cdc18e24cd62f520c45307b862982ec2accf.zip`.
+- ZIP SHA-256: `bae7363ed061eb237171d920c5cb85d91b3bc458287f5451723267a53e110187` (matches the GitHub artifact digest).
+- Extracted installer (not run): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-1468cdc18e24cd62f520c45307b862982ec2accf-extracted\VELORA_0.9.2_x64-setup.exe`.
+- Installer SHA-256: `9ed71b1484f9080fb2deb1f4534d3289a80ca26ad0935807a4474b558503cbe7`; Authenticode status: `NotSigned`.
+- Checksum sidecar: `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-1468cdc18e24cd62f520c45307b862982ec2accf-SHA256.txt`.
+- The stage-29 artifact digest matches the GitHub Actions artifact record; no installer was run or installed. The MSI installation remains untouched.
 - Prior Windows CI artifact for stage 22 from run [43045040872](https://github.com/Milklosz/nexus-aurea/actions/runs/43045040872): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-5ce71d8295d007940e8144a62cd69e28d4f4518f.zip` (SHA-256 `4c4029a24370116f33d057baec6ff765c3ce599dc657f6b5ef835dd63a1024e8`). Installer SHA-256 `6ca72f8eb0dbdefa94a4bd118510207986821d9c1c3d6779c89f9234690eb166`; Authenticode `NotSigned`; it was not run or installed.
 
 ## Recovery checkpoints
