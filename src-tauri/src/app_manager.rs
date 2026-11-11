@@ -2,16 +2,16 @@ use serde::Serialize;
 #[cfg(target_os = "windows")]
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+#[cfg(target_os = "windows")]
 use std::process::Command;
+use tauri::AppHandle;
 #[cfg(target_os = "windows")]
-use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::Emitter;
+
 #[cfg(target_os = "windows")]
-use std::thread;
-#[cfg(any(target_os = "windows", test))]
-use std::time::Duration;
+use crate::launch_registry::{self, LaunchKind, LaunchWatch};
 #[cfg(target_os = "windows")]
-use std::time::Instant;
-use tauri::{AppHandle, Emitter};
+use crate::session_orchestrator::SessionId;
 
 /// Runs filesystem and process inspection outside Tauri's main thread.
 async fn run_blocking_command<T, F>(task: F) -> Result<T, String>
@@ -23,11 +23,6 @@ where
         .await
         .map_err(|_| "Operacja systemowa została przerwana.".to_string())?
 }
-
-#[cfg(any(target_os = "windows", test))]
-const PLAYNITE_EXIT_GRACE: Duration = Duration::from_secs(5);
-#[cfg(any(target_os = "windows", test))]
-const PLAYNITE_START_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -266,6 +261,11 @@ fn launch_managed_app_blocking(app: AppHandle, id: String) -> Result<LaunchRecei
             });
         }
 
+        let steam_pid_before = if spec.id == "steamBigPicture" {
+            launch_registry::find_process_id("steam.exe")
+        } else {
+            None
+        };
         let mut command = Command::new(executable);
         match spec.id {
             "steamBigPicture" => { command.arg("steam://open/bigpicture"); }
@@ -273,9 +273,11 @@ fn launch_managed_app_blocking(app: AppHandle, id: String) -> Result<LaunchRecei
             _ => {}
         }
         let child = command.spawn().map_err(|error| format!("Windows nie uruchomił aplikacji {}: {error}", spec.name))?;
-        if spec.id == "playniteFullscreen" {
-            drop(child);
-            watch_playnite_lifecycle(app);
+        let child_id = child.id();
+        drop(child);
+        let watch = managed_app_watch(spec, child_id, steam_pid_before);
+        if let Err(error) = launch_registry::track_launch(&app, watch) {
+            let _ = app.emit("velora-launch-error", error);
         }
         Ok(LaunchReceipt {
             id,
@@ -291,12 +293,70 @@ fn launch_managed_app_blocking(app: AppHandle, id: String) -> Result<LaunchRecei
     }
 }
 
-#[tauri::command]
-pub async fn launch_managed_game(id: String) -> Result<ManagedGameLaunchReceipt, String> {
-    run_blocking_command(move || launch_managed_game_blocking(id)).await
+#[cfg(target_os = "windows")]
+fn managed_app_watch(spec: &AppSpec, child_id: u32, steam_pid_before: Option<u32>) -> LaunchWatch {
+    let (image_names, root_process_id, descendants_only, root_counts_as_running, ignore_baseline_windows, session_target) =
+        match spec.id {
+            "playniteFullscreen" => (
+                vec![
+                    "Playnite.FullscreenApp.exe".to_string(),
+                    "Playnite.DesktopApp.exe".to_string(),
+                ],
+                None,
+                false,
+                false,
+                true,
+                Some(SessionId::Playnite),
+            ),
+            "steamBigPicture" => (
+                Vec::new(),
+                steam_pid_before.or(Some(child_id)),
+                true,
+                true,
+                true,
+                Some(SessionId::Game),
+            ),
+            "chrome" | "edge" | "firefox" => (
+                vec![spec.process_name.to_string()],
+                None,
+                false,
+                false,
+                true,
+                Some(SessionId::Cinema),
+            ),
+            _ => (
+                vec![spec.process_name.to_string()],
+                None,
+                false,
+                false,
+                true,
+                None,
+            ),
+        };
+    LaunchWatch::new(
+        match spec.id {
+            "playniteFullscreen" => LaunchKind::Playnite,
+            "steamBigPicture" => LaunchKind::Steam,
+            _ => LaunchKind::ManagedApp,
+        },
+        spec.name,
+        Some(spec.id.to_string()),
+        image_names,
+        root_process_id,
+        descendants_only,
+        root_counts_as_running,
+        Vec::new(),
+        ignore_baseline_windows,
+        session_target,
+    )
 }
 
-fn launch_managed_game_blocking(id: String) -> Result<ManagedGameLaunchReceipt, String> {
+#[tauri::command]
+pub async fn launch_managed_game(app: AppHandle, id: String) -> Result<ManagedGameLaunchReceipt, String> {
+    run_blocking_command(move || launch_managed_game_blocking(app, id)).await
+}
+
+fn launch_managed_game_blocking(app: AppHandle, id: String) -> Result<ManagedGameLaunchReceipt, String> {
     if !is_valid_steam_app_id(&id) {
         return Err("Nieprawidłowy identyfikator gry Steam.".into());
     }
@@ -307,17 +367,48 @@ fn launch_managed_game_blocking(id: String) -> Result<ManagedGameLaunchReceipt, 
             .ok_or_else(|| format!("Gra Steam o ID {} nie znajduje się w dostępnej, zainstalowanej bibliotece.", id))?;
         let executable = steam_path()
             .ok_or_else(|| "Nie wykryto pliku wykonywalnego Steam.".to_string())?;
+        // Resolve the existing Steam client and capture its current descendant
+        // tree before spawning. This prevents a fast game start or a second
+        // steam.exe stub from becoming the baseline/root by mistake.
+        let steam_process_id = launch_registry::find_process_id("steam.exe");
+        let mut watch = LaunchWatch::new(
+            LaunchKind::Game,
+            game.name.clone(),
+            Some(game.id.clone()),
+            Vec::new(),
+            steam_process_id,
+            true,
+            false,
+            vec![
+                "steamwebhelper.exe".into(),
+                "gameoverlayui.exe".into(),
+                "steamservice.exe".into(),
+                "steamerrorreporter.exe".into(),
+            ],
+            false,
+            Some(SessionId::Game),
+        );
+        if let Err(error) = launch_registry::capture_baseline(&app, &mut watch) {
+            let _ = app.emit("velora-launch-error", error);
+        }
         let child = Command::new(executable)
             .args(["-applaunch", game.id.as_str()])
             .spawn()
             .map_err(|error| format!("Steam nie uruchomił gry {}: {error}", game.name))?;
+        let child_id = child.id();
         drop(child);
+        if watch.root_process_id.is_none() {
+            watch.root_process_id = Some(child_id);
+        }
+        if let Err(error) = launch_registry::track_launch(&app, watch) {
+            let _ = app.emit("velora-launch-error", error);
+        }
         Ok(ManagedGameLaunchReceipt { id: game.id, launched: true })
     }
 
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = id;
+        let _ = (app, id);
         Err("Gaming Hub wymaga natywnego App Managera Windows.".into())
     }
 }
@@ -646,77 +737,11 @@ fn process_entry_matches(executable_name: &[u16], image_name: &str) -> bool {
     String::from_utf16_lossy(&executable_name[..length]).eq_ignore_ascii_case(image_name)
 }
 
-#[cfg(any(target_os = "windows", test))]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy, Debug)]
 struct PlayniteProcesses {
     fullscreen: usize,
     desktop: usize,
-}
-
-#[cfg(any(target_os = "windows", test))]
-impl PlayniteProcesses {
-    fn running(self) -> bool {
-        self.fullscreen > 0 || self.desktop > 0
-    }
-}
-
-#[cfg(any(target_os = "windows", test))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PlayniteWatchOutcome {
-    WaitingForFullscreen,
-    Running,
-    FullscreenToDesktop,
-    ExitPending,
-    Ended,
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn observe_playnite_session(
-    seen_fullscreen: bool,
-    previous: PlayniteProcesses,
-    current: PlayniteProcesses,
-    absent_for: Option<Duration>,
-) -> PlayniteWatchOutcome {
-    if current.running() {
-        if previous.fullscreen > 0 && current.fullscreen == 0 && current.desktop > 0 {
-            PlayniteWatchOutcome::FullscreenToDesktop
-        } else {
-            PlayniteWatchOutcome::Running
-        }
-    } else if !seen_fullscreen {
-        PlayniteWatchOutcome::WaitingForFullscreen
-    } else if absent_for.is_some_and(|elapsed| elapsed >= PLAYNITE_EXIT_GRACE) {
-        PlayniteWatchOutcome::Ended
-    } else {
-        PlayniteWatchOutcome::ExitPending
-    }
-}
-
-/// VELORA may only take foreground when the user is already on the desktop,
-/// still in Playnite, or in VELORA itself. Any other foreground application wins.
-/// An active window whose process cannot be identified also wins.
-#[cfg(any(target_os = "windows", test))]
-fn should_restore_velora_focus(
-    foreground_process: Option<&str>,
-    foreground_window_present: bool,
-    foreground_window_class: Option<&str>,
-) -> bool {
-    if foreground_process.is_none() && foreground_window_present {
-        return false;
-    }
-    let Some(process) = foreground_process else { return true; };
-    match process.trim().to_ascii_lowercase().as_str() {
-        // explorer.exe also owns File Explorer and the taskbar. Only the actual
-        // desktop shell windows count as "the user is on the Windows desktop".
-        "explorer.exe" => foreground_window_class.is_some_and(|class| {
-            matches!(class, "Progman" | "WorkerW" | "SHELLDLL_DefView")
-        }),
-        "playnite.fullscreenapp.exe"
-        | "playnite.desktopapp.exe"
-        | "nexus-aurea.exe"
-        | "velora.exe" => true,
-        _ => false,
-    }
 }
 
 #[cfg(target_os = "windows")]
@@ -744,101 +769,12 @@ fn app_process_count(_id: &str, _process_name: &str) -> Result<usize, String> {
     Ok(0)
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ManagedAppExitEvent {
-    pub id: String,
-    pub foreground_process: Option<String>,
-    pub should_focus: bool,
-}
-
-#[cfg(target_os = "windows")]
-static PLAYNITE_WATCHER_ACTIVE: AtomicBool = AtomicBool::new(false);
-
-#[cfg(target_os = "windows")]
-struct PlayniteWatcherReset;
-
-#[cfg(target_os = "windows")]
-impl Drop for PlayniteWatcherReset {
-    fn drop(&mut self) {
-        PLAYNITE_WATCHER_ACTIVE.store(false, Ordering::Release);
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn watch_playnite_lifecycle(app: AppHandle) {
-    if PLAYNITE_WATCHER_ACTIVE.swap(true, Ordering::AcqRel) { return; }
-    thread::spawn(move || {
-        let _reset = PlayniteWatcherReset;
-        let started_watching = Instant::now();
-        let deadline = started_watching + Duration::from_secs(12 * 60 * 60);
-        let startup_deadline = started_watching + PLAYNITE_START_TIMEOUT;
-        let mut seen_fullscreen = false;
-        let mut previous = PlayniteProcesses::default();
-        let mut absent_since: Option<Instant> = None;
-        loop {
-            let absent_for = absent_since.map(|started| started.elapsed());
-            match playnite_processes() {
-                Ok(current) => {
-                    if current.fullscreen > 0 {
-                        seen_fullscreen = true;
-                    }
-                    let outcome = observe_playnite_session(
-                        seen_fullscreen,
-                        previous,
-                        current,
-                        absent_for,
-                    );
-                    if current.running() {
-                        absent_since = None;
-                    } else if seen_fullscreen && absent_since.is_none() {
-                        absent_since = Some(Instant::now());
-                    }
-                    previous = current;
-
-                    if outcome == PlayniteWatchOutcome::Ended {
-                        let foreground = crate::control_service::foreground_process_name();
-                        let should_focus = should_restore_velora_focus(
-                            foreground.as_deref(),
-                            crate::control_service::foreground_window_present(),
-                            crate::control_service::foreground_window_class_name().as_deref(),
-                        );
-                        let _ = app.emit(
-                            "managed-app-exited",
-                            ManagedAppExitEvent {
-                                id: "playniteFullscreen".into(),
-                                foreground_process: foreground,
-                                should_focus,
-                            },
-                        );
-                        break;
-                    }
-                }
-                Err(_) => {
-                    // A transient process-read failure is not evidence that the
-                    // session ended. Restart the absence grace period.
-                    absent_since = None;
-                    previous = PlayniteProcesses::default();
-                }
-            }
-            let now = Instant::now();
-            if now >= deadline || (!seen_fullscreen && now >= startup_deadline) {
-                break;
-            }
-            thread::sleep(Duration::from_millis(300));
-        }
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        is_valid_steam_app_id, observe_playnite_session, parse_steam_manifest, parse_vdf_pair,
-        process_entry_matches, should_dispatch_when_running, should_restore_velora_focus, spec_for,
-        ManagedAppExitEvent, PlayniteProcesses, PlayniteWatchOutcome, PLAYNITE_EXIT_GRACE,
-        PLAYNITE_START_TIMEOUT,
+        is_valid_steam_app_id, parse_steam_manifest, parse_vdf_pair, process_entry_matches,
+        should_dispatch_when_running, spec_for,
     };
-    use std::time::Duration;
 
     #[test]
     fn app_registry_rejects_unlisted_ids() {
@@ -852,89 +788,6 @@ mod tests {
         assert!(should_dispatch_when_running("steamBigPicture"));
         assert!(!should_dispatch_when_running("appleMusic"));
         assert!(should_dispatch_when_running("playniteFullscreen"));
-    }
-
-    #[test]
-    fn playnite_fullscreen_to_desktop_is_a_mode_handoff_not_a_session_end() {
-        let fullscreen = PlayniteProcesses { fullscreen: 1, desktop: 0 };
-        let desktop = PlayniteProcesses { fullscreen: 0, desktop: 1 };
-
-        assert_eq!(
-            observe_playnite_session(true, fullscreen, desktop, None),
-            PlayniteWatchOutcome::FullscreenToDesktop,
-        );
-        assert_eq!(
-            observe_playnite_session(true, desktop, desktop, None),
-            PlayniteWatchOutcome::Running,
-        );
-    }
-
-    #[test]
-    fn playnite_session_end_requires_a_seen_fullscreen_process_and_exit_grace() {
-        let absent = PlayniteProcesses::default();
-        let fullscreen = PlayniteProcesses { fullscreen: 1, desktop: 0 };
-
-        assert_eq!(
-            observe_playnite_session(false, PlayniteProcesses::default(), absent, Some(Duration::from_secs(30))),
-            PlayniteWatchOutcome::WaitingForFullscreen,
-        );
-        assert_eq!(
-            observe_playnite_session(true, fullscreen, absent, None),
-            PlayniteWatchOutcome::ExitPending,
-        );
-        assert_eq!(
-            observe_playnite_session(
-                true,
-                fullscreen,
-                absent,
-                Some(PLAYNITE_EXIT_GRACE - Duration::from_millis(1)),
-            ),
-            PlayniteWatchOutcome::ExitPending,
-        );
-        assert_eq!(
-            observe_playnite_session(true, fullscreen, absent, Some(PLAYNITE_EXIT_GRACE)),
-            PlayniteWatchOutcome::Ended,
-        );
-    }
-
-    #[test]
-    fn focus_return_is_limited_to_desktop_playnite_or_velora() {
-        assert!(should_restore_velora_focus(None, false, None));
-        assert!(!should_restore_velora_focus(None, true, None));
-        assert!(should_restore_velora_focus(Some("explorer.exe"), true, Some("Progman")));
-        assert!(should_restore_velora_focus(Some("explorer.exe"), true, Some("WorkerW")));
-        assert!(should_restore_velora_focus(Some("explorer.exe"), true, Some("SHELLDLL_DefView")));
-        assert!(!should_restore_velora_focus(Some("explorer.exe"), true, Some("CabinetWClass")));
-        assert!(!should_restore_velora_focus(Some("explorer.exe"), true, None));
-        assert!(should_restore_velora_focus(Some("Playnite.FullscreenApp.exe"), true, None));
-        assert!(should_restore_velora_focus(Some("PLAYNITE.DESKTOPAPP.EXE"), true, None));
-        assert!(should_restore_velora_focus(Some("nexus-aurea.exe"), true, None));
-        assert!(should_restore_velora_focus(Some(" VELORA.EXE "), true, None));
-        assert!(!should_restore_velora_focus(Some("chrome.exe"), true, None));
-        assert!(!should_restore_velora_focus(Some("Code.exe"), true, None));
-        assert!(!should_restore_velora_focus(Some("steam.exe"), true, None));
-    }
-
-    #[test]
-    fn playnite_start_watch_expires_without_blocking_future_launches() {
-        assert!(PLAYNITE_START_TIMEOUT > PLAYNITE_EXIT_GRACE);
-    }
-
-    #[test]
-    fn managed_app_exit_event_serializes_the_focus_decision() {
-        let event = ManagedAppExitEvent {
-            id: "playniteFullscreen".into(),
-            foreground_process: Some("chrome.exe".into()),
-            should_focus: false,
-        };
-        assert_eq!(
-            serde_json::to_value(event).unwrap(),
-            serde_json::json!({
-                "id": "playniteFullscreen",
-                "foregroundProcess": "chrome.exe",
-                "shouldFocus": false,
-            }),
-        );
     }
 
     #[test]

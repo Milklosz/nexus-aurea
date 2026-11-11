@@ -22,8 +22,9 @@ import { useToast } from "./hooks/useToast";
 import { useWeather } from "./hooks/useWeather";
 import { focusWindowSafely } from "./services/focusWindowSafely";
 import { openStreamingService, streamingServiceErrorMessage } from "./services/openStreamingService";
-import { getControlServiceStatus, listenForNexusControlReturn, setControlGameMode } from "./services/controlService";
+import { getControlServiceStatus, setControlGameMode } from "./services/controlService";
 import { launchManagedApp, listenForManagedAppExit, managedAppErrorMessage } from "./services/appManager";
+import { listenForReturnHome, requestSessionTransition, returnVeloraHome, type SessionId } from "./services/sessionOrchestrator";
 import { readCinemaProfile, saveCinemaProfile, type CinemaProfile } from "./services/cinemaMode";
 import {
   adjustSystemVolume,
@@ -70,6 +71,28 @@ export default function App() {
   const { message, showToast } = useToast();
   const { launchingIds, run: runServiceLaunch } = useLaunchGuard();
   const activeServiceRef = useRef(0);
+  const ambientSessionActive = useRef(false);
+  const recordSession = useCallback((target: SessionId, cause: "user" | "system" = "user") => {
+    void (async () => {
+      try {
+        await requestSessionTransition({ target, cause });
+      } catch {
+        // Desktop/Ambient only leave through Home. Recover explicitly instead
+        // of silently letting the local UI and native session diverge.
+        try {
+          await requestSessionTransition({ target: "veloraHome", cause: "system" });
+          await requestSessionTransition({ target, cause });
+        } catch {
+          // The local profile remains usable; the native error event is authoritative.
+        }
+      }
+    })();
+  }, []);
+  useEffect(() => {
+    if (ambient.active === ambientSessionActive.current) return;
+    ambientSessionActive.current = ambient.active;
+    recordSession(ambient.active ? "ambient" : "veloraHome", "system");
+  }, [ambient.active, recordSession]);
   const showMenu = useCallback(() => { setControlCenterOpen(false); setDiagnostics(true); }, []);
   const openService = useCallback(
     async (index: number) => {
@@ -108,10 +131,13 @@ export default function App() {
   const returnToNexus = useCallback(() => {
     setControlCenterOpen(false);
     setDiagnostics(false);
-    void focusWindowSafely(getCurrentWindow(), () => {
-      showToast("Windows zablokował powrót do VELORA. Wróć do aplikacji przez Alt+Tab.");
+    navigation.focusApp(0);
+    void returnVeloraHome().catch(() => {
+      void focusWindowSafely(getCurrentWindow(), () => {
+        showToast("Windows zablokował powrót do VELORA. Wróć do aplikacji przez Alt+Tab.");
+      });
     });
-  }, [showToast]);
+  }, [navigation.focusApp, showToast]);
   const openDiagnosticsFromCenter = useCallback(() => {
     setControlCenterOpen(false);
     setDiagnostics(true);
@@ -181,13 +207,16 @@ export default function App() {
     }
     setCinemaProfile(nextProfile);
     saveCinemaProfile(nextProfile);
+    recordSession(
+      nextProfile === "cinema" ? "cinema" : nextProfile === "gaming" ? "game" : "desktop",
+    );
     showToast(nextProfile === "desktop"
       ? "Profil Desktop · pulpit Windows."
       : nextProfile === "gaming" && !controlServiceRunning
         ? "Profil Gaming wybrany. Control Service jest wyłączony; ustawienia systemowe nie zostały zmienione."
         : nextProfile === "cinema" ? "Profil Cinema aktywny." : "Profil Gaming aktywny.");
     return true;
-  }, [cinemaProfile, showToast]);
+  }, [cinemaProfile, recordSession, showToast]);
   const showDesktop = useCallback(async () => {
     setControlCenterOpen(false);
     setDiagnostics(false);
@@ -278,29 +307,13 @@ export default function App() {
       if (event.key === "F2") showMenu();
       if (event.key === "F3") { setDiagnostics(false); setControlCenterOpen(true); }
     };
-    const restore = () => { if (!diagnostics) navigation.focusApp(activeServiceRef.current); };
+    const restore = () => {
+      if (!diagnostics) navigation.focusApp(activeServiceRef.current);
+    };
     window.addEventListener("keydown", recover);
     window.addEventListener("focus", restore);
     return () => { window.removeEventListener("keydown", recover); window.removeEventListener("focus", restore); };
   }, [closeControlCenter, closeDiagnostics, controlCenterOpen, diagnostics, moveControllerFocus, navigation.focusApp, showMenu, showToast]);
-
-  useEffect(() => {
-    let active = true;
-    let unlisten: (() => void) | undefined;
-    void listenForNexusControlReturn(() => {
-      if (!active) return;
-      void focusWindowSafely(getCurrentWindow(), () => {
-        showToast("Windows zablokował powrót do VELORA. Wróć do aplikacji przez Alt+Tab.");
-      });
-    }).then((stopListening) => {
-      if (active) unlisten = stopListening;
-      else stopListening();
-    }).catch(() => {});
-    return () => {
-      active = false;
-      unlisten?.();
-    };
-  }, [showToast]);
 
   useEffect(() => {
     let active = true;
@@ -330,15 +343,35 @@ export default function App() {
   useEffect(() => {
     let active = true;
     let unlisten: (() => void) | undefined;
+    void listenForReturnHome((event) => {
+      if (!active) return;
+      setControlCenterOpen(false);
+      setDiagnostics(false);
+      navigation.focusApp(0);
+      if (!event.restore.restored && event.restore.outcome !== "alreadyFocused") {
+        showToast(event.restore.message || "Windows zablokował powrót do VELORA. Użyj Alt+Tab.");
+      }
+    }).then((stopListening) => {
+      if (active) unlisten = stopListening;
+      else stopListening();
+    }).catch(() => {});
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [navigation.focusApp, showToast]);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
     void listenForManagedAppExit((exit) => {
       if (!active || exit.id !== "playniteFullscreen") return;
-      if (!exit.shouldFocus) {
-        showToast("Sesja Playnite zakończona. VELORA nie przejęła fokusu, bo aktywne było inne okno.");
-        return;
+      // Native WindowBroker already performed the single focus attempt. This
+      // event only supplies the UI notice; retrying focus here would duplicate
+      // the attempt and could show a misleading failure after a success.
+      if (exit.shouldFocus) {
+        showToast("Playnite został zamknięty. Wrócono do VELORA. Profil Gaming jest gotowy.");
       }
-      void focusWindowSafely(getCurrentWindow(), () => {
-        showToast("Playnite został zamknięty. Wróć do VELORA przez Alt+Tab.");
-      }, () => showToast("Wrócono do VELORA. Profil Gaming jest gotowy."));
     }).then((stopListening) => {
       if (active) unlisten = stopListening;
       else stopListening();

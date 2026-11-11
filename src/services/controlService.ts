@@ -9,6 +9,10 @@ export type ControlServiceStatus = {
   playstationControllerCount: number;
   foregroundProcess: string | null;
   returnHotkeyRegistered: boolean;
+  gamepadHomeRunning?: boolean;
+  gamepadHomeDeviceCount?: number;
+  gamepadHomeLastComboAtMs?: number | null;
+  gamepadHomeLastError?: string | null;
   lastError: string | null;
 };
 
@@ -22,6 +26,10 @@ export const disabledControlServiceStatus: ControlServiceStatus = {
   playstationControllerCount: 0,
   foregroundProcess: null,
   returnHotkeyRegistered: false,
+  gamepadHomeRunning: false,
+  gamepadHomeDeviceCount: 0,
+  gamepadHomeLastComboAtMs: null,
+  gamepadHomeLastError: null,
   lastError: null,
 };
 
