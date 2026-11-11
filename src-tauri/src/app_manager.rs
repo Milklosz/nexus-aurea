@@ -35,6 +35,28 @@ pub struct AppManagerSnapshot {
     pub games_error: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GamingDiagnostics {
+    pub windows: bool,
+    pub playnite_detected: bool,
+    pub gog_galaxy_detected: bool,
+    pub gog_galaxy_running_instances: Option<usize>,
+    pub gog_galaxy_process_error: Option<String>,
+    pub cyberpunk_install_detected: bool,
+    pub disk_space: Vec<DiskSpaceStatus>,
+    pub disk_space_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiskSpaceStatus {
+    pub drive: String,
+    pub available_bytes: Option<u64>,
+    pub total_bytes: Option<u64>,
+    pub error: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedGame {
@@ -151,6 +173,53 @@ pub fn get_app_manager_status() -> AppManagerSnapshot {
     }
 }
 
+/// Runs only when requested from Gaming Hub. Checks known install locations and
+/// fixed volumes; it does not crawl user files, inspect accounts, or launch apps.
+#[tauri::command]
+pub fn get_gaming_diagnostics() -> GamingDiagnostics {
+    #[cfg(target_os = "windows")]
+    {
+        let drives = fixed_drive_roots();
+        let (disk_space, disk_space_error) = match drives {
+            Ok(roots) => {
+                let results = roots.iter().map(|root| disk_space_status(root)).collect();
+                (results, None)
+            }
+            Err(error) => (Vec::new(), Some(error)),
+        };
+        let gog_galaxy_detected = first_existing(gog_galaxy_paths()).is_some();
+        let cyberpunk_install_detected = first_existing(cyberpunk_paths()).is_some();
+        let (gog_galaxy_running_instances, gog_galaxy_process_error) = match process_count("GalaxyClient.exe") {
+            Ok(count) => (Some(count), None),
+            Err(error) => (None, Some(error)),
+        };
+        GamingDiagnostics {
+            windows: true,
+            playnite_detected: playnite_path().is_some(),
+            gog_galaxy_detected,
+            gog_galaxy_running_instances,
+            gog_galaxy_process_error,
+            cyberpunk_install_detected,
+            disk_space,
+            disk_space_error,
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        GamingDiagnostics {
+            windows: false,
+            playnite_detected: false,
+            gog_galaxy_detected: false,
+            gog_galaxy_running_instances: None,
+            gog_galaxy_process_error: None,
+            cyberpunk_install_detected: false,
+            disk_space: Vec::new(),
+            disk_space_error: Some("Diagnostyka jest dostępna w natywnej aplikacji Windows.".into()),
+        }
+    }
+}
+
 #[tauri::command]
 pub fn launch_managed_app(app: AppHandle, id: String) -> Result<LaunchReceipt, String> {
     let spec = spec_for(&id).ok_or_else(|| "Aplikacja nie znajduje się na allowliście VELORA.".to_string())?;
@@ -257,13 +326,97 @@ fn steam_path() -> Option<PathBuf> {
 #[cfg(target_os = "windows")]
 fn playnite_path() -> Option<PathBuf> {
     let mut paths = Vec::new();
-    for key in ["LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"] {
-        if let Some(root) = std::env::var_os(key).map(PathBuf::from) {
-            paths.push(root.join("Playnite").join("Playnite.FullscreenApp.exe"));
-            paths.push(root.join("Programs").join("Playnite").join("Playnite.FullscreenApp.exe"));
-        }
+    for root in standard_install_roots() {
+        paths.push(root.join("Playnite").join("Playnite.FullscreenApp.exe"));
+        paths.push(root.join("Programs").join("Playnite").join("Playnite.FullscreenApp.exe"));
     }
     first_existing(paths)
+}
+
+#[cfg(target_os = "windows")]
+fn standard_install_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    for key in ["LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"] {
+        if let Some(root) = std::env::var_os(key).map(PathBuf::from) {
+            if !roots.contains(&root) { roots.push(root); }
+        }
+    }
+    if let Ok(drives) = fixed_drive_roots() {
+        for drive in drives {
+            for root in [
+                drive.clone(),
+                drive.join("Program Files"),
+                drive.join("Program Files (x86)"),
+            ] {
+                if !roots.contains(&root) { roots.push(root); }
+            }
+        }
+    }
+    roots
+}
+
+#[cfg(target_os = "windows")]
+fn gog_galaxy_paths() -> Vec<PathBuf> {
+    standard_install_roots().into_iter()
+        .map(|root| root.join("GOG Galaxy").join("GalaxyClient.exe"))
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn cyberpunk_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for root in standard_install_roots() {
+        paths.push(root.join("GOG Games").join("Cyberpunk 2077").join("bin").join("x64").join("Cyberpunk2077.exe"));
+        paths.push(root.join("GOG Galaxy").join("Games").join("Cyberpunk 2077").join("bin").join("x64").join("Cyberpunk2077.exe"));
+    }
+    paths
+}
+
+#[cfg(target_os = "windows")]
+fn fixed_drive_roots() -> Result<Vec<PathBuf>, String> {
+    use windows::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives};
+    use windows::core::PCWSTR;
+
+    let mask = unsafe { GetLogicalDrives() };
+    if mask == 0 {
+        return Err("Windows nie zwrócił listy dostępnych dysków.".into());
+    }
+    let mut roots = Vec::new();
+    for index in 0..26 {
+        if mask & (1 << index) == 0 { continue; }
+        let letter = char::from(b'A' + index as u8);
+        let root = format!("{letter}:\\");
+        let wide = root.encode_utf16().chain(std::iter::once(0)).collect::<Vec<_>>();
+        // DRIVE_FIXED = 3. Network and removable volumes are excluded to avoid
+        // triggering remote lookups or waiting for disconnected media.
+        if unsafe { GetDriveTypeW(PCWSTR(wide.as_ptr())) } == 3 {
+            roots.push(PathBuf::from(root));
+        }
+    }
+    Ok(roots)
+}
+
+#[cfg(target_os = "windows")]
+fn disk_space_status(root: &Path) -> DiskSpaceStatus {
+    use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    use windows::core::PCWSTR;
+
+    let drive = root.to_string_lossy().trim_end_matches('\\').to_string();
+    let wide = root.as_os_str().to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect::<Vec<_>>();
+    let mut available = 0u64;
+    let mut total = 0u64;
+    let result = unsafe {
+        GetDiskFreeSpaceExW(
+            PCWSTR(wide.as_ptr()),
+            Some(&mut available),
+            Some(&mut total),
+            None,
+        )
+    };
+    match result {
+        Ok(()) => DiskSpaceStatus { drive, available_bytes: Some(available), total_bytes: Some(total), error: None },
+        Err(_) => DiskSpaceStatus { drive, available_bytes: None, total_bytes: None, error: Some("Nie udało się odczytać wolnego miejsca.".into()) },
+    }
 }
 
 #[cfg(target_os = "windows")]

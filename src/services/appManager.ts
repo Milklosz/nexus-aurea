@@ -21,6 +21,22 @@ export type AppManagerSnapshot = {
   gamesError: string | null;
 };
 
+export type GamingDiagnostics = {
+  windows: boolean;
+  playniteDetected: boolean;
+  gogGalaxyDetected: boolean;
+  gogGalaxyRunningInstances: number | null;
+  gogGalaxyProcessError: string | null;
+  cyberpunkInstallDetected: boolean;
+  diskSpace: Array<{
+    drive: string;
+    availableBytes: number | null;
+    totalBytes: number | null;
+    error: string | null;
+  }>;
+  diskSpaceError: string | null;
+};
+
 export type LaunchReceipt = {
   id: string;
   alreadyRunning: boolean;
@@ -60,6 +76,11 @@ export const emptyAppManagerSnapshot: AppManagerSnapshot = {
 export async function getAppManagerStatus(): Promise<AppManagerSnapshot> {
   if (!isTauri()) return emptyAppManagerSnapshot;
   return invoke<AppManagerSnapshot>("get_app_manager_status");
+}
+
+export async function getGamingDiagnostics(): Promise<GamingDiagnostics> {
+  if (!isTauri()) throw new Error("Diagnostyka wymaga natywnej aplikacji Windows.");
+  return invoke<GamingDiagnostics>("get_gaming_diagnostics");
 }
 
 export async function launchManagedApp(id: ManagedAppId): Promise<LaunchReceipt> {

@@ -6,6 +6,16 @@ import { GamingHub } from "../components/GamingHub";
 const mocks = vi.hoisted(() => ({
   snapshot: null as any,
   getStatus: vi.fn(async () => mocks.snapshot),
+  getDiagnostics: vi.fn(async () => ({
+    windows: true,
+    playniteDetected: true,
+    gogGalaxyDetected: false,
+    gogGalaxyRunningInstances: 0,
+    gogGalaxyProcessError: null,
+    cyberpunkInstallDetected: false,
+    diskSpace: [{ drive: "C:", availableBytes: 50 * 1024 ** 3, totalBytes: 512 * 1024 ** 3, error: null }],
+    diskSpaceError: null,
+  })),
   launchApp: vi.fn(async (id: string) => ({ id, alreadyRunning: false, focusRestoreSupported: false })),
   launchGame: vi.fn(async (id: string) => ({ id, launched: true })),
   openPlayniteDownload: vi.fn(async () => {}),
@@ -14,6 +24,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../services/appManager", () => ({
   emptyAppManagerSnapshot: { windows: false, foregroundProcess: null, apps: [], games: [], gamesError: null },
   getAppManagerStatus: mocks.getStatus,
+  getGamingDiagnostics: mocks.getDiagnostics,
   launchManagedApp: mocks.launchApp,
   launchManagedGame: mocks.launchGame,
   managedAppErrorMessage: (cause: unknown) => cause instanceof Error ? cause.message : "App Manager error",
@@ -109,6 +120,20 @@ describe("Gaming Hub and App Manager integration", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Oficjalna strona Playnite" }));
     await waitFor(() => expect(mocks.openPlayniteDownload).toHaveBeenCalledOnce());
+  });
+
+  it("runs the on-demand local diagnostic and reports that ownership and readiness are unknown", async () => {
+    mocks.snapshot = windowsSnapshot([]);
+    render(<GamingHub onActivateGaming={vi.fn(async () => true)} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Diagnostyka tego komputera" }));
+
+    expect(await screen.findByText("Playnite: wykryto w sprawdzonych lokalizacjach")).toBeTruthy();
+    expect(screen.getByText("GOG Galaxy: nie wykryto w sprawdzonych lokalizacjach · nie działa")).toBeTruthy();
+    expect(screen.getByText("Cyberpunk 2077: nie wykryto plików instalacji w sprawdzonych lokalizacjach")).toBeTruthy();
+    expect(screen.getByText("Własność gry, logowanie GOG i gotowość do uruchomienia nie są sprawdzane.")).toBeTruthy();
+    expect(screen.getByText("C: 50 GB wolne z 512 GB")).toBeTruthy();
+    expect(mocks.getDiagnostics).toHaveBeenCalledOnce();
   });
 
   it("keeps a successful launcher result visible if its follow-up refresh fails", async () => {

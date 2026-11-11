@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import {
   emptyAppManagerSnapshot,
+  getGamingDiagnostics,
   getAppManagerStatus,
   launchManagedApp,
   launchManagedGame,
   managedAppErrorMessage,
   type AppManagerSnapshot,
+  type GamingDiagnostics,
   type ManagedAppId,
   type ManagedGame,
 } from "../services/appManager";
@@ -22,6 +24,9 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [diagnostics, setDiagnostics] = useState<GamingDiagnostics | null>(null);
+  const [diagnosticsBusy, setDiagnosticsBusy] = useState(false);
+  const [diagnosticsError, setDiagnosticsError] = useState("");
 
   const refresh = async () => {
     if (refreshRequestInFlight.current) return;
@@ -106,6 +111,21 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
     }
   };
 
+  const runDiagnostics = async () => {
+    if (diagnosticsBusy) return;
+    setDiagnosticsBusy(true);
+    setDiagnosticsError("");
+    try {
+      setDiagnostics(await getGamingDiagnostics());
+    } catch (cause) {
+      setDiagnosticsError(managedAppErrorMessage(cause, "Nie udało się wykonać diagnostyki komputera."));
+    } finally {
+      setDiagnosticsBusy(false);
+    }
+  };
+
+  const formatGiB = (bytes: number) => `${(bytes / 1024 ** 3).toLocaleString("pl-PL", { maximumFractionDigits: 1 })} GB`;
+
   if (loading && !snapshot.windows && !retrying) return <section className="gaming-hub" aria-label="VELORA Gaming Hub"><p role="status">Odczytuję stan App Managera…</p></section>;
 
   if (!snapshot.windows) return <section className="gaming-hub" aria-label="VELORA Gaming Hub">
@@ -164,6 +184,23 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
       <h4>GOG i Cyberpunk 2077</h4>
       <p>W Playnite wybierz integrację GOG podczas pierwszego uruchomienia albo w menu Add-ons → Browse → Libraries. Zaloguj się i sprawdź stan instalacji w Playnite lub oficjalnym kliencie, jeśli integracja tego wymaga; tam dokończ też ewentualną aktualizację lub instalację.</p>
       <p className="gaming-hub-note">VELORA nie zgaduje, czy Cyberpunk 2077 jest na koncie, zainstalowany lub gotowy, i nie pobiera gry. Ta lista obejmuje tylko gry Steam potwierdzone lokalnymi plikami instalacji. W Playnite możesz skonfigurować dostępne integracje Epic, EA App, Ubisoft Connect, Battle.net oraz Xbox/PC Game Pass; logowanie i wymagane launchery zależą od integracji.</p>
+      <div className="gaming-diagnostics">
+        <p>Sprawdza znane lokalizacje Playnite, GOG Galaxy i Cyberpunka oraz wolne miejsce na dyskach lokalnych. Nie skanuje całych dysków ani kont.</p>
+        <button type="button" aria-busy={diagnosticsBusy} disabled={diagnosticsBusy || busy !== null} onClick={() => void runDiagnostics()}>
+          {diagnosticsBusy ? "Sprawdzam…" : diagnostics ? "Sprawdź ponownie" : "Diagnostyka tego komputera"}
+        </button>
+        {diagnosticsError && <p role="alert">{diagnosticsError}</p>}
+        {diagnostics && <div className="gaming-diagnostics-results" aria-live="polite">
+          <p>Playnite: {diagnostics.playniteDetected ? "wykryto w sprawdzonych lokalizacjach" : "nie wykryto w sprawdzonych lokalizacjach"}</p>
+          <p>GOG Galaxy: {diagnostics.gogGalaxyDetected ? "wykryto" : "nie wykryto w sprawdzonych lokalizacjach"}{diagnostics.gogGalaxyRunningInstances === null ? " · nie można odczytać stanu procesu" : diagnostics.gogGalaxyRunningInstances > 0 ? ` · działa (${diagnostics.gogGalaxyRunningInstances})` : " · nie działa"}</p>
+          <p>Cyberpunk 2077: {diagnostics.cyberpunkInstallDetected ? "wykryto pliki instalacji w sprawdzonych lokalizacjach" : "nie wykryto plików instalacji w sprawdzonych lokalizacjach"}</p>
+          <p>Własność gry, logowanie GOG i gotowość do uruchomienia nie są sprawdzane.</p>
+          {diagnostics.diskSpace.map((disk) => <p key={disk.drive}>{disk.drive} {disk.availableBytes === null || disk.totalBytes === null ? disk.error : `${formatGiB(disk.availableBytes)} wolne z ${formatGiB(disk.totalBytes)}`}</p>)}
+          {diagnostics.diskSpaceError && <p role="alert">{diagnostics.diskSpaceError}</p>}
+          {diagnostics.gogGalaxyProcessError && <p role="alert">GOG Galaxy: {diagnostics.gogGalaxyProcessError}</p>}
+          {!diagnostics.diskSpaceError && diagnostics.diskSpace.length === 0 && <p>Nie znaleziono lokalnych dysków stałych.</p>}
+        </div>}
+      </div>
     </div>
     <button key="app-manager-refresh" type="button" aria-busy={loading} onClick={() => void refresh()} disabled={busy !== null}>
       {loading ? "Odświeżanie…" : "Odśwież biblioteki"}

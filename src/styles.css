@@ -133,6 +133,9 @@
 .gaming-hub-guidance, .gaming-platform-guidance { display: grid; gap: .5rem; padding: .7rem .8rem; border: 1px solid rgba(212, 180, 132, .2); border-radius: 12px; background: rgba(8,9,13,.28); }
 .gaming-hub-guidance p, .gaming-platform-guidance p { margin: 0; color: #d6cfc1; font-size: .78rem; line-height: 1.5; }
 .gaming-hub-guidance button { justify-self: start; }
+.gaming-diagnostics { display: grid; gap: .5rem; padding-top: .5rem; border-top: 1px solid rgba(212, 180, 132, .12); }
+.gaming-diagnostics-results { display: grid; gap: .35rem; padding: .6rem .7rem; border-radius: 9px; background: rgba(0,0,0,.2); }
+.gaming-diagnostics-results p { margin: 0; }
 .gaming-hub-note { color: #aaa399 !important; font-size: 10px !important; }
 .remote-access-status { display: grid; gap: .2rem; margin: .6rem 0; padding-left: 1.2rem; color: #c8c0b1; font-size: .85rem; }
 .remote-trust-confirmation { display: flex; align-items: flex-start; gap: .55rem; margin: .75rem 0; color: #d5cec1; font-size: .82rem; line-height: 1.45; }

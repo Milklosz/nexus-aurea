@@ -27,6 +27,7 @@ pub fn run() {
             remote_access::revoke_all_remote_devices,
             remote_access::revoke_remote_device,
             app_manager::get_app_manager_status,
+            app_manager::get_gaming_diagnostics,
             app_manager::launch_managed_app,
             app_manager::launch_managed_game,
             music_service::get_apple_music_status,
