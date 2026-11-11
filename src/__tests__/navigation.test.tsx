@@ -21,7 +21,20 @@ function NavigationHarness() {
   </>;
 }
 
-afterEach(() => { cleanup(); vi.clearAllMocks(); });
+function GridNavigationHarness({ columns = 3, count = 6 }: { columns?: number; count?: number }) {
+  const navigation = useNavigation(count, activate, openMenu, { columns });
+  return (
+    <nav>
+      {Array.from({ length: count }, (_, index) => <button
+        key={index}
+        ref={(element) => { navigation.buttonRefs.current[index] = element; }}
+        type="button"
+      >App {index + 1}</button>)}
+    </nav>
+  );
+}
+
+afterEach(() => { cleanup(); vi.clearAllMocks(); delete document.body.dataset.focusSource; });
 
 describe("TV home navigation", () => {
   it("moves through the dock and between the dock and quick settings with arrows", async () => {
@@ -107,5 +120,34 @@ describe("TV home navigation", () => {
 
     expect(shouldUseNativeDialogArrowKey(textInput)).toBe(true);
     expect(shouldUseNativeDialogArrowKey(checkbox)).toBe(false);
+  });
+});
+
+describe("useNavigation — optional 2D columns mode", () => {
+  it("moves a full row with ArrowDown/ArrowUp instead of the quick-settings shortcut", async () => {
+    render(<GridNavigationHarness columns={3} />);
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "App 1" })));
+    act(() => { fireEvent.keyDown(window, { key: "ArrowDown" }); });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "App 4" }));
+    act(() => { fireEvent.keyDown(window, { key: "ArrowUp" }); });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "App 1" }));
+  });
+
+  it("clamps vertical 2D movement at the first and last row", async () => {
+    render(<GridNavigationHarness columns={3} />);
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "App 1" })));
+    act(() => { fireEvent.keyDown(window, { key: "ArrowUp" }); });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "App 1" }));
+    act(() => { fireEvent.keyDown(window, { key: "ArrowDown" }); });
+    act(() => { fireEvent.keyDown(window, { key: "ArrowDown" }); });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "App 6" }));
+  });
+
+  it("keeps left/right using focusApp and flags the keyboard focus source", async () => {
+    render(<GridNavigationHarness columns={3} />);
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "App 1" })));
+    act(() => { fireEvent.keyDown(window, { key: "ArrowRight" }); });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "App 2" }));
+    expect(document.body.dataset.focusSource).toBe("keyboard");
   });
 });
