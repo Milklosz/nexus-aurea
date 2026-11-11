@@ -68,10 +68,15 @@ export function ControlServicePanel() {
   const runAction = async (action: () => Promise<ControlServiceStatus>) => {
     setBusy(true);
     setError("");
-    setNotice("");
+    setNotice("Aktualizuję Control Service…");
     try {
-      setStatus(await action());
+      const nextStatus = await action();
+      setStatus(nextStatus);
+      setNotice(nextStatus.gameMode
+        ? "Control Service: tryb gry włączony."
+        : nextStatus.running ? "Control Service jest aktywny." : "Control Service jest wyłączony.");
     } catch (cause) {
+      setNotice("");
       setError(cause instanceof Error ? cause.message : "Control Service nie wykonał polecenia.");
     } finally {
       setBusy(false);
@@ -97,6 +102,7 @@ export function ControlServicePanel() {
         <div className="launcher-actions">
           <button
             type="button"
+            aria-busy={busy}
             disabled={busy}
             onClick={() => void runAction(status.running ? stopControlService : startControlService)}
           >
@@ -104,6 +110,7 @@ export function ControlServicePanel() {
           </button>
           <button
             type="button"
+            aria-busy={busy}
             disabled={busy || !status.running}
             onClick={() => void runAction(() => setControlGameMode(!status.gameMode))}
           >
@@ -113,7 +120,7 @@ export function ControlServicePanel() {
         <p>Ctrl+Alt+N wraca do VELORA. Ctrl+Alt+F12 natychmiast wyłącza usługę. Tryb gry zwalnia skrót powrotu i pozostawia wyłącznie awaryjne wyłączenie.</p>
         <p>Globalne mapowanie przycisków, ruch kursora i głośność są wyłączone w tym prototypie. Nie odczytujemy raportów pada.</p>
         {error && <p role="alert">{error}</p>}
-        {notice && <p role="status">{notice}</p>}
+        <p className="control-service-notice" role="status" aria-live="polite">{notice}</p>
       </>}
   </section>;
 }

@@ -86,6 +86,7 @@
 .launcher-panel { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #806e49; }
 .control-service { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #806e49; }
 .control-service p { max-width: 70rem; }
+.control-service-notice:empty { margin: 0; }
 .launcher-actions { display: flex; flex-wrap: wrap; gap: .7rem; }
 .diagnostics button:focus-visible { outline: 2px solid #e4c37c; outline-offset: 3px; }
 .diagnostics button:disabled { cursor: not-allowed; opacity: .5; }

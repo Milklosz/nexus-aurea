@@ -83,6 +83,33 @@ describe("Control Service diagnostics", () => {
     expect(screen.getByText(/Ctrl\+Alt\+F12/)).toBeTruthy();
   });
 
+  it("announces a pending Control Service action and marks controls busy", async () => {
+    let resolveStart!: (nextStatus: ControlServiceStatus) => void;
+    mocks.start.mockImplementationOnce(() => new Promise((resolve) => { resolveStart = resolve; }));
+    render(<ControlServicePanel />);
+    const startButton = await screen.findByRole("button", { name: "Włącz monitoring sesji" });
+
+    fireEvent.click(startButton);
+
+    await waitFor(() => expect(screen.getByText("Aktualizuję Control Service…")).toBeTruthy());
+    expect(startButton.getAttribute("aria-busy")).toBe("true");
+    expect(startButton.hasAttribute("disabled")).toBe(true);
+
+    resolveStart(status({ running: true, returnHotkeyRegistered: true }));
+
+    await waitFor(() => expect(screen.getByText("Control Service jest aktywny.")).toBeTruthy());
+    expect(startButton.getAttribute("aria-busy")).toBe("false");
+  });
+
+  it("clears the pending announcement after a Control Service action fails", async () => {
+    mocks.start.mockRejectedValueOnce(new Error("Control Service odmówił uruchomienia."));
+    render(<ControlServicePanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Włącz monitoring sesji" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain("Control Service odmówił uruchomienia.");
+    expect(document.querySelector(".control-service-notice")?.textContent).toBe("");
+  });
+
   it("unregisters the return shortcut in game mode", async () => {
     mocks.status = status({ running: true, returnHotkeyRegistered: true });
     render(<ControlServicePanel />);
