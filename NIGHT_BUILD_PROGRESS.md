@@ -57,6 +57,11 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - Checksum sidecar: `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-92d942a17173f8af3e244995d9c409df94716897-SHA256.txt`.
 - No installer was executed or installed; the existing MSI installation remains untouched.
 
+## External integration checks
+
+- The HBO Max launcher uses the official Polish page at [hbomax.com/pl/pl](https://www.hbomax.com/pl/pl).
+- RustDesk was not detected as installed (command, common install paths, or uninstall entries). Mac remote-control setup is `NOT CONFIGURED`; development continues without it.
+
 ## Blockers
 
 - Codex artifact attachment for PR #13 did not return; the Draft PR remains available at the link above.
@@ -67,4 +72,4 @@ Updated: 2026-11-11 (Europe/Warsaw)
 
 ## Next step
 
-Review the Draft PR summary and stage-17 Windows artifact record, then continue with another small VELORA navigation or Remote improvement and regression test. Keep GUI review marked `NOT TESTED` unless a supported, policy-compliant path becomes available; keep iPhone Remote safely disabled by default.
+Continue with another small VELORA navigation or Remote improvement and regression test. Keep GUI review marked `NOT TESTED` unless a supported, policy-compliant path becomes available; keep iPhone Remote safely disabled by default.
