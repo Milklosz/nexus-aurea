@@ -65,6 +65,7 @@ export function ControlCenter(props: ControlCenterProps) {
   const [remoteStatusLoading, setRemoteStatusLoading] = useState(true);
   const [remoteStatusError, setRemoteStatusError] = useState("");
   const remoteStatusRequestId = useRef(0);
+  const remoteStatusRequestInFlight = useRef(false);
   const [remoteBusy, setRemoteBusy] = useState(false);
   const [trustConfirmed, setTrustConfirmed] = useState(false);
   const [remoteError, setRemoteError] = useState("");
@@ -73,6 +74,8 @@ export function ControlCenter(props: ControlCenterProps) {
   const [notice, setNotice] = useState("");
 
   const readRemoteStatus = async (isActive: () => boolean = () => true) => {
+    if (remoteStatusRequestInFlight.current) return;
+    remoteStatusRequestInFlight.current = true;
     const requestId = ++remoteStatusRequestId.current;
     setRemoteStatusLoading(true);
     setRemoteStatusError("");
@@ -88,7 +91,10 @@ export function ControlCenter(props: ControlCenterProps) {
         setRemoteStatusError("Nie udało się odczytać bezpiecznego stanu iPhone Remote. Sterowanie pozostaje wyłączone.");
       }
     } finally {
-      if (isActive() && requestId === remoteStatusRequestId.current) setRemoteStatusLoading(false);
+      if (isActive() && requestId === remoteStatusRequestId.current) {
+        setRemoteStatusLoading(false);
+        remoteStatusRequestInFlight.current = false;
+      }
     }
   };
 
@@ -138,6 +144,7 @@ export function ControlCenter(props: ControlCenterProps) {
     void listenForRemoteAccessStatus((next) => {
       if (active) {
         remoteStatusRequestId.current += 1;
+        remoteStatusRequestInFlight.current = false;
         setRemoteStatus(next);
         setRemoteStatusReady(true);
         setRemoteStatusLoading(false);
@@ -150,6 +157,7 @@ export function ControlCenter(props: ControlCenterProps) {
     return () => {
       active = false;
       remoteStatusRequestId.current += 1;
+      remoteStatusRequestInFlight.current = false;
       unlisten?.();
     };
   }, []);
@@ -341,8 +349,8 @@ export function ControlCenter(props: ControlCenterProps) {
           {!remoteStatusReady && <p className={remoteStatusError ? "cc-feedback cc-error" : "cc-feedback"} role={remoteStatusError ? "alert" : "status"}>
             {remoteStatusLoading ? "Odczytuję bezpieczny stan iPhone Remote…" : remoteStatusError}
           </p>}
-          {remoteStatusError && <button type="button" disabled={remoteStatusLoading} onClick={() => void readRemoteStatus()}>
-            Ponów odczyt statusu
+          {!remoteStatusReady && (remoteStatusLoading || remoteStatusError) && <button type="button" aria-busy={remoteStatusLoading} disabled={remoteStatusLoading} onClick={() => void readRemoteStatus()}>
+            {remoteStatusLoading ? "Odczytuję…" : "Ponów odczyt statusu"}
           </button>}
           {remoteStatusReady && !remoteStatus.enabled && <div className="cc-remote-actions">
             <button type="button" disabled={!remoteStatusReady || remoteBusy} onClick={() => void runRemoteAction(

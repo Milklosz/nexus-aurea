@@ -175,6 +175,41 @@ describe("Control Center", () => {
     expect(mocks.getRemoteStatus).toHaveBeenCalledTimes(2);
   });
 
+  it("deduplicates secure status retries and preserves retry focus while pending", async () => {
+    setupDialog();
+    mocks.getRemoteStatus.mockRejectedValueOnce(new Error("status unavailable"));
+    renderCenter();
+    fireEvent.click(screen.getByRole("tab", { name: "iPhone Remote" }));
+
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    const retryButton = screen.getByRole("button", { name: "Ponów odczyt statusu" });
+    retryButton.focus();
+    expect(document.activeElement).toBe(retryButton);
+
+    let resolveStatus!: (status: typeof mocks.remoteStatus) => void;
+    mocks.getRemoteStatus.mockImplementationOnce(() => new Promise((resolve) => { resolveStatus = resolve; }));
+    act(() => {
+      fireEvent.click(retryButton);
+      fireEvent.click(retryButton);
+    });
+
+    expect(screen.getByRole("button", { name: "Odczytuję…" })).toBe(retryButton);
+    expect(retryButton.getAttribute("aria-busy")).toBe("true");
+    expect(document.activeElement).toBe(retryButton);
+    expect(mocks.getRemoteStatus).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("button", { name: "Przygotuj profil zaufania iPhone'a" })).toBeNull();
+    expect(mocks.beginRemotePairing).not.toHaveBeenCalled();
+    expect(mocks.startRemoteAccess).not.toHaveBeenCalled();
+
+    resolveStatus(mocks.remoteStatus);
+
+    expect(await screen.findByRole("button", { name: "Przygotuj profil zaufania iPhone'a" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Ponów odczyt statusu" })).toBeNull();
+    expect(mocks.getRemoteStatus).toHaveBeenCalledTimes(2);
+    expect(mocks.beginRemotePairing).not.toHaveBeenCalled();
+    expect(mocks.startRemoteAccess).not.toHaveBeenCalled();
+  });
+
   it("keeps one panel visible and supports remote left-right tab navigation", async () => {
     setupDialog();
     renderCenter();
