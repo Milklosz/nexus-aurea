@@ -45,13 +45,15 @@ describe("VELORA iPhone Remote", () => {
     expect(manifest.scope).toBe("./");
     expect(html).toContain('name="apple-mobile-web-app-capable"');
     const serviceWorker = readFileSync("public/remote/sw.js", "utf8");
-    expect(serviceWorker).toContain("nexus-aurea-remote-v0.9.2-velora-storage-guard-1");
+    expect(serviceWorker).toContain("nexus-aurea-remote-v0.9.2-velora-resume-status-1");
     expect(serviceWorker).toContain('key.startsWith("nexus-aurea-remote-")');
     expect(serviceWorker).toContain("self.skipWaiting()");
   });
 
   it("keeps pairing and commands disabled when secure key storage cannot be read", async () => {
     const listeners = new Map<string, (event: { preventDefault: () => void }) => void>();
+    const documentListeners = new Map<string, () => void>();
+    const documentState = { visibilityState: "hidden" };
     const element = (initial: Partial<{ hidden: boolean; disabled: boolean; textContent: string; value: string }> = {}) => ({
       hidden: initial.hidden ?? false,
       disabled: initial.disabled ?? false,
@@ -96,8 +98,10 @@ describe("VELORA iPhone Remote", () => {
     runInNewContext(script, {
       window,
       document: {
+        get visibilityState() { return documentState.visibilityState; },
         getElementById: (id: string) => elements.get(id),
         querySelectorAll: () => commandButtons,
+        addEventListener: vi.fn((type: string, listener: () => void) => documentListeners.set(type, listener)),
       },
       navigator: { onLine: true, serviceWorker: { register: async () => {} } },
       indexedDB,
@@ -122,5 +126,15 @@ describe("VELORA iPhone Remote", () => {
     expect(elements.get("pairing-state")?.textContent).toContain("pamięć klucza niedostępna");
     expect(elements.get("remote-message")?.textContent).toContain("Parowanie i polecenia pozostają wyłączone");
     expect(fetch).toHaveBeenCalledTimes(1);
+
+    documentState.visibilityState = "hidden";
+    documentListeners.get("visibilitychange")?.();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    documentState.visibilityState = "visible";
+    documentListeners.get("visibilitychange")?.();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(elements.get("pairing-form")?.hidden).toBe(true);
+    expect(commandButtons[0].disabled).toBe(true);
   });
 });
