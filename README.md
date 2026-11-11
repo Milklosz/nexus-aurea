@@ -139,3 +139,9 @@ MusicKit / Apple Music API is a future option for catalog and personal-library f
 - CI REQUIRED: Windows and macOS Rust checks, including the native Windows SMTC code, and the Windows NSIS installer artifact.
 - NOT TESTED: Apple Music SMTC metadata/commands, full-screen media presentation, JBL volume routing, Bluetooth latency, PlayStation navigation through Music Mode, Panasonic display rendering, and any Apple Music/MusicKit authentication or playback.
 - NOT IMPLEMENTED: album artwork, lyrics, current endpoint name, endpoint selection, Bluetooth pairing/latency, and an Apple Music-specific MediaKit streaming client.
+
+## VELORA 1.0 RC core — session, windows and DualSense Home
+
+The `feat/velora-v1-core` Draft PR adds a native session model (`veloraHome`, `game`, `playnite`, `cinema`, `desktop`, `ambient`), an explicit transition table, HWND-based window tracking, safe focus restoration, a unified Playnite/Steam/game launch registry, and an opt-in DualSense PS + Options return path inside Control Service. The gamepad listener uses passive Windows Raw Input for Sony DualSense reports only; it installs no driver, global hook or emulator, and it does not block game input. When Windows, firmware or Steam Input hides the device or denies foreground activation, `Ctrl+Alt+N` remains the fallback.
+
+Architecture, event contracts, tested guarantees, known limitations and the MSI acceptance procedure are in [docs/velora-v1-core.md](docs/velora-v1-core.md). Physical DualSense, Playnite focus return and Steam Input coexistence remain manual MSI checks; synthetic CI tests do not prove them.
