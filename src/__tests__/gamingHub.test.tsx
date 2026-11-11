@@ -80,6 +80,31 @@ describe("Gaming Hub and App Manager integration", () => {
     await waitFor(() => expect(mocks.launchApp).toHaveBeenCalledWith("playniteFullscreen"));
   });
 
+  it("announces the successful launcher result after its follow-up refresh", async () => {
+    mocks.snapshot = windowsSnapshot([]);
+    mocks.snapshot.apps[1].installed = true;
+    render(<GamingHub onActivateGaming={vi.fn(async () => true)} />);
+    const launchButton = await screen.findByRole("button", { name: "Fullscreen" });
+
+    fireEvent.click(launchButton);
+
+    expect(await screen.findByText("Wysłano żądanie uruchomienia Playnite Fullscreen.")).toBeTruthy();
+    expect(mocks.getStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears the previous launch notice when a manual library refresh fails", async () => {
+    mocks.snapshot = windowsSnapshot();
+    render(<GamingHub onActivateGaming={vi.fn(async () => true)} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Uruchom" }));
+    expect(await screen.findByText("Wysłano żądanie uruchomienia Team Fortress 2 przez Steam.")).toBeTruthy();
+
+    mocks.getStatus.mockRejectedValueOnce(new Error("Nie można odświeżyć bibliotek."));
+    fireEvent.click(screen.getByRole("button", { name: "Odśwież biblioteki" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain("Nie można odświeżyć bibliotek.");
+    expect(screen.queryByText("Wysłano żądanie uruchomienia Team Fortress 2 przez Steam.")).toBeNull();
+  });
+
   it("reports missing launchers and an unavailable Steam library without inventing games", async () => {
     mocks.snapshot = {
       ...windowsSnapshot([]),

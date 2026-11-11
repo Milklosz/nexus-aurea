@@ -21,6 +21,7 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
 
   const refresh = async () => {
     setError("");
+    setNotice("");
     setLoading(true);
     try {
       setSnapshot(await getAppManagerStatus());
@@ -47,10 +48,11 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
     try {
       if (!await onActivateGaming()) throw new Error("Nie udało się wybrać profilu Gaming.");
       const receipt = await launchManagedApp(id);
-      setNotice(receipt.alreadyRunning
+      const launchNotice = receipt.alreadyRunning
         ? "Aplikacja już działa. VELORA nie wymusza przełączenia fokusu."
-        : "Wysłano żądanie uruchomienia " + (id === "steamBigPicture" ? "Steam Big Picture." : "Playnite Fullscreen."));
+        : "Wysłano żądanie uruchomienia " + (id === "steamBigPicture" ? "Steam Big Picture." : "Playnite Fullscreen.");
       await refresh();
+      setNotice(launchNotice);
     } catch (cause) {
       setNotice("");
       setError(managedAppErrorMessage(cause));
