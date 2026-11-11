@@ -10,6 +10,7 @@
     record: null,
   };
   let statusRequestId = 0;
+  let commandRequestId = 0;
   const connection = document.getElementById("connection-state");
   const server = document.getElementById("server-state");
   const origin = document.getElementById("origin-state");
@@ -267,6 +268,7 @@
 
   async function sendCommand(command) {
     if (!state.storageReady || !state.record || state.inFlight || !navigator.onLine) return;
+    const requestId = ++commandRequestId;
     state.inFlight = true;
     const commandLabel = commandLabels[command] || "polecenie";
     showMessage("Wysyłam: " + commandLabel + "…");
@@ -276,12 +278,14 @@
     record.sequence = sequence;
     try {
       await writeRecord(record);
+      if (requestId !== commandRequestId) return;
       const payload = ["NEXUS-AUREA-REMOTE-V1", record.deviceId, String(sequence), command].join("\n");
       const signature = await crypto.subtle.sign(
         "HMAC",
         record.key,
         new TextEncoder().encode(payload),
       );
+      if (requestId !== commandRequestId) return;
       const response = await fetch("./api/command", {
         method: "POST",
         cache: "no-store",
@@ -295,8 +299,10 @@
           signature: bytesToBase64Url(new Uint8Array(signature)),
         }),
       });
+      if (requestId !== commandRequestId) return;
       if (response.status === 401) {
         await clearRecord();
+        if (requestId !== commandRequestId) return;
         state.record = null;
         state.paired = false;
         pairingForm.hidden = false;
@@ -309,7 +315,9 @@
         showMessage("Wysłano: " + commandLabel + ".");
       }
     } catch {
-      showMessage("Połączenie przerwane. Polecenie nie zostało automatycznie ponowione.", true);
+      if (requestId === commandRequestId) {
+        showMessage("Połączenie przerwane. Polecenie nie zostało automatycznie ponowione.", true);
+      }
     } finally {
       state.inFlight = false;
       updateControls();
@@ -334,6 +342,7 @@
 
   window.addEventListener("offline", () => {
     statusRequestId += 1;
+    commandRequestId += 1;
     showOfflineStatus();
   });
   window.addEventListener("online", () => void refreshStatus());

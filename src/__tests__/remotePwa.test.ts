@@ -45,7 +45,7 @@ describe("VELORA iPhone Remote", () => {
     expect(manifest.scope).toBe("./");
     expect(html).toContain('name="apple-mobile-web-app-capable"');
     const serviceWorker = readFileSync("public/remote/sw.js", "utf8");
-    expect(serviceWorker).toContain("nexus-aurea-remote-v0.9.2-velora-command-feedback-3");
+    expect(serviceWorker).toContain("nexus-aurea-remote-v0.9.2-velora-offline-command-4");
     expect(serviceWorker).toContain('key.startsWith("nexus-aurea-remote-")');
     expect(serviceWorker).toContain("self.skipWaiting()");
   });
@@ -199,15 +199,20 @@ describe("VELORA iPhone Remote", () => {
     };
     let resolveCommand!: (response: { ok: boolean; status: number }) => void;
     const pendingCommand = new Promise<{ ok: boolean; status: number }>((resolve) => { resolveCommand = resolve; });
+    let resolveLateCommand!: (response: { ok: boolean; status: number }) => void;
+    const lateCommand = new Promise<{ ok: boolean; status: number }>((resolve) => { resolveLateCommand = resolve; });
+    let commandRequestCount = 0;
+    const navigatorState = { onLine: true, serviceWorker: { register: async () => {} } };
+    const windowListeners = new Map<string, () => void>();
     const fetch = vi.fn((url: string) => url === "./api/status"
       ? Promise.resolve({ ok: true, status: 200, json: async () => ({ enabled: true, pairedDeviceCount: 1 }) })
-      : pendingCommand);
+      : (++commandRequestCount === 1 ? pendingCommand : lateCommand));
     const window = {
       isSecureContext: true,
       location: { protocol: "https:" },
       crypto: { subtle: { sign: async () => new Uint8Array([1]).buffer } },
       indexedDB,
-      addEventListener: vi.fn(),
+      addEventListener: vi.fn((type: string, listener: () => void) => windowListeners.set(type, listener)),
     };
 
     runInNewContext(script, {
@@ -218,7 +223,7 @@ describe("VELORA iPhone Remote", () => {
         querySelectorAll: () => [commandButton],
         addEventListener: vi.fn(),
       },
-      navigator: { onLine: true, serviceWorker: { register: async () => {} } },
+      navigator: navigatorState,
       indexedDB,
       fetch,
       crypto: { getRandomValues: vi.fn(), subtle: { sign: async () => new Uint8Array([1]).buffer } },
@@ -245,6 +250,17 @@ describe("VELORA iPhone Remote", () => {
     await new Promise((resolve) => setImmediate(resolve));
     expect(elements.get("remote-message")?.textContent).toBe("Wysłano: Home.");
     expect(commandButton.disabled).toBe(false);
+
+    listeners.get("click")?.();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(fetch).toHaveBeenCalledTimes(3);
+    navigatorState.onLine = false;
+    windowListeners.get("offline")?.();
+    expect(elements.get("remote-message")?.textContent).toContain("iPhone jest offline");
+    resolveLateCommand({ ok: true, status: 200 });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(elements.get("remote-message")?.textContent).toContain("iPhone jest offline");
+    expect(commandButton.disabled).toBe(true);
   });
 
   it("does not let a pending status check overwrite the offline state", async () => {
