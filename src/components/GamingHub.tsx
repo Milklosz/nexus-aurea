@@ -83,6 +83,7 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
   if (!snapshot.windows) return <section className="gaming-hub" aria-label="VELORA Gaming Hub">
     <p>Wykrywanie bibliotek gier wymaga natywnego App Managera Windows. Podgląd webowy pozostaje tylko do odczytu.</p>
     {error && <p role="alert">{error}</p>}
+    {notice && <p role="status" aria-live="polite">{notice}</p>}
     <button type="button" onClick={() => void refresh()}>Spróbuj ponownie</button>
   </section>;
 

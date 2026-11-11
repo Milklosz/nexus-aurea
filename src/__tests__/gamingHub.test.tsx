@@ -80,14 +80,16 @@ describe("Gaming Hub and App Manager integration", () => {
     await waitFor(() => expect(mocks.launchApp).toHaveBeenCalledWith("playniteFullscreen"));
   });
 
-  it("announces the successful launcher result after its follow-up refresh", async () => {
+  it("keeps a successful launcher result visible if its follow-up refresh fails", async () => {
     mocks.snapshot = windowsSnapshot([]);
     mocks.snapshot.apps[1].installed = true;
     render(<GamingHub onActivateGaming={vi.fn(async () => true)} />);
     const launchButton = await screen.findByRole("button", { name: "Fullscreen" });
 
+    mocks.getStatus.mockRejectedValueOnce(new Error("Nie udało się odświeżyć bibliotek."));
     fireEvent.click(launchButton);
 
+    expect((await screen.findByRole("alert")).textContent).toContain("Nie udało się odświeżyć bibliotek.");
     expect(await screen.findByText("Wysłano żądanie uruchomienia Playnite Fullscreen.")).toBeTruthy();
     expect(mocks.getStatus).toHaveBeenCalledTimes(2);
   });
