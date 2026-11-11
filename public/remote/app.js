@@ -268,7 +268,8 @@
   async function sendCommand(command) {
     if (!state.storageReady || !state.record || state.inFlight || !navigator.onLine) return;
     state.inFlight = true;
-    showMessage("Wysyłam: " + (commandLabels[command] || "polecenie") + "…");
+    const commandLabel = commandLabels[command] || "polecenie";
+    showMessage("Wysyłam: " + commandLabel + "…");
     updateControls();
     const record = state.record;
     const sequence = record.sequence + 1;
@@ -305,7 +306,7 @@
       } else if (!response.ok) {
         showMessage("VELORA odrzuciła polecenie. Połączenie pozostaje zabezpieczone.", true);
       } else {
-        showMessage("Wysłano: " + command + ".");
+        showMessage("Wysłano: " + commandLabel + ".");
       }
     } catch {
       showMessage("Połączenie przerwane. Polecenie nie zostało automatycznie ponowione.", true);

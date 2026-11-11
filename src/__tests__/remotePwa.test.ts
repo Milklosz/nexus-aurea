@@ -45,7 +45,7 @@ describe("VELORA iPhone Remote", () => {
     expect(manifest.scope).toBe("./");
     expect(html).toContain('name="apple-mobile-web-app-capable"');
     const serviceWorker = readFileSync("public/remote/sw.js", "utf8");
-    expect(serviceWorker).toContain("nexus-aurea-remote-v0.9.2-velora-command-status-2");
+    expect(serviceWorker).toContain("nexus-aurea-remote-v0.9.2-velora-command-feedback-3");
     expect(serviceWorker).toContain('key.startsWith("nexus-aurea-remote-")');
     expect(serviceWorker).toContain("self.skipWaiting()");
   });
@@ -243,7 +243,7 @@ describe("VELORA iPhone Remote", () => {
 
     resolveCommand({ ok: true, status: 200 });
     await new Promise((resolve) => setImmediate(resolve));
-    expect(elements.get("remote-message")?.textContent).toBe("Wysłano: home.");
+    expect(elements.get("remote-message")?.textContent).toBe("Wysłano: Home.");
     expect(commandButton.disabled).toBe(false);
   });
 
