@@ -74,6 +74,32 @@ describe("TV home navigation", () => {
     expect(getDialogNavigationControls(dialog)).toEqual([visible]);
   });
 
+  it("skips dialog controls hidden by CSS layout and visibility", () => {
+    const dialog = document.createElement("dialog");
+    const visible = document.createElement("button");
+    const displayNoneRegion = document.createElement("section");
+    displayNoneRegion.style.display = "none";
+    displayNoneRegion.append(document.createElement("button"));
+    const hiddenRegion = document.createElement("section");
+    hiddenRegion.style.visibility = "hidden";
+    hiddenRegion.append(document.createElement("button"));
+    dialog.append(visible, displayNoneRegion, hiddenRegion);
+
+    const styleSpy = vi.spyOn(window, "getComputedStyle").mockImplementation((element) => {
+      const target = element as HTMLElement;
+      let visibility = target.style.visibility;
+      for (let ancestor = target.parentElement; !visibility && ancestor; ancestor = ancestor.parentElement) {
+        visibility = ancestor.style.visibility;
+      }
+      return { display: target.style.display, visibility } as CSSStyleDeclaration;
+    });
+    try {
+      expect(getDialogNavigationControls(dialog)).toEqual([visible]);
+    } finally {
+      styleSpy.mockRestore();
+    }
+  });
+
   it("keeps native arrow editing in text controls and navigates from checkboxes", () => {
     const textInput = document.createElement("input");
     const checkbox = document.createElement("input");
