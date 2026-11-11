@@ -5,7 +5,8 @@ Updated: 2026-11-11 (Europe/Warsaw)
 ## Current branch and commits
 
 - Active branch: `feat/velora-night-build-2`.
-- Latest tested implementation commit: local `3d9c78533126fa679a2f3828b35d3e27b77c94bd`; Stage 32 is locally tested and committed, with GitHub publication pending.
+- Latest tested implementation commit: local `3d9c78533126fa679a2f3828b35d3e27b77c94bd`, published as `91ddcbf4804c7cd5a7454a5976e4b91a7dc7f5a7`; their trees match.
+- Latest progress checkpoint: local `1797fce1177592688c6829f609a71e17aed412dd`, published as `cfe8a351f66c4a022b4dfbe3dee8875810d1519b`; their trees match.
 - Local stage-32 implementation commit is preserved under `refs/codex/local/gaming-hub-retry-focus-stage-32`.
 - Local stage-31 implementation commit is preserved under `refs/codex/local/gaming-hub-refresh-feedback-stage-31`.
 - Local stage-30 implementation commit is preserved under `refs/codex/local/control-service-listener-diagnostics-stage-30`.
@@ -76,6 +77,7 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - Stage 28 GitHub Actions runs [43054012947](https://github.com/Milklosz/nexus-aurea/actions/runs/43054012947) (PR) and [43053998764](https://github.com/Milklosz/nexus-aurea/actions/runs/43053998764) (push) passed on Windows and macOS.
 - Stage 30 Actions runs [43055651446](https://github.com/Milklosz/nexus-aurea/actions/runs/43055651446) (PR) and [43055634481](https://github.com/Milklosz/nexus-aurea/actions/runs/43055634481) (push) passed on Windows and macOS.
 - Stage 31 GitHub Actions runs [43057193890](https://github.com/Milklosz/nexus-aurea/actions/runs/43057193890) (PR) and [43057181243](https://github.com/Milklosz/nexus-aurea/actions/runs/43057181243) (push) passed on Windows and macOS.
+- Stage 32 GitHub Actions runs [43059553007](https://github.com/Milklosz/nexus-aurea/actions/runs/43059553007) (PR) and [43059538714](https://github.com/Milklosz/nexus-aurea/actions/runs/43059538714) (push) are running on Windows and macOS.
 - Stage 29 GitHub Actions runs [43054839359](https://github.com/Milklosz/nexus-aurea/actions/runs/43054839359) (PR) and [43054826843](https://github.com/Milklosz/nexus-aurea/actions/runs/43054826843) (push) passed on Windows and macOS.
 - The currently installed MSI copy was only opened for visual inspection. Its Control Center is the older long-list layout; it was closed afterward. No installed files or settings were changed.
 
@@ -134,4 +136,4 @@ Updated: 2026-11-11 (Europe/Warsaw)
 
 ## Next step
 
-Stage 32 is locally tested and committed; GitHub publication and CI are pending. Next, verify the published tree and CI, refresh the recovery archive, then continue with an independent Gaming Hub accessibility improvement. Keep GUI review marked `NOT TESTED`; keep iPhone Remote safely disabled by default.
+Stage 32 is locally tested, committed, and published; GitHub Actions are running. Branch comparison is 77 commits ahead and 0 behind, with exact merge base `6dbcc36abeded18b753a134bc8ede10fb37df391`. Next, verify CI and refresh the recovery archive, then keep the main Gaming Hub library-refresh control mounted, focused, and marked busy while a status refresh is pending. Keep GUI review marked `NOT TESTED`; keep iPhone Remote safely disabled by default.
