@@ -12,6 +12,10 @@ pub struct ControlServiceStatus {
     pub playstation_controller_count: usize,
     pub foreground_process: Option<String>,
     pub return_hotkey_registered: bool,
+    pub gamepad_home_running: bool,
+    pub gamepad_home_device_count: usize,
+    pub gamepad_home_last_combo_at_ms: Option<u64>,
+    pub gamepad_home_last_error: Option<String>,
     pub last_error: Option<String>,
 }
 
@@ -25,6 +29,10 @@ impl ControlServiceStatus {
             playstation_controller_count: 0,
             foreground_process: None,
             return_hotkey_registered: false,
+            gamepad_home_running: false,
+            gamepad_home_device_count: 0,
+            gamepad_home_last_combo_at_ms: None,
+            gamepad_home_last_error: None,
             last_error: None,
         }
     }
@@ -41,20 +49,6 @@ fn is_playstation_controller(vendor_id: u32, usage_page: u16, usage: u16) -> boo
 pub(crate) fn foreground_process_name() -> Option<String> {
     #[cfg(target_os = "windows")]
     { windows::foreground_process_name() }
-    #[cfg(not(target_os = "windows"))]
-    { None }
-}
-
-pub(crate) fn foreground_window_present() -> bool {
-    #[cfg(target_os = "windows")]
-    { windows::foreground_window_present() }
-    #[cfg(not(target_os = "windows"))]
-    { false }
-}
-
-pub(crate) fn foreground_window_class_name() -> Option<String> {
-    #[cfg(target_os = "windows")]
-    { windows::foreground_window_class_name() }
     #[cfg(not(target_os = "windows"))]
     { None }
 }
@@ -227,6 +221,10 @@ impl ControlService {
             latest.playstation_controller_count = 0;
             latest.foreground_process = None;
             latest.return_hotkey_registered = false;
+            latest.gamepad_home_running = false;
+            latest.gamepad_home_device_count = 0;
+            latest.gamepad_home_last_combo_at_ms = None;
+            latest.gamepad_home_last_error = None;
         }
         self.status()
     }
@@ -379,7 +377,6 @@ mod windows {
         fn RegisterHotKey(window: Hwnd, id: i32, modifiers: u32, key: u32) -> i32;
         fn UnregisterHotKey(window: Hwnd, id: i32) -> i32;
         fn GetForegroundWindow() -> Hwnd;
-        fn GetClassNameW(window: Hwnd, class_name: *mut u16, max_count: i32) -> i32;
         fn GetWindowThreadProcessId(window: Hwnd, process_id: *mut u32) -> u32;
     }
 
@@ -446,6 +443,16 @@ mod windows {
             }
         };
 
+        let (mut gamepad_home, gamepad_start_error) =
+            match crate::gamepad_home::GamepadHomeRuntime::start() {
+                Ok(runtime) => (Some(runtime), None),
+                Err(error) => {
+                    // Keyboard return remains available. The failure is surfaced
+                    // instead of silently claiming global gamepad support.
+                    let _ = app.emit("control-service-gamepad-fallback", error.clone());
+                    (None, Some(error))
+                }
+            };
         let mut status = ControlServiceStatus {
             windows: true,
             running: true,
@@ -454,8 +461,14 @@ mod windows {
             playstation_controller_count: playstation_count,
             foreground_process: foreground_process_name(),
             return_hotkey_registered: true,
+            gamepad_home_running: gamepad_home.is_some(),
+            gamepad_home_device_count: 0,
+            gamepad_home_last_combo_at_ms: None,
+            gamepad_home_last_error: None,
             last_error: None,
         };
+        status.gamepad_home_last_error = gamepad_start_error
+            .map(|error| format!("{error} Działa powrót Ctrl+Alt+N."));
         write_status(&latest, status.clone());
         publish_status(&app, &status);
         let _ = started.send(Ok(()));
@@ -510,11 +523,30 @@ mod windows {
                     break;
                 }
                 let message = unsafe { queued.assume_init() };
+                if matches!(
+                    message.message,
+                    crate::gamepad_home::WM_INPUT_MESSAGE
+                        | crate::gamepad_home::WM_INPUT_DEVICE_CHANGE_MESSAGE
+                ) {
+                    if let Some(runtime) = gamepad_home.as_mut() {
+                        runtime.handle_message(
+                            &app,
+                            message.message,
+                            message.w_param,
+                            message.l_param,
+                        );
+                    }
+                    continue;
+                }
                 if message.message != WM_HOTKEY {
                     continue;
                 }
                 match message.w_param as i32 {
                     RETURN_HOTKEY_ID if !observed_game_mode && return_key_registered => {
+                        let _ = crate::session_orchestrator::return_home(
+                            &app,
+                            crate::session_orchestrator::TransitionCause::ControlService,
+                        );
                         let _ = app.emit("nexus-control-return", ());
                     }
                     EMERGENCY_HOTKEY_ID => {
@@ -534,6 +566,14 @@ mod windows {
                         status.foreground_process = foreground_process_name();
                         status.game_mode = observed_game_mode;
                         status.return_hotkey_registered = return_key_registered;
+                        if let Some(runtime) = gamepad_home.as_mut() {
+                            runtime.refresh_devices();
+                            let gamepad = runtime.status(true);
+                            status.gamepad_home_running = gamepad.running;
+                            status.gamepad_home_device_count = gamepad.device_count;
+                            status.gamepad_home_last_combo_at_ms = gamepad.last_combo_at_ms;
+                            status.gamepad_home_last_error = gamepad.last_error;
+                        }
                         status.last_error = None;
                         write_status(&latest, status.clone());
                         publish_status(&app, &status);
@@ -564,6 +604,9 @@ mod windows {
         status.playstation_controller_count = 0;
         status.foreground_process = None;
         status.return_hotkey_registered = false;
+        status.gamepad_home_running = false;
+        status.gamepad_home_device_count = 0;
+        status.gamepad_home_last_combo_at_ms = None;
         write_status(&latest, status.clone());
         publish_status(&app, &status);
     }
@@ -655,20 +698,6 @@ mod windows {
             return Ok((controllers, playstation));
         }
         Err("Lista urządzeń HID zmieniała się podczas odczytu; usługę wyłączono.".into())
-    }
-
-    pub(super) fn foreground_window_present() -> bool {
-        !unsafe { GetForegroundWindow() }.is_null()
-    }
-
-    pub(super) fn foreground_window_class_name() -> Option<String> {
-        let window = unsafe { GetForegroundWindow() };
-        if window.is_null() {
-            return None;
-        }
-        let mut class_name = [0u16; 256];
-        let length = unsafe { GetClassNameW(window, class_name.as_mut_ptr(), class_name.len() as i32) };
-        (length > 0).then(|| String::from_utf16_lossy(&class_name[..length as usize]))
     }
 
     pub(super) fn foreground_process_name() -> Option<String> {

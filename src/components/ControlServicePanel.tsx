@@ -59,6 +59,9 @@ export function ControlServicePanel() {
         running: false,
         gameMode: false,
         returnHotkeyRegistered: false,
+        gamepadHomeRunning: false,
+        gamepadHomeDeviceCount: 0,
+        gamepadHomeLastComboAtMs: null,
       }));
       if (reason === "keyboard-emergency") {
         setError("");
@@ -118,6 +121,12 @@ export function ControlServicePanel() {
           HID gamepad: {status.controllerCount} · kontrolery Sony: {status.playstationControllerCount}
           {" · Aktywne okno: "}{status.foregroundProcess ?? "niedostępne"}
         </p>
+        <p role="status">
+          DualSense Home: {status.gamepadHomeRunning
+            ? `${status.gamepadHomeDeviceCount ?? 0} aktywne · PS + Options`
+            : `niedostępny · fallback Ctrl+Alt+N`}
+          {status.gamepadHomeLastError ? ` · ${status.gamepadHomeLastError}` : ""}
+        </p>
         <p role="status">Sygnał aktywnego okna: {foregroundProcessLabels[foregroundClass]}</p>
         {foregroundClass === "steam" && <p role="note">To sygnał procesu na pierwszym planie; nie potwierdza, że Steam Input przejął kontroler.</p>}
         {foregroundClass === "external" && <p role="note">Lokalne sterowanie VELORA pozostaje wstrzymane, dopóki jej okno nie wróci na pierwszy plan.</p>}
@@ -139,8 +148,9 @@ export function ControlServicePanel() {
             {status.gameMode ? "Wyłącz tryb gry" : "Włącz tryb gry"}
           </button>
         </div>
-        <p>Ctrl+Alt+N wraca do VELORA. Ctrl+Alt+F12 natychmiast wyłącza usługę. Tryb gry zwalnia skrót powrotu i pozostawia wyłącznie awaryjne wyłączenie.</p>
-        <p>Globalne mapowanie przycisków, ruch kursora i głośność są wyłączone w tym prototypie. Nie odczytujemy raportów pada.</p>
+        <p>Ctrl+Alt+N wraca do VELORA. Ctrl+Alt+F12 natychmiast wyłącza usługę. Tryb gry zwalnia skrót klawiaturowy; DualSense PS + Options pozostaje dostępny jako powrót.</p>
+        <p>DualSense Home odczytuje wyłącznie raporty Sony, aby wykryć PS + Options. Nie blokuje, nie przechwytuje i nie mapuje inputu gry. Gdy pada lub Win32 nie da odczytu, działa Ctrl+Alt+N.</p>
+        <p>Globalne mapowanie przycisków, ruch kursora i głośność są wyłączone w tym prototypie.</p>
         {error && <p role="alert">{error}</p>}
         <p className="control-service-notice" role={urgentNotice ? "alert" : "status"} aria-live={urgentNotice ? "assertive" : "polite"}>{notice}</p>
       </>}
