@@ -29,11 +29,22 @@ export type LaunchReceipt = {
 
 export type ManagedAppId = "steamBigPicture" | "appleMusic" | "playniteFullscreen" | "chrome" | "edge" | "firefox";
 
+function userFacingManagedAppError(message: string): string {
+  const spawnFailure = message.match(/^Windows nie uruchomił aplikacji (.+?):\s*(.*)$/i);
+  if (!spawnFailure) return message;
+
+  const appName = spawnFailure[1].trim();
+  const osError = spawnFailure[2].match(/\(os error (\d+)\)/i)?.[1];
+  if (osError === "2") return `Nie znaleziono pliku aplikacji ${appName}. Sprawdź instalację.`;
+  if (osError === "5") return `Windows odmówił uruchomienia ${appName}. Sprawdź uprawnienia.`;
+  return `Nie udało się uruchomić ${appName}. Sprawdź instalację i spróbuj ponownie.`;
+}
+
 export function managedAppErrorMessage(cause: unknown, fallback = "Uruchomienie aplikacji nie powiodło się."): string {
-  if (typeof cause === "string" && cause.trim()) return cause;
-  if (cause instanceof Error && cause.message) return cause.message;
+  if (typeof cause === "string" && cause.trim()) return userFacingManagedAppError(cause);
+  if (cause instanceof Error && cause.message) return userFacingManagedAppError(cause.message);
   if (typeof cause === "object" && cause !== null && "message" in cause && typeof cause.message === "string" && cause.message) {
-    return cause.message;
+    return userFacingManagedAppError(cause.message);
   }
   return fallback;
 }

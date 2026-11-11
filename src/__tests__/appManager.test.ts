@@ -16,6 +16,15 @@ describe("App Manager bridge", () => {
     expect(managedAppErrorMessage({})).toBe("Uruchomienie aplikacji nie powiodło się.");
   });
 
+  it("translates Windows spawn failures into useful installation and permission guidance", () => {
+    expect(managedAppErrorMessage("Windows nie uruchomił aplikacji Steam: The system cannot find the file specified. (os error 2)"))
+      .toBe("Nie znaleziono pliku aplikacji Steam. Sprawdź instalację.");
+    expect(managedAppErrorMessage(new Error("Windows nie uruchomił aplikacji Steam: Access is denied. (os error 5)")))
+      .toBe("Windows odmówił uruchomienia Steam. Sprawdź uprawnienia.");
+    expect(managedAppErrorMessage("Windows nie uruchomił aplikacji Steam: unknown error"))
+      .toBe("Nie udało się uruchomić Steam. Sprawdź instalację i spróbuj ponownie.");
+  });
+
   it("keeps browser preview read-only and empty", async () => {
     mocks.isTauri.mockReturnValue(false);
     await expect(getAppManagerStatus()).resolves.toEqual(emptyAppManagerSnapshot);
