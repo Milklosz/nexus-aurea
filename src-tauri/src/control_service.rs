@@ -1,6 +1,6 @@
 use serde::Serialize;
 use std::sync::{Arc, Mutex, RwLock};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager};
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,6 +41,20 @@ fn is_playstation_controller(vendor_id: u32, usage_page: u16, usage: u16) -> boo
 pub(crate) fn foreground_process_name() -> Option<String> {
     #[cfg(target_os = "windows")]
     { windows::foreground_process_name() }
+    #[cfg(not(target_os = "windows"))]
+    { None }
+}
+
+pub(crate) fn foreground_window_present() -> bool {
+    #[cfg(target_os = "windows")]
+    { windows::foreground_window_present() }
+    #[cfg(not(target_os = "windows"))]
+    { false }
+}
+
+pub(crate) fn foreground_window_class_name() -> Option<String> {
+    #[cfg(target_os = "windows")]
+    { windows::foreground_window_class_name() }
     #[cfg(not(target_os = "windows"))]
     { None }
 }
@@ -219,29 +233,46 @@ impl ControlService {
 }
 
 #[tauri::command]
-pub fn get_control_service_status(service: State<'_, ControlService>) -> ControlServiceStatus {
-    service.status()
+pub async fn get_control_service_status(app: AppHandle) -> ControlServiceStatus {
+    tauri::async_runtime::spawn_blocking(move || {
+        let service = app.state::<ControlService>();
+        service.status()
+    })
+    .await
+    .unwrap_or_else(|_| ControlServiceStatus::disabled())
 }
 
 #[tauri::command]
-pub fn start_control_service(
-    app: AppHandle,
-    service: State<'_, ControlService>,
-) -> Result<ControlServiceStatus, String> {
-    service.start(app)
+pub async fn start_control_service(app: AppHandle) -> Result<ControlServiceStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let service = app.state::<ControlService>();
+        service.start(app.clone())
+    })
+    .await
+    .map_err(|_| "Wątek Control Service został przerwany.".to_string())?
 }
 
 #[tauri::command]
-pub fn set_control_game_mode(
+pub async fn set_control_game_mode(
     enabled: bool,
-    service: State<'_, ControlService>,
+    app: AppHandle,
 ) -> Result<ControlServiceStatus, String> {
-    service.set_game_mode(enabled)
+    tauri::async_runtime::spawn_blocking(move || {
+        let service = app.state::<ControlService>();
+        service.set_game_mode(enabled)
+    })
+    .await
+    .map_err(|_| "Wątek Control Service został przerwany.".to_string())?
 }
 
 #[tauri::command]
-pub fn stop_control_service(service: State<'_, ControlService>) -> ControlServiceStatus {
-    service.stop()
+pub async fn stop_control_service(app: AppHandle) -> Result<ControlServiceStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let service = app.state::<ControlService>();
+        service.stop()
+    })
+    .await
+    .map_err(|_| "Wątek Control Service został przerwany.".to_string())
 }
 
 #[cfg(target_os = "windows")]
@@ -348,6 +379,7 @@ mod windows {
         fn RegisterHotKey(window: Hwnd, id: i32, modifiers: u32, key: u32) -> i32;
         fn UnregisterHotKey(window: Hwnd, id: i32) -> i32;
         fn GetForegroundWindow() -> Hwnd;
+        fn GetClassNameW(window: Hwnd, class_name: *mut u16, max_count: i32) -> i32;
         fn GetWindowThreadProcessId(window: Hwnd, process_id: *mut u32) -> u32;
     }
 
@@ -625,6 +657,20 @@ mod windows {
         Err("Lista urządzeń HID zmieniała się podczas odczytu; usługę wyłączono.".into())
     }
 
+    pub(super) fn foreground_window_present() -> bool {
+        !unsafe { GetForegroundWindow() }.is_null()
+    }
+
+    pub(super) fn foreground_window_class_name() -> Option<String> {
+        let window = unsafe { GetForegroundWindow() };
+        if window.is_null() {
+            return None;
+        }
+        let mut class_name = [0u16; 256];
+        let length = unsafe { GetClassNameW(window, class_name.as_mut_ptr(), class_name.len() as i32) };
+        (length > 0).then(|| String::from_utf16_lossy(&class_name[..length as usize]))
+    }
+
     pub(super) fn foreground_process_name() -> Option<String> {
         let window = unsafe { GetForegroundWindow() };
         if window.is_null() {
@@ -675,6 +721,20 @@ mod tests {
         assert!(!status.running);
         assert!(!status.return_hotkey_registered);
         assert!(status.last_error.is_none());
+    }
+
+    #[test]
+    fn control_service_commands_do_not_block_the_main_thread() {
+        let source = include_str!("control_service.rs");
+        for command in [
+            "get_control_service_status",
+            "start_control_service",
+            "set_control_game_mode",
+            "stop_control_service",
+        ] {
+            assert!(source.contains(&format!("pub async fn {command}")));
+        }
+        assert!(source.contains("tauri::async_runtime::spawn_blocking"));
     }
 
     #[test]

@@ -330,8 +330,12 @@ export default function App() {
   useEffect(() => {
     let active = true;
     let unlisten: (() => void) | undefined;
-    void listenForManagedAppExit((id) => {
-      if (!active || id !== "playniteFullscreen") return;
+    void listenForManagedAppExit((exit) => {
+      if (!active || exit.id !== "playniteFullscreen") return;
+      if (!exit.shouldFocus) {
+        showToast("Sesja Playnite zakończona. VELORA nie przejęła fokusu, bo aktywne było inne okno.");
+        return;
+      }
       void focusWindowSafely(getCurrentWindow(), () => {
         showToast("Playnite został zamknięty. Wróć do VELORA przez Alt+Tab.");
       }, () => showToast("Wrócono do VELORA. Profil Gaming jest gotowy."));

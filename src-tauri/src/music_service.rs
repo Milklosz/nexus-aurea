@@ -45,7 +45,16 @@ impl AppleMusicStatus {
 }
 
 #[tauri::command]
-pub fn get_apple_music_status() -> AppleMusicStatus {
+pub async fn get_apple_music_status() -> AppleMusicStatus {
+    tauri::async_runtime::spawn_blocking(apple_music_status_blocking)
+        .await
+        .unwrap_or_else(|_| AppleMusicStatus::unavailable(
+            cfg!(target_os = "windows"),
+            Some("Wątek mostka Apple Music został przerwany.".into()),
+        ))
+}
+
+fn apple_music_status_blocking() -> AppleMusicStatus {
     #[cfg(target_os = "windows")]
     { windows::status() }
     #[cfg(not(target_os = "windows"))]
@@ -53,25 +62,43 @@ pub fn get_apple_music_status() -> AppleMusicStatus {
 }
 
 #[tauri::command]
-pub fn control_apple_music(action: String) -> Result<(), String> {
+pub async fn control_apple_music(action: String) -> Result<(), String> {
     if !matches!(action.as_str(), "toggle" | "next" | "previous") {
         return Err("Nieznane polecenie sterowania Apple Music.".into());
     }
+    tauri::async_runtime::spawn_blocking(move || control_apple_music_blocking(action))
+        .await
+        .map_err(|_| "Wątek sterowania Apple Music został przerwany.".to_string())?
+}
+
+fn control_apple_music_blocking(action: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     { windows::control(&action) }
     #[cfg(not(target_os = "windows"))]
-    { Err("Sterowanie sesją Apple Music wymaga natywnej aplikacji Windows.".into()) }
+    {
+        let _ = action;
+        Err("Sterowanie sesją Apple Music wymaga natywnej aplikacji Windows.".into())
+    }
 }
 
 #[tauri::command]
-pub fn adjust_system_volume(action: String) -> Result<(), String> {
+pub async fn adjust_system_volume(action: String) -> Result<(), String> {
     if volume_key(&action).is_none() {
         return Err("Nieznane polecenie regulacji głośności.".into());
     }
+    tauri::async_runtime::spawn_blocking(move || adjust_system_volume_blocking(action))
+        .await
+        .map_err(|_| "Wątek regulacji głośności został przerwany.".to_string())?
+}
+
+fn adjust_system_volume_blocking(action: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     { windows::adjust_volume(&action) }
     #[cfg(not(target_os = "windows"))]
-    { Err("Regulacja głośności systemu wymaga natywnej aplikacji Windows.".into()) }
+    {
+        let _ = action;
+        Err("Regulacja głośności systemu wymaga natywnej aplikacji Windows.".into())
+    }
 }
 
 fn volume_key(action: &str) -> Option<u8> {
@@ -261,6 +288,15 @@ mod tests {
         assert_eq!(volume_key("down"), Some(0xae));
         assert_eq!(volume_key("mute"), Some(0xad));
         assert_eq!(volume_key("set-device"), None);
+    }
+
+    #[test]
+    fn music_bridge_commands_do_not_block_the_main_thread() {
+        let source = include_str!("music_service.rs");
+        for command in ["get_apple_music_status", "control_apple_music", "adjust_system_volume"] {
+            assert!(source.contains(&format!("pub async fn {command}")));
+        }
+        assert!(source.contains("tauri::async_runtime::spawn_blocking"));
     }
 
     #[test]
