@@ -5,7 +5,7 @@ Updated: 2026-11-11 (Europe/Warsaw)
 ## Current branch and commits
 
 - Active branch: `feat/velora-night-build-2`.
-- Latest tested implementation commit: local `abc85ea2b25919835db25d66cb6f89811eecf6bc`, published as `a6376fb18573b79ef068f13492abf3707dbbee8d`; their trees match.
+- Latest tested implementation commit: local `8d4cf0a89a58e18894a099f2828696fe98b9ca2b`, published as `9cf4d4d9bf662a27558b071a8b68400917f364da`; their trees match. Stage 36 adds fallback retry duplicate-activation coverage; 141 React tests and TypeScript/Vite build pass locally.
 - Latest published implementation commit: local `80c6e3876f1633e2c4b8f1bd34646f7aa59dccea`, published as `fd320d0079db003116bd019061aae6a63e79cb3d`; their trees match.
 - Last verified progress checkpoint before Stage 35 recovery finalization: local `b7a67d50f6c85f6c9443f98436d42e17d7970a66`, published as `5d1ce2d73cc2a34f40b7a892822ad8456d73f5ac`; their trees match. At that checkpoint the branch was 91 commits ahead, 0 behind, with the exact merge base below.
 - Latest published implementation commit: local `b42757ad27530e2a5937ba46ac4faddbdbeecd6e`, published as `e0337167448b6c0ac70d31d3c5873e141a8dd0f8`; their trees match.
@@ -16,6 +16,7 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - Local stage-34 validation checkpoint is preserved under `refs/codex/local/gaming-hub-error-retry-focus-stage-34-checkpoint`.
 - Local stage-35 implementation commit is preserved under `refs/codex/local/gaming-hub-deduplicate-refresh-stage-35`.
 - Local stage-35 validation checkpoint is preserved under `refs/codex/local/gaming-hub-deduplicate-refresh-stage-35-checkpoint`.
+- Local stage-36 implementation commit is preserved under `refs/codex/local/gaming-hub-fallback-retry-deduplicate-stage-36`.
 - Local stage-32 implementation commit is preserved under `refs/codex/local/gaming-hub-retry-focus-stage-32`.
 - Local stage-31 implementation commit is preserved under `refs/codex/local/gaming-hub-refresh-feedback-stage-31`.
 - Local stage-30 implementation commit is preserved under `refs/codex/local/control-service-listener-diagnostics-stage-30`.
@@ -92,6 +93,7 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - Stage 33 GitHub Actions runs [43061141004](https://github.com/Milklosz/nexus-aurea/actions/runs/43061141004) (PR) and [43061131133](https://github.com/Milklosz/nexus-aurea/actions/runs/43061131133) (push) passed on Windows and macOS; Release jobs were skipped.
 - Stage 34 GitHub Actions runs [43063620136](https://github.com/Milklosz/nexus-aurea/actions/runs/43063620136) (PR) and [43063611269](https://github.com/Milklosz/nexus-aurea/actions/runs/43063611269) (push) passed on Windows and macOS; Release jobs were skipped.
 - Stage 35 GitHub Actions runs [43066219552](https://github.com/Milklosz/nexus-aurea/actions/runs/43066219552) (PR), [43066207610](https://github.com/Milklosz/nexus-aurea/actions/runs/43066207610) (push), and [43066446793](https://github.com/Milklosz/nexus-aurea/actions/runs/43066446793) (progress update) passed on Windows and macOS; Release jobs were skipped.
+- Stage 36 local validation passed: 25 React test files, 141 tests; the Gaming Hub file passed all 14 tests; TypeScript and Vite production build passed. GitHub Actions run [43069783881](https://github.com/Milklosz/nexus-aurea/actions/runs/43069783881) is queued.
 - Stage 29 GitHub Actions runs [43054839359](https://github.com/Milklosz/nexus-aurea/actions/runs/43054839359) (PR) and [43054826843](https://github.com/Milklosz/nexus-aurea/actions/runs/43054826843) (push) passed on Windows and macOS.
 - The currently installed MSI copy was only opened for visual inspection. Its Control Center is the older long-list layout; it was closed afterward. No installed files or settings were changed.
 
@@ -128,6 +130,7 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - Full recovery snapshot through Stage 34: `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111-full-through-stage34-final.zip`; its checksum sidecar is stored beside it.
 - Stage 34 archive SHA-256 values: standalone `405e9aab811ae6e7656d1726fbeebc42170645d5015047e94149bfa857d8e62`; full snapshot `28d6a98cc6062332c6f272772a09df10d36d7bc98f6c5e29b3bfcf4522bc04e4` (299 manifest entries verified).
 - Stage 35 source copies and patch are stored under `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-35` and `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-35.patch`; the full 140-test suite and TypeScript/Vite build pass. CI is green on Windows and macOS.
+- Stage 36 test source and before-copy are stored under `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-36`; patch: `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-36.patch` (SHA-256 `EA189DF6646834E4E5ED9C058E38D6094807F1937492C19762AD40A458B926E`).
 - Stage 35 final standalone archive: `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111-stage35-final.zip`; its checksum sidecar is stored beside it.
 - Full recovery snapshot through Stage 35: `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111-full-through-stage35-final.zip`; its checksum sidecar is stored beside it. All 308 manifest entries are verified.
 - Stage 35 Windows CI artifact from run [43066207610](https://github.com/Milklosz/nexus-aurea/actions/runs/43066207610), artifact ID `13874844404`, digest `sha256:f8056cb63fa3b85bfce7f9e16e4e2f9deecce3301059618636ce8f175fa419e9`.
@@ -163,4 +166,4 @@ Updated: 2026-11-11 (Europe/Warsaw)
 
 ## Next step
 
-Stages 32–35 are locally tested, committed, published, and passed CI on Windows and macOS. Stage 35 has 25 React test files and 140 passing tests, a successful TypeScript/Vite build, and green implementation CI on runs 43066219552 and 43066207610; run 43066446793 also passed. Its Windows artifact was hash-verified and extracted only; the unsigned installer was not executed or installed. Stage 35 source copies, patch, standalone archive, and full recovery snapshot are stored outside the repository; all 308 manifest entries are verified. At the last published comparison the branch was 91 commits ahead and 0 behind, with exact merge base `6dbcc36abeded18b753a134bc8ede10fb37df391`. Next, Stage 36 will add a regression for repeated fallback retry activation while App Manager status is pending, checking the single request and retained focus. Keep GUI review marked `NOT TESTED`; keep iPhone Remote safely disabled by default.
+Stages 32–35 are locally tested, committed, published, passed CI on Windows and macOS, and archived. Stage 35 recovery files verify 308 manifest entries. Stage 36 is locally tested, committed, and published: 25 React test files and 141 tests pass, including 14 Gaming Hub tests; TypeScript/Vite build passes. Its GitHub Actions run 43069783881 is queued. At the published Stage 36 implementation checkpoint, the branch is 93 commits ahead and 0 behind; the exact merge base remains `6dbcc36abeded18b753a134bc8ede10fb37df391`. Next, verify Stage 36 CI and finalize its recovery snapshot. GUI review remains `NOT TESTED`; iPhone Remote remains safely disabled by default.
