@@ -43,7 +43,7 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
     if (busy) return;
     setBusy(id);
     setError("");
-    setNotice("");
+    setNotice(id === "steamBigPicture" ? "Uruchamiam Steam Big Picture…" : "Uruchamiam Playnite Fullscreen…");
     try {
       if (!await onActivateGaming()) throw new Error("Nie udało się wybrać profilu Gaming.");
       const receipt = await launchManagedApp(id);
@@ -62,7 +62,7 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
     if (busy) return;
     setBusy(game.id);
     setError("");
-    setNotice("");
+    setNotice("Uruchamiam " + game.name + " przez Steam…");
     try {
       if (!await onActivateGaming()) throw new Error("Nie udało się wybrać profilu Gaming.");
       await launchManagedGame(game.id);
@@ -86,14 +86,14 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
     <div className="gaming-launchers">
       <div className="gaming-launcher">
         <div><strong>Steam</strong><span>{steam?.installed ? "Wykryto" : "Nie wykryto"}</span></div>
-        <button type="button" disabled={!steam?.installed || Boolean(steam.lastError) || busy !== null}
+        <button type="button" aria-busy={busy === "steamBigPicture"} disabled={!steam?.installed || Boolean(steam.lastError) || busy !== null}
           onClick={() => void launchLauncher("steamBigPicture")}>
           {busy === "steamBigPicture" ? "Uruchamiam…" : "Big Picture"}
         </button>
       </div>
       <div className="gaming-launcher">
         <div><strong>Playnite</strong><span>{playnite?.installed ? "Wykryto" : "Nie wykryto"}</span></div>
-        <button type="button" disabled={!playnite?.installed || Boolean(playnite.lastError) || busy !== null}
+        <button type="button" aria-busy={busy === "playniteFullscreen"} disabled={!playnite?.installed || Boolean(playnite.lastError) || busy !== null}
           onClick={() => void launchLauncher("playniteFullscreen")}>
           {busy === "playniteFullscreen" ? "Uruchamiam…" : "Fullscreen"}
         </button>
@@ -109,7 +109,7 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
       ? <div className="gaming-game-list">
         {games.map((game) => <div className="gaming-game-row" key={game.id}>
           <div><strong>{game.name}</strong><span>{game.launcher} · App ID {game.id}</span></div>
-          <button type="button" disabled={!steam?.installed || Boolean(snapshot.gamesError) || busy !== null}
+          <button type="button" aria-busy={busy === game.id} disabled={!steam?.installed || Boolean(snapshot.gamesError) || busy !== null}
             onClick={() => void launchGame(game)}>
             {busy === game.id ? "Uruchamiam…" : "Uruchom"}
           </button>
@@ -122,6 +122,6 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
     <p className="gaming-hub-note">Lista gier pochodzi z lokalnych plików appmanifest Steam. Playnite jest wykrywany i może być otwarty, ale jego biblioteka nie jest jeszcze odczytywana.</p>
     <button type="button" onClick={() => void refresh()} disabled={busy !== null}>Odśwież biblioteki</button>
     {error && <p role="alert">{error}</p>}
-    {notice && <p role="status">{notice}</p>}
+    <p role="status" aria-live="polite">{notice}</p>
   </section>;
 }

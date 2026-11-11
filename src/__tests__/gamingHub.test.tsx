@@ -53,6 +53,25 @@ describe("Gaming Hub and App Manager integration", () => {
     expect(await screen.findByRole("status")).toBeTruthy();
   });
 
+  it("announces a pending game launch and marks its button busy", async () => {
+    mocks.snapshot = windowsSnapshot();
+    let resolveLaunch!: (receipt: { id: string; launched: boolean }) => void;
+    mocks.launchGame.mockImplementationOnce(() => new Promise((resolve) => { resolveLaunch = resolve; }));
+    render(<GamingHub onActivateGaming={vi.fn(async () => true)} />);
+    const button = await screen.findByRole("button", { name: "Uruchom" });
+
+    fireEvent.click(button);
+
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Uruchamiam Team Fortress 2 przez Steam"));
+    expect(button.getAttribute("aria-busy")).toBe("true");
+    expect(button.hasAttribute("disabled")).toBe(true);
+
+    resolveLaunch({ id: "440", launched: true });
+
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Wysłano żądanie uruchomienia Team Fortress 2 przez Steam."));
+    expect(button.getAttribute("aria-busy")).toBe("false");
+  });
+
   it("opens detected Playnite only through the existing App Manager allowlist", async () => {
     mocks.snapshot = windowsSnapshot();
     mocks.snapshot.apps[1].installed = true;
