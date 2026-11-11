@@ -8,10 +8,31 @@ import type { CinemaProfile } from "../services/cinemaMode";
 const mocks = vi.hoisted(() => ({
   status: { windows: false, running: false, gameMode: false, controllerCount: 0, playstationControllerCount: 0, foregroundProcess: null, returnHotkeyRegistered: false, lastError: null },
   getStatus: vi.fn(async () => mocks.status),
+  remoteStatus: { enabled: false, secureOriginAvailable: false, pairingAvailable: false, pairedDeviceCount: 0, pairedDevices: [], origin: null, caFingerprint: null, trustProfilePath: null, pairingCode: null, pairingExpiresInSeconds: 0 },
+  getRemoteStatus: vi.fn(async () => mocks.remoteStatus),
+  listenRemoteStatus: vi.fn(async () => () => {}),
+  prepareTrustProfile: vi.fn(async () => mocks.remoteStatus),
+  startRemoteAccess: vi.fn(async () => mocks.remoteStatus),
+  beginRemotePairing: vi.fn(async () => mocks.remoteStatus),
+  stopRemoteAccess: vi.fn(async () => mocks.remoteStatus),
+  revokeAllRemoteDevices: vi.fn(async () => mocks.remoteStatus),
+  revokeRemoteDevice: vi.fn(async () => mocks.remoteStatus),
 }));
 vi.mock("../services/controlService", () => ({
   disabledControlServiceStatus: { windows: false, running: false, gameMode: false, controllerCount: 0, playstationControllerCount: 0, foregroundProcess: null, returnHotkeyRegistered: false, lastError: null },
   getControlServiceStatus: mocks.getStatus,
+}));
+vi.mock("../services/remoteAccess", () => ({
+  disabledRemoteAccessStatus: mocks.remoteStatus,
+  REMOTE_ACCESS_DISABLED_REASON: "Serwer domyślnie nie nasłuchuje w sieci.",
+  getRemoteAccessStatus: mocks.getRemoteStatus,
+  listenForRemoteAccessStatus: mocks.listenRemoteStatus,
+  prepareRemoteTrustProfile: mocks.prepareTrustProfile,
+  startRemoteAccess: mocks.startRemoteAccess,
+  beginRemotePairing: mocks.beginRemotePairing,
+  stopRemoteAccess: mocks.stopRemoteAccess,
+  revokeAllRemoteDevices: mocks.revokeAllRemoteDevices,
+  revokeRemoteDevice: mocks.revokeRemoteDevice,
 }));
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
@@ -100,13 +121,26 @@ describe("Control Center", () => {
     fireEvent.click(screen.getByRole("tab", { name: "iPhone Remote" }));
     const remoteStatus = screen.getByLabelText("Stan iPhone Remote");
     expect(remoteStatus.textContent).toContain("Serwer LAN");
-    expect(remoteStatus.textContent).toContain("wyłączony");
+    await waitFor(() => expect(remoteStatus.textContent).toContain("wyłączony"));
     expect(screen.queryByRole("button", { name: "Uruchom serwer HTTPS" })).toBeNull();
     expect(screen.getByRole("button", { name: "Przygotuj profil zaufania iPhone'a" })).toBeTruthy();
     expect(screen.getByText(/Serwer domyślnie nie nasłuchuje w sieci/)).toBeTruthy();
   });
 
-  it("keeps one panel visible and supports remote left-right tab navigation", () => {
+  it("keeps iPhone Remote actions hidden when its secure status cannot be read", async () => {
+    setupDialog();
+    mocks.getRemoteStatus.mockRejectedValueOnce(new Error("status unavailable"));
+    renderCenter();
+    fireEvent.click(screen.getByRole("tab", { name: "iPhone Remote" }));
+
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toMatch(/bezpiecznego stanu.*sterowanie pozostaje wyłączone/i);
+    expect(screen.getByLabelText("Stan iPhone Remote").textContent).toContain("stan nieznany");
+    expect(screen.queryByRole("button", { name: "Przygotuj profil zaufania iPhone'a" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Wygeneruj kod parowania" })).toBeNull();
+  });
+
+  it("keeps one panel visible and supports remote left-right tab navigation", async () => {
     setupDialog();
     renderCenter();
     const cinemaTab = screen.getByRole("tab", { name: "Cinema" });
@@ -116,7 +150,7 @@ describe("Control Center", () => {
     fireEvent.keyDown(screen.getByRole("tab", { name: "Gaming" }), { key: "ArrowRight" });
     expect(screen.getByRole("tab", { name: "iPhone Remote" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.queryByRole("heading", { name: "Gaming Hub" })).toBeNull();
-    expect(screen.getByLabelText("Stan iPhone Remote").textContent).toContain("wyłączony");
+    await waitFor(() => expect(screen.getByLabelText("Stan iPhone Remote").textContent).toContain("wyłączony"));
   });
 
   it("cycles the Ambient idle interval through supported values", async () => {

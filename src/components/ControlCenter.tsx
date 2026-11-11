@@ -58,6 +58,8 @@ export function ControlCenter(props: ControlCenterProps) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [remoteStatus, setRemoteStatus] = useState<RemoteAccessStatus>(disabledRemoteAccessStatus);
+  const [remoteStatusReady, setRemoteStatusReady] = useState(false);
+  const [remoteStatusError, setRemoteStatusError] = useState("");
   const [remoteBusy, setRemoteBusy] = useState(false);
   const [trustConfirmed, setTrustConfirmed] = useState(false);
   const [remoteError, setRemoteError] = useState("");
@@ -89,10 +91,23 @@ export function ControlCenter(props: ControlCenterProps) {
     let active = true;
     let unlisten: (() => void) | undefined;
     void getRemoteAccessStatus().then((next) => {
-      if (active) setRemoteStatus(next);
-    }).catch(() => {});
+      if (active) {
+        setRemoteStatus(next);
+        setRemoteStatusReady(true);
+        setRemoteStatusError("");
+      }
+    }).catch(() => {
+      if (active) {
+        setRemoteStatusReady(false);
+        setRemoteStatusError("Nie udało się odczytać bezpiecznego stanu iPhone Remote. Sterowanie pozostaje wyłączone.");
+      }
+    });
     void listenForRemoteAccessStatus((next) => {
-      if (active) setRemoteStatus(next);
+      if (active) {
+        setRemoteStatus(next);
+        setRemoteStatusReady(true);
+        setRemoteStatusError("");
+      }
     }).then((stopListening) => {
       if (active) unlisten = stopListening;
       else stopListening();
@@ -107,6 +122,7 @@ export function ControlCenter(props: ControlCenterProps) {
     action: () => Promise<RemoteAccessStatus>,
     success: string,
   ) => {
+    if (!remoteStatusReady || remoteBusy) return;
     setRemoteBusy(true);
     setRemoteError("");
     setRemoteNotice("");
@@ -276,15 +292,18 @@ export function ControlCenter(props: ControlCenterProps) {
         <div className="cc-card cc-remote-card">
           <div className="cc-card-heading"><span className="cc-card-index">06</span><div><h3>iPhone Remote</h3><p>Pilot pozostaje wyłączony do czasu ręcznego, bezpiecznego sparowania.</p></div></div>
           <ul className="remote-access-status" aria-label="Stan iPhone Remote">
-            <li><span>Serwer LAN</span><strong>{remoteStatus.enabled ? "włączony" : "wyłączony"}</strong></li>
-            <li><span>HTTPS</span><strong>{remoteStatus.secureOriginAvailable ? "aktywny · wymaga zaufanego certyfikatu" : "wyłączony"}</strong></li>
-            <li><span>Parowanie</span><strong>{remoteStatus.pairingCode
+            <li><span>Serwer LAN</span><strong>{remoteStatusReady ? remoteStatus.enabled ? "włączony" : "wyłączony" : "stan nieznany"}</strong></li>
+            <li><span>HTTPS</span><strong>{remoteStatusReady ? remoteStatus.secureOriginAvailable ? "aktywny · wymaga zaufanego certyfikatu" : "wyłączony" : "stan nieznany"}</strong></li>
+            <li><span>Parowanie</span><strong>{!remoteStatusReady ? "stan nieznany" : remoteStatus.pairingCode
               ? `kod jednorazowy · ${remoteStatus.pairingExpiresInSeconds}s`
               : remoteStatus.pairingAvailable ? "gotowe po wygenerowaniu kodu" : "wyłączone"}</strong></li>
-            <li><span>Sparowane urządzenia</span><strong>{remoteStatus.pairedDeviceCount}</strong></li>
+            <li><span>Sparowane urządzenia</span><strong>{remoteStatusReady ? remoteStatus.pairedDeviceCount : "?"}</strong></li>
           </ul>
-          {!remoteStatus.enabled && <div className="cc-remote-actions">
-            <button type="button" disabled={remoteBusy} onClick={() => void runRemoteAction(
+          {!remoteStatusReady && <p className={remoteStatusError ? "cc-feedback cc-error" : "cc-feedback"} role={remoteStatusError ? "alert" : "status"}>
+            {remoteStatusError || "Odczytuję bezpieczny stan iPhone Remote…"}
+          </p>}
+          {remoteStatusReady && !remoteStatus.enabled && <div className="cc-remote-actions">
+            <button type="button" disabled={!remoteStatusReady || remoteBusy} onClick={() => void runRemoteAction(
               prepareRemoteTrustProfile,
               "Profil zaufania jest gotowy do bezpiecznego przeniesienia na iPhone'a.",
             )}>Przygotuj profil zaufania iPhone'a</button>
@@ -297,33 +316,33 @@ export function ControlCenter(props: ControlCenterProps) {
                 <input type="checkbox" checked={trustConfirmed} onChange={(event) => setTrustConfirmed(event.target.checked)} />
                 Profil został przeniesiony zaufanym kanałem, zainstalowany na iPhonie i ręcznie oznaczony jako zaufany.
               </label>
-              <button type="button" disabled={remoteBusy || !trustConfirmed} onClick={() => void runRemoteAction(
+              <button type="button" disabled={!remoteStatusReady || remoteBusy || !trustConfirmed} onClick={() => void runRemoteAction(
                 () => startRemoteAccess(trustConfirmed),
                 "Serwer HTTPS został włączony tylko dla prywatnego interfejsu sieciowego.",
               )}>Uruchom serwer HTTPS</button>
             </>}
             <p className="cc-card-note">{REMOTE_ACCESS_DISABLED_REASON} Serwer domyślnie nie nasłuchuje w sieci.</p>
           </div>}
-          {remoteStatus.enabled && <div className="cc-remote-actions">
+          {remoteStatusReady && remoteStatus.enabled && <div className="cc-remote-actions">
             <p>Adres iPhone'a: <code>{remoteStatus.origin}</code></p>
-            <button type="button" disabled={remoteBusy} onClick={() => void runRemoteAction(
+            <button type="button" disabled={!remoteStatusReady || remoteBusy} onClick={() => void runRemoteAction(
               beginRemotePairing,
               "Kod jednorazowy wygasa po 60 sekundach.",
             )}>Wygeneruj kod parowania</button>
             {remoteStatus.pairingCode && <p className="remote-pairing-code" role="status">Kod iPhone: {remoteStatus.pairingCode} · {remoteStatus.pairingExpiresInSeconds}s</p>}
-            <button type="button" disabled={remoteBusy} onClick={() => void runRemoteAction(
+            <button type="button" disabled={!remoteStatusReady || remoteBusy} onClick={() => void runRemoteAction(
               stopRemoteAccess,
               "Serwer LAN został wyłączony.",
             )}>Wyłącz serwer LAN</button>
           </div>}
-          {remoteStatus.pairedDevices.map((device) => <div className="remote-device-row" key={device.id}>
+          {remoteStatusReady && remoteStatus.pairedDevices.map((device) => <div className="remote-device-row" key={device.id}>
             <span>{device.name}</span>
-            <button type="button" disabled={remoteBusy} onClick={() => void runRemoteAction(
+            <button type="button" disabled={!remoteStatusReady || remoteBusy} onClick={() => void runRemoteAction(
               () => revokeRemoteDevice(device.id),
               `Dostęp dla ${device.name} został odwołany.`,
             )}>Odwołaj</button>
           </div>)}
-          {remoteStatus.pairedDeviceCount > 0 && <button type="button" disabled={remoteBusy} onClick={() => void runRemoteAction(
+          {remoteStatusReady && remoteStatus.pairedDeviceCount > 0 && <button type="button" disabled={!remoteStatusReady || remoteBusy} onClick={() => void runRemoteAction(
             revokeAllRemoteDevices,
             "Dostęp wszystkich sparowanych urządzeń został odwołany.",
           )}>Odwołaj wszystkie urządzenia</button>}
