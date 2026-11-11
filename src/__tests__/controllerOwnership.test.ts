@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyForegroundProcess } from "../services/controllerOwnership";
+import { classifyForegroundProcess, shouldSuspendLocalControllerInput } from "../services/controllerOwnership";
 
 describe("foreground process classification", () => {
   it("recognizes the existing VELORA executable name case-insensitively", () => {
@@ -18,5 +18,13 @@ describe("foreground process classification", () => {
   it("fails closed when the foreground process is unavailable", () => {
     expect(classifyForegroundProcess(null)).toBe("unknown");
     expect(classifyForegroundProcess("  ")).toBe("unknown");
+  });
+
+  it("suspends local input for uncertain or external processes only while monitoring is active", () => {
+    expect(shouldSuspendLocalControllerInput(false, "steam.exe")).toBe(false);
+    expect(shouldSuspendLocalControllerInput(true, "nexus-aurea.exe")).toBe(false);
+    expect(shouldSuspendLocalControllerInput(true, "steam.exe")).toBe(true);
+    expect(shouldSuspendLocalControllerInput(true, "eldenring.exe")).toBe(true);
+    expect(shouldSuspendLocalControllerInput(true, null)).toBe(true);
   });
 });

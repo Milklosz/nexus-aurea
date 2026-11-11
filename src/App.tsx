@@ -13,6 +13,7 @@ import { Toast } from "./components/Toast";
 import { streamingServices } from "./data/streamingServices";
 import { useClock } from "./hooks/useClock";
 import { useGamepad } from "./hooks/useGamepad";
+import { useControllerOwnershipSuspension } from "./hooks/useControllerOwnershipSuspension";
 import { useNavigation } from "./hooks/useNavigation";
 import { useFocusRestoreOnClose } from "./hooks/useFocusRestoreOnClose";
 import { useLaunchGuard } from "./hooks/useLaunchGuard";
@@ -61,6 +62,7 @@ export default function App() {
   const [ambientSettings, setAmbientSettings] = useState<AmbientSettings>(readAmbientSettings);
   const mediaIsPlaying = musicStatus.appleSessionFound && musicStatus.playbackState === "playing";
   const ambient = useAmbient(ambientSettings, mediaIsPlaying);
+  const suspendForForegroundOwner = useControllerOwnershipSuspension();
   const { now, time } = useClock();
   const { label: weatherLabel, title: weatherTitle } = useWeather();
   const { message, showToast } = useToast();
@@ -224,12 +226,16 @@ export default function App() {
     showToast(receipt.alreadyRunning ? "Apple Music już działa." : "Uruchamiam oficjalną aplikację Apple Music.");
     window.setTimeout(() => void refreshMusicStatus().catch(() => showToast("Nie udało się odczytać sesji Windows SMTC.")), 1800);
   }, [refreshMusicStatus, showToast]);
+  const shouldSuspendControllerInput = useCallback(
+    () => ambient.controllerSuppressedRef.current || suspendForForegroundOwner(),
+    [ambient.controllerSuppressedRef, suspendForForegroundOwner],
+  );
   useGamepad({
     move: moveControllerFocus,
     confirm: confirmControllerFocus,
     back: backControllerFocus,
     options: toggleControlCenter,
-  }, !ambient.active && !ambient.controllerSuppressed, controllerProfile, () => ambient.controllerSuppressedRef.current);
+  }, !ambient.active && !ambient.controllerSuppressed, controllerProfile, shouldSuspendControllerInput);
   useEffect(() => {
     const recover = (event: KeyboardEvent) => {
       const openDialog = document.querySelector("dialog[open]");

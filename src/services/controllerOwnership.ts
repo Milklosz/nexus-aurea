@@ -9,3 +9,10 @@ export function classifyForegroundProcess(processName: string | null | undefined
   if (executable === "steam.exe" || executable === "gameoverlayui.exe") return "steam";
   return "external";
 }
+
+export function shouldSuspendLocalControllerInput(
+  controlServiceRunning: boolean,
+  foregroundProcess: string | null | undefined,
+): boolean {
+  return controlServiceRunning && classifyForegroundProcess(foregroundProcess) !== "velora";
+}
