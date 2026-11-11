@@ -32,7 +32,7 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - iPhone Remote rechecks its read-only server and pairing status when the PWA becomes visible again; hidden-page transitions do not trigger a request. The service-worker cache key was bumped.
 - React tests: 24 files, 117 tests passed. TypeScript and Vite production build passed.
 - GitHub Actions run [43026294733](https://github.com/Milklosz/nexus-aurea/actions/runs/43026294733) passed on Windows and macOS, including React, Rust, TypeScript/Vite, and platform builds. The Release job was skipped.
-- GitHub Actions runs [43029135952](https://github.com/Milklosz/nexus-aurea/actions/runs/43029135952) (stage 09), [43029773813](https://github.com/Milklosz/nexus-aurea/actions/runs/43029773813) (stage 10), [43030395848](https://github.com/Milklosz/nexus-aurea/actions/runs/43030395848) (stage 11), [43031259001](https://github.com/Milklosz/nexus-aurea/actions/runs/43031259001) (stage 12), and [43032589406](https://github.com/Milklosz/nexus-aurea/actions/runs/43032589406) (stage 13) passed on Windows and macOS. Stage-14 CI [43033436829](https://github.com/Milklosz/nexus-aurea/actions/runs/43033436829) is running.
+- GitHub Actions runs [43029135952](https://github.com/Milklosz/nexus-aurea/actions/runs/43029135952) (stage 09), [43029773813](https://github.com/Milklosz/nexus-aurea/actions/runs/43029773813) (stage 10), [43030395848](https://github.com/Milklosz/nexus-aurea/actions/runs/43030395848) (stage 11), [43031259001](https://github.com/Milklosz/nexus-aurea/actions/runs/43031259001) (stage 12), [43032589406](https://github.com/Milklosz/nexus-aurea/actions/runs/43032589406) (stage 13), and stage-14 run [43033436829](https://github.com/Milklosz/nexus-aurea/actions/runs/43033436829) passed on Windows and macOS.
 - The artifact below is from the earlier, fully passing stage-08 checkpoint.
 - The currently installed MSI copy was only opened for visual inspection. Its Control Center is the older long-list layout; it was closed afterward. No installed files or settings were changed.
 
@@ -55,4 +55,4 @@ Updated: 2026-11-11 (Europe/Warsaw)
 
 ## Next step
 
-Review stage-14 Windows and macOS CI, update the Draft PR summary, and continue with another small TV-navigation or Remote improvement plus a regression test. Keep GUI review marked `NOT TESTED` unless a supported, policy-compliant path becomes available; keep iPhone Remote safely disabled by default.
+Continue with a small iPhone Remote offline-state improvement and regression test. Keep GUI review marked `NOT TESTED` unless a supported, policy-compliant path becomes available; keep iPhone Remote safely disabled by default.
