@@ -107,6 +107,31 @@ describe("Gaming Hub and App Manager integration", () => {
     expect(screen.queryByText("Wysłano żądanie uruchomienia Team Fortress 2 przez Steam.")).toBeNull();
   });
 
+  it("keeps the App Manager retry control focused while a status read is pending", async () => {
+    mocks.snapshot = { windows: false, foregroundProcess: null, apps: [], games: [], gamesError: null };
+    render(<GamingHub onActivateGaming={vi.fn(async () => true)} />);
+    const retryButton = await screen.findByRole("button", { name: "Spróbuj ponownie" });
+
+    retryButton.focus();
+    expect(document.activeElement).toBe(retryButton);
+
+    let resolveStatus!: (snapshot: any) => void;
+    mocks.getStatus.mockImplementationOnce(() => new Promise((resolve) => { resolveStatus = resolve; }));
+    fireEvent.click(retryButton);
+
+    const pendingButton = await screen.findByRole("button", { name: "Odczytuję…" });
+    expect(pendingButton).toBe(retryButton);
+    expect(document.activeElement).toBe(retryButton);
+    expect(retryButton.getAttribute("aria-busy")).toBe("true");
+
+    resolveStatus({ windows: false, foregroundProcess: null, apps: [], games: [], gamesError: null });
+
+    const restoredButton = await screen.findByRole("button", { name: "Spróbuj ponownie" });
+    expect(restoredButton).toBe(retryButton);
+    expect(document.activeElement).toBe(retryButton);
+    expect(retryButton.getAttribute("aria-busy")).toBe("false");
+  });
+
   it("reports missing launchers and an unavailable Steam library without inventing games", async () => {
     mocks.snapshot = {
       ...windowsSnapshot([]),

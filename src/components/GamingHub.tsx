@@ -15,6 +15,7 @@ type GamingHubProps = { onActivateGaming: () => Promise<boolean> };
 export function GamingHub({ onActivateGaming }: GamingHubProps) {
   const [snapshot, setSnapshot] = useState<AppManagerSnapshot>(emptyAppManagerSnapshot);
   const [loading, setLoading] = useState(true);
+  const [retrying, setRetrying] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -30,7 +31,14 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
       setError(managedAppErrorMessage(cause, "Nie udało się odczytać Steam i Playnite."));
     } finally {
       setLoading(false);
+      setRetrying(false);
     }
+  };
+
+  const retryLibraries = () => {
+    if (loading || retrying) return;
+    setRetrying(true);
+    void refresh();
   };
 
   useEffect(() => { void refresh(); }, []);
@@ -78,13 +86,16 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
     }
   };
 
-  if (loading) return <section className="gaming-hub" aria-label="VELORA Gaming Hub"><p role="status">Odczytuję stan App Managera…</p></section>;
+  if (loading && !(retrying && !snapshot.windows)) return <section className="gaming-hub" aria-label="VELORA Gaming Hub"><p role="status">Odczytuję stan App Managera…</p></section>;
 
   if (!snapshot.windows) return <section className="gaming-hub" aria-label="VELORA Gaming Hub">
     <p>Wykrywanie bibliotek gier wymaga natywnego App Managera Windows. Podgląd webowy pozostaje tylko do odczytu.</p>
+    {loading && <p role="status">Odczytuję stan App Managera…</p>}
     {error && <p role="alert">{error}</p>}
     {notice && <p role="status" aria-live="polite">{notice}</p>}
-    <button type="button" onClick={() => void refresh()}>Spróbuj ponownie</button>
+    <button key="app-manager-retry" type="button" aria-busy={loading} onClick={retryLibraries}>
+      {loading ? "Odczytuję…" : "Spróbuj ponownie"}
+    </button>
   </section>;
 
   return <section className="gaming-hub" aria-label="VELORA Gaming Hub">
