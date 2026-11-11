@@ -132,6 +132,27 @@ describe("Gaming Hub and App Manager integration", () => {
     expect(retryButton.getAttribute("aria-busy")).toBe("false");
   });
 
+  it("keeps retry focus when App Manager recovery restores the Windows library panel", async () => {
+    mocks.snapshot = { windows: false, foregroundProcess: null, apps: [], games: [], gamesError: null };
+    render(<GamingHub onActivateGaming={vi.fn(async () => true)} />);
+    const retryButton = await screen.findByRole("button", { name: "Spróbuj ponownie" });
+    retryButton.focus();
+
+    let resolveStatus!: (snapshot: any) => void;
+    mocks.getStatus.mockImplementationOnce(() => new Promise((resolve) => { resolveStatus = resolve; }));
+    fireEvent.click(retryButton);
+    expect(await screen.findByRole("button", { name: "Odczytuję…" })).toBe(retryButton);
+    expect(document.activeElement).toBe(retryButton);
+
+    resolveStatus(windowsSnapshot([{ id: "730", name: "Counter-Strike 2", launcher: "Steam" }]));
+
+    const restoredButton = await screen.findByRole("button", { name: "Odśwież biblioteki" });
+    expect(await screen.findByText("Counter-Strike 2")).toBeTruthy();
+    expect(restoredButton).toBe(retryButton);
+    expect(document.activeElement).toBe(retryButton);
+    expect(retryButton.getAttribute("aria-busy")).toBe("false");
+  });
+
   it("ignores repeated fallback retry activations while a status read is pending", async () => {
     mocks.snapshot = { windows: false, foregroundProcess: null, apps: [], games: [], gamesError: null };
     render(<GamingHub onActivateGaming={vi.fn(async () => true)} />);
