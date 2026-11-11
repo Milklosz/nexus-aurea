@@ -19,6 +19,21 @@
   const pairingForm = document.getElementById("pairing-form");
   const pairButton = document.getElementById("pair-button");
   const commandButtons = [...document.querySelectorAll("[data-command]")];
+  const commandLabels = {
+    up: "Góra",
+    down: "Dół",
+    left: "Lewo",
+    right: "Prawo",
+    select: "Wybierz",
+    back: "Wstecz",
+    home: "Home",
+    "volume-up": "Głośniej",
+    "volume-down": "Ciszej",
+    mute: "Wycisz",
+    "profile-cinema": "Cinema",
+    "profile-gaming": "Gaming",
+    "profile-desktop": "Desktop",
+  };
 
   function showMessage(text, error = false) {
     if (!message) return;
@@ -253,6 +268,7 @@
   async function sendCommand(command) {
     if (!state.storageReady || !state.record || state.inFlight || !navigator.onLine) return;
     state.inFlight = true;
+    showMessage("Wysyłam: " + (commandLabels[command] || "polecenie") + "…");
     updateControls();
     const record = state.record;
     const sequence = record.sequence + 1;

@@ -45,7 +45,7 @@ describe("VELORA iPhone Remote", () => {
     expect(manifest.scope).toBe("./");
     expect(html).toContain('name="apple-mobile-web-app-capable"');
     const serviceWorker = readFileSync("public/remote/sw.js", "utf8");
-    expect(serviceWorker).toContain("nexus-aurea-remote-v0.9.2-velora-offline-status-1");
+    expect(serviceWorker).toContain("nexus-aurea-remote-v0.9.2-velora-command-status-2");
     expect(serviceWorker).toContain('key.startsWith("nexus-aurea-remote-")');
     expect(serviceWorker).toContain("self.skipWaiting()");
   });
@@ -136,6 +136,115 @@ describe("VELORA iPhone Remote", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(elements.get("pairing-form")?.hidden).toBe(true);
     expect(commandButtons[0].disabled).toBe(true);
+  });
+
+  it("announces a pending command while the remote controls are disabled", async () => {
+    const listeners = new Map<string, (event?: { preventDefault: () => void }) => void>();
+    const element = (initial: Partial<{ hidden: boolean; disabled: boolean; textContent: string; value: string }> = {}) => ({
+      hidden: initial.hidden ?? false,
+      disabled: initial.disabled ?? false,
+      textContent: initial.textContent ?? "",
+      value: initial.value ?? "",
+      dataset: {} as Record<string, string>,
+      addEventListener: vi.fn((type: string, listener: (event?: { preventDefault: () => void }) => void) => listeners.set(type, listener)),
+    });
+    const elements = new Map([
+      ["connection-state", element()],
+      ["server-state", element()],
+      ["origin-state", element()],
+      ["pairing-state", element()],
+      ["paired-count", element({ textContent: "1" })],
+      ["remote-message", element()],
+      ["pairing-form", element({ hidden: true })],
+      ["pair-button", element({ disabled: true })],
+      ["pairing-code", element()],
+      ["device-name", element()],
+    ]);
+    const commandButton = element({ disabled: true });
+    commandButton.dataset.command = "home";
+    const record = { deviceId: "iphone", key: {}, sequence: 0 };
+    const indexedDB = {
+      open: vi.fn(() => {
+        const request: { result?: unknown; onsuccess?: () => void } = {};
+        const database = {
+          objectStoreNames: { contains: () => true },
+          close: vi.fn(),
+          transaction: () => {
+            const transaction: {
+              oncomplete?: () => void;
+              objectStore: () => { get: () => { result?: unknown; onsuccess?: () => void }; put: () => void };
+            } = {
+              objectStore: () => ({
+                get: () => {
+                  const getRequest: { result?: unknown; onsuccess?: () => void } = {};
+                  queueMicrotask(() => {
+                    getRequest.result = record;
+                    getRequest.onsuccess?.();
+                    transaction.oncomplete?.();
+                  });
+                  return getRequest;
+                },
+                put: () => queueMicrotask(() => transaction.oncomplete?.()),
+              }),
+            };
+            return transaction;
+          },
+        };
+        queueMicrotask(() => {
+          request.result = database;
+          request.onsuccess?.();
+        });
+        return request;
+      }),
+    };
+    let resolveCommand!: (response: { ok: boolean; status: number }) => void;
+    const pendingCommand = new Promise<{ ok: boolean; status: number }>((resolve) => { resolveCommand = resolve; });
+    const fetch = vi.fn((url: string) => url === "./api/status"
+      ? Promise.resolve({ ok: true, status: 200, json: async () => ({ enabled: true, pairedDeviceCount: 1 }) })
+      : pendingCommand);
+    const window = {
+      isSecureContext: true,
+      location: { protocol: "https:" },
+      crypto: { subtle: { sign: async () => new Uint8Array([1]).buffer } },
+      indexedDB,
+      addEventListener: vi.fn(),
+    };
+
+    runInNewContext(script, {
+      window,
+      document: {
+        visibilityState: "visible",
+        getElementById: (id: string) => elements.get(id),
+        querySelectorAll: () => [commandButton],
+        addEventListener: vi.fn(),
+      },
+      navigator: { onLine: true, serviceWorker: { register: async () => {} } },
+      indexedDB,
+      fetch,
+      crypto: { getRandomValues: vi.fn(), subtle: { sign: async () => new Uint8Array([1]).buffer } },
+      TextEncoder,
+      Uint8Array,
+      Promise,
+      Error,
+      String,
+      Number,
+      Boolean,
+      JSON,
+      Math,
+      btoa: (value: string) => value,
+      queueMicrotask,
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(commandButton.disabled).toBe(false);
+    listeners.get("click")?.();
+    expect(elements.get("remote-message")?.textContent).toBe("Wysyłam: Home…");
+    expect(commandButton.disabled).toBe(true);
+
+    resolveCommand({ ok: true, status: 200 });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(elements.get("remote-message")?.textContent).toBe("Wysłano: home.");
+    expect(commandButton.disabled).toBe(false);
   });
 
   it("does not let a pending status check overwrite the offline state", async () => {
