@@ -5,7 +5,8 @@ Updated: 2026-11-11 (Europe/Warsaw)
 ## Current branch and commits
 
 - Active branch: `feat/velora-night-build-2`.
-- Latest tested implementation commit: local `caa35950958c264da709d3c9e4ea38e917859621`, published as `0266c3d668ebc936a9df5beea27bcdf6f103a259`; their trees match.
+- Latest tested implementation commit: local `fc5c668369718b516f757192c1255be1fc030b45`, published as `e82636bcf08bfd0d1ee5e8b9f176ade5b0c4ba34`; their trees match.
+- Local stage-31 implementation commit is preserved under `refs/codex/local/gaming-hub-refresh-feedback-stage-31`.
 - Local stage-30 implementation commit is preserved under `refs/codex/local/control-service-listener-diagnostics-stage-30`.
 - Local stage-29 implementation commit is preserved under `refs/codex/local/control-service-urgent-stop-notice-stage-29`.
 - Local stage-28 implementation commit is preserved under `refs/codex/local/control-service-stop-feedback-stage-28`.
@@ -55,13 +56,14 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - iPhone Remote invalidates pending command UI updates when the iPhone goes offline, so a late response cannot overwrite the offline status. Added a regression case and bumped the service-worker cache key; commands are never retried automatically.
 - Gaming Hub now announces pending Steam Big Picture, Playnite, and game launches, and exposes busy state on each launch button. Added a pending-launch accessibility regression test.
 - Gaming Hub clears its pending live status when a Steam, Playnite, or game launch fails, leaving the error alert as the current message.
+- Gaming Hub clears old launch feedback during library refreshes and announces a successful launcher result after the follow-up read, including when that read fails.
 - Control Service actions announce pending work and the resulting state, expose busy status on both controls, and clear pending feedback after errors.
 - The emergency-stop event invalidates pending Control Service action results, immediately clears busy state, and prevents an older operation finalizer from clearing a newer action busy state.
 - The initial Control Service status read is ignored if an emergency-stop event arrives before that read resolves, so stale startup data cannot revive the stopped state.
 - Any Control Service stop event clears the pending action announcement; an unexpected stop leaves its error visible without a stale “updating” message.
 - Emergency-stop feedback uses an assertive live announcement; routine action feedback remains polite.
 - Failures to register either Control Service status listener now produce a visible diagnostic that the displayed state may be stale.
-- Latest local React run: 25 files, 134 tests passed. TypeScript and Vite production build passed.
+- Latest local React run: 25 files, 136 tests passed. TypeScript and Vite production build passed.
 - GitHub Actions run [43026294733](https://github.com/Milklosz/nexus-aurea/actions/runs/43026294733) passed on Windows and macOS, including React, Rust, TypeScript/Vite, and platform builds. The Release job was skipped.
 - GitHub Actions runs [43029135952](https://github.com/Milklosz/nexus-aurea/actions/runs/43029135952) (stage 09), [43029773813](https://github.com/Milklosz/nexus-aurea/actions/runs/43029773813) (stage 10), [43030395848](https://github.com/Milklosz/nexus-aurea/actions/runs/43030395848) (stage 11), [43031259001](https://github.com/Milklosz/nexus-aurea/actions/runs/43031259001) (stage 12), [43032589406](https://github.com/Milklosz/nexus-aurea/actions/runs/43032589406) (stage 13), stage 14 [43033436829](https://github.com/Milklosz/nexus-aurea/actions/runs/43033436829), stage 15 [43035329173](https://github.com/Milklosz/nexus-aurea/actions/runs/43035329173), stage 16 [43036042119](https://github.com/Milklosz/nexus-aurea/actions/runs/43036042119), stage 17 [43036705267](https://github.com/Milklosz/nexus-aurea/actions/runs/43036705267), stage 18 [43039325451](https://github.com/Milklosz/nexus-aurea/actions/runs/43039325451), and stage 19 [43040038281](https://github.com/Milklosz/nexus-aurea/actions/runs/43040038281) passed on Windows and macOS.
 - GitHub Actions runs [43043218481](https://github.com/Milklosz/nexus-aurea/actions/runs/43043218481) (stage 20), [43043740999](https://github.com/Milklosz/nexus-aurea/actions/runs/43043740999) (stage 21), and [43045040872](https://github.com/Milklosz/nexus-aurea/actions/runs/43045040872) (stage 22) passed on Windows and macOS; the Release jobs were skipped.
@@ -70,7 +72,8 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - Stage 26 GitHub Actions runs [43051591281](https://github.com/Milklosz/nexus-aurea/actions/runs/43051591281) (PR) and [43051579122](https://github.com/Milklosz/nexus-aurea/actions/runs/43051579122) (push) passed on Windows and macOS; Release was skipped.
 - Stage 27 GitHub Actions runs [43053322359](https://github.com/Milklosz/nexus-aurea/actions/runs/43053322359) (PR) and [43053309991](https://github.com/Milklosz/nexus-aurea/actions/runs/43053309991) (push) passed on Windows and macOS.
 - Stage 28 GitHub Actions runs [43054012947](https://github.com/Milklosz/nexus-aurea/actions/runs/43054012947) (PR) and [43053998764](https://github.com/Milklosz/nexus-aurea/actions/runs/43053998764) (push) passed on Windows and macOS.
-- Stage 30 Actions runs [43055651446](https://github.com/Milklosz/nexus-aurea/actions/runs/43055651446) (PR) and [43055634481](https://github.com/Milklosz/nexus-aurea/actions/runs/43055634481) (push) are running.
+- Stage 30 Actions runs [43055651446](https://github.com/Milklosz/nexus-aurea/actions/runs/43055651446) (PR) and [43055634481](https://github.com/Milklosz/nexus-aurea/actions/runs/43055634481) (push) passed on Windows and macOS.
+- Stage 31 push run [43057181243](https://github.com/Milklosz/nexus-aurea/actions/runs/43057181243) is running.
 - Stage 29 GitHub Actions runs [43054839359](https://github.com/Milklosz/nexus-aurea/actions/runs/43054839359) (PR) and [43054826843](https://github.com/Milklosz/nexus-aurea/actions/runs/43054826843) (push) passed on Windows and macOS.
 - The currently installed MSI copy was only opened for visual inspection. Its Control Center is the older long-list layout; it was closed afterward. No installed files or settings were changed.
 
@@ -96,7 +99,8 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - Stage 27 source copies and patch are stored under `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-27` and `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-27.patch`; GitHub Actions passed on Windows and macOS.
 - Stage 28 source copies and patch are stored under `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-28` and `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-28.patch`; its CI runs passed on Windows and macOS.
 - Stage 29 source copies and patch are stored under `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-29` and `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-29.patch`; its CI runs passed on Windows and macOS.
-- Stage 30 source copies and patch are stored under `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-30` and `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-30.patch`; refresh the full snapshot after CI and this progress update.
+- Stage 30 source copies and patch are stored under `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-30` and `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-30.patch`; its CI runs passed on Windows and macOS.
+- Stage 31 source copies and patch are stored under `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-31` and `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-31.patch`; refresh the full snapshot after CI and the progress checkpoint.
 - Prior Windows CI artifact for stage 19 from run [43040038281](https://github.com/Milklosz/nexus-aurea/actions/runs/43040038281): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-fbbc0e52343fffd9c68369bc6dc3dfe969df187f.zip` (SHA-256 `f3dedafd2cb510cc7886be8598cd8776677cfe6684c56a40ddfba183b170bb13`).
 - Stage-19 installer SHA-256: `983a2fb40e56761c8be8145dfb8a260cf531301bed95707166324d76cb5629b8`; Authenticode status: `NotSigned`; it was not run or installed.
 - Prior Windows CI artifact for stage 17 from run [43036705267](https://github.com/Milklosz/nexus-aurea/actions/runs/43036705267): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-3be7517542ad6b164d3001cc4a4aa4063ab1bc4b.zip`.
@@ -127,4 +131,4 @@ Updated: 2026-11-11 (Europe/Warsaw)
 
 ## Next step
 
-Stage 30 is locally tested, committed, and published; CI is running. Stage 31: prevent stale Gaming Hub launch announcements from lingering through a library refresh failure, while retaining the accurate launch result. Keep GUI review marked `NOT TESTED`; keep iPhone Remote safely disabled by default.
+Stage 31 is locally tested, committed, and published; CI is running. Stage 32: keep the Gaming Hub retry control available and focused while an App Manager refresh is pending. Keep GUI review marked `NOT TESTED`; keep iPhone Remote safely disabled by default.
