@@ -5,8 +5,8 @@ Updated: 2026-11-11 (Europe/Warsaw)
 ## Current branch and commits
 
 - Active branch: `feat/velora-night-build-2`.
-- Latest tested implementation commit: `3212d8d10688662a30ecbda9307db59bc4db7bdb`.
-- Local stage-10 source commit `15c01831cd98457ef1bd865b75de86039a293e16` is preserved under `refs/codex/local/remote-status-retry-stage-10`; its tree matches the published commit.
+- Latest tested implementation commit: `14a775f60d3bb9d40bc0ecb266f6c1cb093bcee3`.
+- Local stage-11 source commit `5f32d0751d5932e16e7ca97a1211923e99f34394` is preserved under `refs/codex/local/control-center-focus-stage-11`; its tree matches the published commit.
 - Local stage-08 commit `8390a6555aa573063ff2d92bd0f9c6077082abc2` is preserved under `refs/codex/local/feat-velora-remote-storage-stage-08`; its tree matches the published commit.
 - Verified base commit: `6dbcc36abeded18b753a134bc8ede10fb37df391`; exact base tree `ea6aa33175216fd51036676c20aadc7ddd7e5773`.
 - Draft PR: [#13](https://github.com/Milklosz/nexus-aurea/pull/13), targeting `feat/aurea-v0.9.1-secure-iphone-remote`.
@@ -25,9 +25,10 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - iPhone Remote now fails closed if IndexedDB cannot read the secure device-key record: the pairing form remains hidden, pairing is disabled, and no commands can be sent. The service-worker cache key was bumped so the PWA fetches the updated script.
 - Control Center now treats an unreadable iPhone Remote status as unknown, shows an error, and hides all remote actions until a fresh status arrives.
 - Added a retry for the read-only iPhone Remote status check; pairing and server actions remain hidden until the retry succeeds.
+- Improved the visible focus ring for Control Center buttons and inputs, and gave pressed controls a clearer gold state. The tab navigation regression test now verifies that focus follows the selected tab.
 - React tests: 24 files, 116 tests passed. TypeScript and Vite production build passed.
 - GitHub Actions run [43026294733](https://github.com/Milklosz/nexus-aurea/actions/runs/43026294733) passed on Windows and macOS, including React, Rust, TypeScript/Vite, and platform builds. The Release job was skipped.
-- GitHub Actions run [43029135952](https://github.com/Milklosz/nexus-aurea/actions/runs/43029135952) passed on the stage-09 implementation commit. The stage-10 implementation run [43029773813](https://github.com/Milklosz/nexus-aurea/actions/runs/43029773813) and its preceding progress checkpoint run [43029324581](https://github.com/Milklosz/nexus-aurea/actions/runs/43029324581) were still in progress at this checkpoint.
+- GitHub Actions runs [43029135952](https://github.com/Milklosz/nexus-aurea/actions/runs/43029135952) (stage 09) and [43029773813](https://github.com/Milklosz/nexus-aurea/actions/runs/43029773813) (stage 10) passed on Windows and macOS. The latest stage-11 run [43030395848](https://github.com/Milklosz/nexus-aurea/actions/runs/43030395848) is in progress.
 - The artifact below is from the earlier, fully passing stage-08 checkpoint.
 - The currently installed MSI copy was only opened for visual inspection. Its Control Center is the older long-list layout; it was closed afterward. No installed files or settings were changed.
 
@@ -50,4 +51,4 @@ Updated: 2026-11-11 (Europe/Warsaw)
 
 ## Next step
 
-Review CI for stage 10, then improve Control Center focus restoration or keyboard navigation with a regression test. Keep GUI review marked `NOT TESTED` unless a supported, policy-compliant path becomes available; keep iPhone Remote safely disabled by default.
+Review the stage-11 Windows and macOS CI result and update the Draft PR summary. Then continue with a small Control Center or TV-navigation improvement and a regression test. Keep GUI review marked `NOT TESTED` unless a supported, policy-compliant path becomes available; keep iPhone Remote safely disabled by default.
