@@ -334,7 +334,7 @@ export default function App() {
       if (!active || id !== "playniteFullscreen") return;
       void focusWindowSafely(getCurrentWindow(), () => {
         showToast("Playnite został zamknięty. Wróć do VELORA przez Alt+Tab.");
-      });
+      }, () => showToast("Wrócono do VELORA. Profil Gaming jest gotowy."));
     }).then((stopListening) => {
       if (active) unlisten = stopListening;
       else stopListening();

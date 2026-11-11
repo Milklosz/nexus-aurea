@@ -10,13 +10,15 @@ describe("safe window focus request", () => {
       setFocus: vi.fn(async () => { events.push("focus"); }),
     };
     const onBlocked = vi.fn();
+    const onFocused = vi.fn();
 
-    await focusWindowSafely(window, onBlocked);
+    await focusWindowSafely(window, onBlocked, onFocused);
 
     expect(events).toEqual(["unminimize", "focus"]);
     expect(window.unminimize).toHaveBeenCalledOnce();
     expect(window.setFocus).toHaveBeenCalledOnce();
     expect(onBlocked).not.toHaveBeenCalled();
+    expect(onFocused).toHaveBeenCalledOnce();
   });
 
   it("reports a failed restore or focus request without throwing", async () => {

@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   getStatus: vi.fn(async () => mocks.snapshot),
   launchApp: vi.fn(async (id: string) => ({ id, alreadyRunning: false, focusRestoreSupported: false })),
   launchGame: vi.fn(async (id: string) => ({ id, launched: true })),
+  openPlayniteDownload: vi.fn(async () => {}),
 }));
 
 vi.mock("../services/appManager", () => ({
@@ -16,6 +17,10 @@ vi.mock("../services/appManager", () => ({
   launchManagedApp: mocks.launchApp,
   launchManagedGame: mocks.launchGame,
   managedAppErrorMessage: (cause: unknown) => cause instanceof Error ? cause.message : "App Manager error",
+}));
+vi.mock("../services/playniteSupport", () => ({
+  PLAYNITE_DOWNLOAD_URL: "https://playnite.link/download.html",
+  openOfficialPlayniteDownload: mocks.openPlayniteDownload,
 }));
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
@@ -78,6 +83,32 @@ describe("Gaming Hub and App Manager integration", () => {
     render(<GamingHub onActivateGaming={vi.fn(async () => true)} />);
     fireEvent.click(await screen.findByRole("button", { name: "Fullscreen" }));
     await waitFor(() => expect(mocks.launchApp).toHaveBeenCalledWith("playniteFullscreen"));
+  });
+
+  it("routes an already-running Playnite instance to Fullscreen", async () => {
+    mocks.snapshot = windowsSnapshot([]);
+    mocks.snapshot.apps[1].installed = true;
+    mocks.snapshot.apps[1].runningInstances = 1;
+    mocks.launchApp.mockResolvedValueOnce({ id: "playniteFullscreen", alreadyRunning: true, focusRestoreSupported: true });
+    render(<GamingHub onActivateGaming={vi.fn(async () => true)} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Fullscreen" }));
+
+    expect(await screen.findByText("Wysłano do działającego Playnite żądanie przejścia do trybu Fullscreen.")).toBeTruthy();
+    expect(mocks.launchApp).toHaveBeenCalledWith("playniteFullscreen");
+  });
+
+  it("offers the official Playnite download and explains the GOG handoff without inventing game status", async () => {
+    mocks.snapshot = windowsSnapshot([]);
+    render(<GamingHub onActivateGaming={vi.fn(async () => true)} />);
+
+    expect(await screen.findByText(/Playnite nie jest wykryty/)).toBeTruthy();
+    expect(screen.getAllByText(/Cyberpunk 2077/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/VELORA nie zgaduje, czy Cyberpunk 2077/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Graj" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Oficjalna strona Playnite" }));
+    await waitFor(() => expect(mocks.openPlayniteDownload).toHaveBeenCalledOnce());
   });
 
   it("keeps a successful launcher result visible if its follow-up refresh fails", async () => {

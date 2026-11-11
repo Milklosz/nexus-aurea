@@ -2,9 +2,15 @@ use serde::Serialize;
 #[cfg(target_os = "windows")]
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::Command;
+#[cfg(target_os = "windows")]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "windows")]
 use std::thread;
-use std::time::{Duration, Instant};
+#[cfg(any(target_os = "windows", test))]
+use std::time::Duration;
+#[cfg(target_os = "windows")]
+use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 
 #[derive(Clone, Debug, Serialize)]
@@ -79,8 +85,8 @@ fn spec_for(id: &str) -> Option<&'static AppSpec> {
 }
 
 fn should_dispatch_when_running(id: &str) -> bool {
-    // Steam uses its single-instance URI handoff to switch an already-open client to Big Picture.
-    id == "steamBigPicture"
+    // Both launchers have documented single-instance handoffs for changing modes.
+    matches!(id, "steamBigPicture" | "playniteFullscreen")
 }
 
 #[tauri::command]
@@ -91,7 +97,7 @@ pub fn get_app_manager_status() -> AppManagerSnapshot {
             let path = app_path(spec.id);
             let installed = path.is_some();
             let (running_instances, last_error) = if installed {
-                match process_count(spec.process_name) {
+                match app_process_count(spec.id, spec.process_name) {
                     Ok(count) => (count, None),
                     Err(error) => (0, Some(error)),
                 }
@@ -153,7 +159,7 @@ pub fn launch_managed_app(app: AppHandle, id: String) -> Result<LaunchReceipt, S
     {
         let executable = app_path(spec.id)
             .ok_or_else(|| format!("Nie wykryto zainstalowanej aplikacji: {}.", spec.name))?;
-        let count = process_count(spec.process_name)?;
+        let count = app_process_count(spec.id, spec.process_name)?;
         let already_running = count > 0;
         if already_running && !should_dispatch_when_running(spec.id) {
             return Ok(LaunchReceipt {
@@ -170,8 +176,9 @@ pub fn launch_managed_app(app: AppHandle, id: String) -> Result<LaunchReceipt, S
             _ => {}
         }
         let child = command.spawn().map_err(|error| format!("Windows nie uruchomił aplikacji {}: {error}", spec.name))?;
-        if spec.focus_restore_supported {
-            watch_owned_process(app, id.clone(), child);
+        if spec.id == "playniteFullscreen" {
+            drop(child);
+            watch_playnite_lifecycle(app, already_running);
         }
         Ok(LaunchReceipt {
             id,
@@ -447,33 +454,68 @@ fn process_entry_matches(executable_name: &[u16], image_name: &str) -> bool {
     String::from_utf16_lossy(&executable_name[..length]).eq_ignore_ascii_case(image_name)
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn should_restore_after_playnite(
+    seen_running: bool,
+    absent_for: Duration,
+) -> bool {
+    seen_running && absent_for >= Duration::from_secs(2)
+}
+
 #[cfg(target_os = "windows")]
-fn watch_owned_process(app: AppHandle, id: String, mut child: Child) {
+fn app_process_count(id: &str, process_name: &str) -> Result<usize, String> {
+    if id == "playniteFullscreen" {
+        return Ok(process_count("Playnite.FullscreenApp.exe")?
+            + process_count("Playnite.DesktopApp.exe")?);
+    }
+    process_count(process_name)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn app_process_count(_id: &str, _process_name: &str) -> Result<usize, String> {
+    Ok(0)
+}
+
+#[cfg(target_os = "windows")]
+static PLAYNITE_WATCHER_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "windows")]
+fn watch_playnite_lifecycle(app: AppHandle, already_running: bool) {
+    if PLAYNITE_WATCHER_ACTIVE.swap(true, Ordering::AcqRel) { return; }
     thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(12 * 60 * 60);
+        let mut seen_running = already_running;
+        let mut absent_since = None;
         loop {
-            match child.try_wait() {
-                Ok(Some(_status)) => {
-                    let foreground = crate::control_service::foreground_process_name();
-                    let returned_to_desktop = foreground.as_deref().is_some_and(|name| {
-                        name.eq_ignore_ascii_case("explorer.exe")
-                            || name.eq_ignore_ascii_case("nexus-aurea.exe")
-                    });
-                    if returned_to_desktop {
-                        let _ = app.emit("managed-app-exited", id);
+            match app_process_count("playniteFullscreen", "Playnite.FullscreenApp.exe") {
+                Ok(count) if count > 0 => {
+                    seen_running = true;
+                    absent_since = None;
+                }
+                Ok(0) if seen_running => {
+                    let absent_since = absent_since.get_or_insert_with(Instant::now);
+                    if absent_since.elapsed() < Duration::from_secs(2) {
+                        thread::sleep(Duration::from_millis(300));
+                        continue;
+                    }
+                    if should_restore_after_playnite(seen_running, absent_since.elapsed()) {
+                        let _ = app.emit("managed-app-exited", "playniteFullscreen");
                     }
                     break;
                 }
-                Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(300)),
-                Ok(None) | Err(_) => break,
+                Ok(_) | Err(_) => absent_since = None,
             }
+            if Instant::now() >= deadline { break; }
+            thread::sleep(Duration::from_millis(300));
         }
+        PLAYNITE_WATCHER_ACTIVE.store(false, Ordering::Release);
     });
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{is_valid_steam_app_id, parse_steam_manifest, parse_vdf_pair, process_entry_matches, should_dispatch_when_running, spec_for};
+    use super::{is_valid_steam_app_id, parse_steam_manifest, parse_vdf_pair, process_entry_matches, should_dispatch_when_running, should_restore_after_playnite, spec_for};
+    use std::time::Duration;
 
     #[test]
     fn app_registry_rejects_unlisted_ids() {
@@ -486,7 +528,14 @@ mod tests {
     fn steam_dispatches_big_picture_to_its_single_existing_client() {
         assert!(should_dispatch_when_running("steamBigPicture"));
         assert!(!should_dispatch_when_running("appleMusic"));
-        assert!(!should_dispatch_when_running("playniteFullscreen"));
+        assert!(should_dispatch_when_running("playniteFullscreen"));
+    }
+
+    #[test]
+    fn playnite_return_waits_for_process_exit_and_only_restores_to_velora_or_desktop() {
+        assert!(!should_restore_after_playnite(false, Duration::from_secs(3)));
+        assert!(!should_restore_after_playnite(true, Duration::from_millis(500)));
+        assert!(should_restore_after_playnite(true, Duration::from_secs(3)));
     }
 
     #[test]

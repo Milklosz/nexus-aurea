@@ -9,6 +9,7 @@ import {
   type ManagedAppId,
   type ManagedGame,
 } from "../services/appManager";
+import { PLAYNITE_DOWNLOAD_URL, openOfficialPlayniteDownload } from "../services/playniteSupport";
 
 type GamingHubProps = { onActivateGaming: () => Promise<boolean> };
 
@@ -64,7 +65,9 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
       if (!await onActivateGaming()) throw new Error("Nie udało się wybrać profilu Gaming.");
       const receipt = await launchManagedApp(id);
       const launchNotice = receipt.alreadyRunning
-        ? "Aplikacja już działa. VELORA nie wymusza przełączenia fokusu."
+        ? id === "playniteFullscreen"
+          ? "Wysłano do działającego Playnite żądanie przejścia do trybu Fullscreen."
+          : "Wysłano do działającego Steam żądanie przejścia do Big Picture."
         : "Wysłano żądanie uruchomienia " + (id === "steamBigPicture" ? "Steam Big Picture." : "Playnite Fullscreen.");
       await refresh();
       setNotice(launchNotice);
@@ -91,6 +94,15 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
       setError(managedAppErrorMessage(cause, "Steam nie uruchomił gry."));
     } finally {
       setBusy(null);
+    }
+  };
+
+  const openPlayniteDownload = async () => {
+    setError("");
+    try {
+      await openOfficialPlayniteDownload();
+    } catch {
+      setError(`Nie udało się otworzyć strony Playnite. Otwórz ją ręcznie: ${PLAYNITE_DOWNLOAD_URL}`);
     }
   };
 
@@ -124,6 +136,11 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
       </div>
     </div>
 
+    {!playnite?.installed && <div className="gaming-hub-guidance">
+      <p>Playnite nie jest wykryty. Możesz zainstalować go samodzielnie z oficjalnej strony; VELORA nie pobiera ani nie uruchamia instalatora.</p>
+      <button type="button" onClick={() => void openPlayniteDownload()}>Oficjalna strona Playnite</button>
+    </div>}
+
     {steam?.lastError && <p role="alert">Steam: {steam.lastError}</p>}
     {playnite?.lastError && <p role="alert">Playnite: {playnite.lastError}</p>}
     {snapshot.gamesError && <p role="alert">Biblioteka Steam: {snapshot.gamesError}</p>}
@@ -143,7 +160,11 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
         ? <p>Nie znaleziono zainstalowanych gier w odczytanych bibliotekach Steam.</p>
         : <p>Brak listy gier. Wyświetlamy wyłącznie dane zwrócone przez bibliotekę Steam.</p>}
 
-    <p className="gaming-hub-note">Lista gier pochodzi z lokalnych plików appmanifest Steam. Playnite jest wykrywany i może być otwarty, ale jego biblioteka nie jest jeszcze odczytywana.</p>
+    <div className="gaming-platform-guidance">
+      <h4>GOG i Cyberpunk 2077</h4>
+      <p>W Playnite wybierz integrację GOG podczas pierwszego uruchomienia albo w menu Add-ons → Browse → Libraries. Zaloguj się i sprawdź stan instalacji w Playnite lub oficjalnym kliencie, jeśli integracja tego wymaga; tam dokończ też ewentualną aktualizację lub instalację.</p>
+      <p className="gaming-hub-note">VELORA nie zgaduje, czy Cyberpunk 2077 jest na koncie, zainstalowany lub gotowy, i nie pobiera gry. Ta lista obejmuje tylko gry Steam potwierdzone lokalnymi plikami instalacji. W Playnite możesz skonfigurować dostępne integracje Epic, EA App, Ubisoft Connect, Battle.net oraz Xbox/PC Game Pass; logowanie i wymagane launchery zależą od integracji.</p>
+    </div>
     <button key="app-manager-refresh" type="button" aria-busy={loading} onClick={() => void refresh()} disabled={busy !== null}>
       {loading ? "Odświeżanie…" : "Odśwież biblioteki"}
     </button>

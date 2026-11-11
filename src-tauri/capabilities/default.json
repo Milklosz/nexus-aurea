@@ -30,6 +30,9 @@
         },
         {
           "url": "https://www.youtube.com/**"
+        },
+        {
+          "url": "https://playnite.link/**"
         }
       ]
     }

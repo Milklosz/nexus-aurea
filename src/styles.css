@@ -130,6 +130,9 @@
 .gaming-launcher span, .gaming-game-row span { color: #c8c0b1; font-size: .78rem; }
 .gaming-hub h4 { margin: .35rem 0 0; color: #e4c995; font-size: 9px; letter-spacing: .18em; text-transform: uppercase; }
 .gaming-hub button { flex: 0 0 auto; }
+.gaming-hub-guidance, .gaming-platform-guidance { display: grid; gap: .5rem; padding: .7rem .8rem; border: 1px solid rgba(212, 180, 132, .2); border-radius: 12px; background: rgba(8,9,13,.28); }
+.gaming-hub-guidance p, .gaming-platform-guidance p { margin: 0; color: #d6cfc1; font-size: .78rem; line-height: 1.5; }
+.gaming-hub-guidance button { justify-self: start; }
 .gaming-hub-note { color: #aaa399 !important; font-size: 10px !important; }
 .remote-access-status { display: grid; gap: .2rem; margin: .6rem 0; padding-left: 1.2rem; color: #c8c0b1; font-size: .85rem; }
 .remote-trust-confirmation { display: flex; align-items: flex-start; gap: .55rem; margin: .75rem 0; color: #d5cec1; font-size: .82rem; line-height: 1.45; }
@@ -207,6 +210,7 @@
 .cc-gaming-card, .cc-remote-card { padding: clamp(1rem, 2.2vw, 1.8rem); }
 .cc-gaming-card .gaming-hub { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: .85rem 1.1rem; }
 .cc-gaming-card .gaming-launchers, .cc-gaming-card .gaming-game-list { gap: .55rem; }
+.cc-gaming-card .gaming-hub-guidance, .cc-gaming-card .gaming-platform-guidance { grid-column: 1 / -1; }
 .cc-gaming-card .gaming-launcher, .cc-gaming-card .gaming-game-row { min-height: 60px; padding: .55rem .7rem; }
 .cc-gaming-card .gaming-game-list { max-height: min(25vh, 210px); overflow-y: auto; overscroll-behavior: contain; padding-right: .35rem; }
 .cc-gaming-card .gaming-hub h4, .cc-gaming-card .gaming-hub-note, .cc-gaming-card .gaming-hub > button, .cc-gaming-card .gaming-hub > [role="alert"], .cc-gaming-card .gaming-hub > [role="status"] { grid-column: 1 / -1; }
