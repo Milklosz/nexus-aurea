@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isTextEntryTarget, useNavigation } from "../hooks/useNavigation";
+import { getDialogNavigationControls, shouldUseNativeDialogArrowKey } from "../services/dialogNavigation";
 
 const activate = vi.fn();
 const openMenu = vi.fn();
@@ -43,5 +44,31 @@ describe("TV home navigation", () => {
     expect(isTextEntryTarget(textarea)).toBe(true);
     expect(isTextEntryTarget(button)).toBe(false);
     expect(isTextEntryTarget(null)).toBe(false);
+  });
+
+  it("includes enabled form controls in dialog navigation and skips hidden controls", () => {
+    const dialog = document.createElement("dialog");
+    const action = document.createElement("button");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    const hidden = document.createElement("div");
+    hidden.hidden = true;
+    hidden.append(document.createElement("button"));
+    const disabled = document.createElement("button");
+    disabled.disabled = true;
+    const hiddenInput = document.createElement("input");
+    hiddenInput.type = "hidden";
+    dialog.append(action, checkbox, hidden, disabled, hiddenInput);
+
+    expect(getDialogNavigationControls(dialog)).toEqual([action, checkbox]);
+  });
+
+  it("keeps native arrow editing in text controls and navigates from checkboxes", () => {
+    const textInput = document.createElement("input");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+
+    expect(shouldUseNativeDialogArrowKey(textInput)).toBe(true);
+    expect(shouldUseNativeDialogArrowKey(checkbox)).toBe(false);
   });
 });

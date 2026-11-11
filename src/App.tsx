@@ -17,6 +17,7 @@ import { useControllerOwnershipSuspension } from "./hooks/useControllerOwnership
 import { isTextEntryTarget, useNavigation } from "./hooks/useNavigation";
 import { useFocusRestoreOnClose } from "./hooks/useFocusRestoreOnClose";
 import { useLaunchGuard } from "./hooks/useLaunchGuard";
+import { getDialogNavigationControls, shouldUseNativeDialogArrowKey } from "./services/dialogNavigation";
 import { useToast } from "./hooks/useToast";
 import { useWeather } from "./hooks/useWeather";
 import { openStreamingService, streamingServiceErrorMessage } from "./services/openStreamingService";
@@ -124,9 +125,7 @@ export default function App() {
       navigation.moveApp(delta);
       return;
     }
-    const controls = Array.from(dialog.querySelectorAll<HTMLElement>(
-      "button:not(:disabled), select:not(:disabled)",
-    )).filter((control) => !control.closest("[hidden]") && !control.closest("[inert]"));
+    const controls = getDialogNavigationControls(dialog);
     const index = controls.indexOf(document.activeElement as HTMLElement);
     const nextIndex = index < 0
       ? (delta > 0 ? 0 : controls.length - 1)
@@ -246,7 +245,11 @@ export default function App() {
         else closeDiagnostics();
         return;
       }
-      if (openDialog && ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
+      if (
+        openDialog &&
+        ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key) &&
+        !shouldUseNativeDialogArrowKey(event.target)
+      ) {
         event.preventDefault();
         moveControllerFocus(event.key === "ArrowUp" || event.key === "ArrowLeft" ? -1 : 1);
         return;
