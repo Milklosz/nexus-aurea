@@ -75,7 +75,7 @@ beforeEach(() => {
 describe("Control Service diagnostics", () => {
   it("starts disabled and only arms after an explicit button press", async () => {
     render(<ControlServicePanel />);
-    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("wyłączony"));
+    await waitFor(() => expect(screen.getByText(/^Stan:/).textContent).toContain("wyłączony"));
     expect(mocks.start).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Włącz monitoring sesji" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Wyłącz usługę" })).toBeTruthy());
@@ -88,9 +88,17 @@ describe("Control Service diagnostics", () => {
     render(<ControlServicePanel />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Włącz tryb gry" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Włącz tryb gry" }));
-    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("tryb gry"));
+    await waitFor(() => expect(screen.getByText(/^Stan:/).textContent).toContain("tryb gry"));
     expect(mocks.setGameMode).toHaveBeenCalledWith(true);
     expect(screen.getByRole("button", { name: "Wyłącz tryb gry" })).toBeTruthy();
+  });
+
+  it("labels Steam foreground as advisory and does not claim controller ownership", async () => {
+    mocks.status = status({ running: true, foregroundProcess: "steam.exe" });
+    render(<ControlServicePanel />);
+    expect(await screen.findByText("Sygnał aktywnego okna: proces Steam na pierwszym planie")).toBeTruthy();
+    expect(screen.getByText(/nie potwierdza, że Steam Input przejął kontroler/)).toBeTruthy();
+    expect(screen.getByText(/Globalne mapowanie przycisków.*wyłączone/)).toBeTruthy();
   });
 
   it("reflects the keyboard emergency stop event", async () => {

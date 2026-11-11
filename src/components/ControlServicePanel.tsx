@@ -9,12 +9,23 @@ import {
   stopControlService,
   type ControlServiceStatus,
 } from "../services/controlService";
+import { classifyForegroundProcess } from "../services/controllerOwnership";
+
+const foregroundProcessLabels = {
+  velora: "VELORA na pierwszym planie",
+  steam: "proces Steam na pierwszym planie",
+  external: "inna aplikacja na pierwszym planie",
+  unknown: "brak sygnału",
+} as const;
 
 export function ControlServicePanel() {
   const [status, setStatus] = useState<ControlServiceStatus>(disabledControlServiceStatus);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const foregroundClass = status.running
+    ? classifyForegroundProcess(status.foregroundProcess)
+    : "unknown";
 
   useEffect(() => {
     let active = true;
@@ -80,6 +91,9 @@ export function ControlServicePanel() {
           HID gamepad: {status.controllerCount} · kontrolery Sony: {status.playstationControllerCount}
           {" · Aktywne okno: "}{status.foregroundProcess ?? "niedostępne"}
         </p>
+        <p role="status">Sygnał aktywnego okna: {foregroundProcessLabels[foregroundClass]}</p>
+        {foregroundClass === "steam" && <p role="note">To sygnał procesu na pierwszym planie; nie potwierdza, że Steam Input przejął kontroler.</p>}
+        {foregroundClass === "external" && <p role="note">Lokalne sterowanie VELORA pozostaje wstrzymane, dopóki jej okno nie wróci na pierwszy plan.</p>}
         <div className="launcher-actions">
           <button
             type="button"
