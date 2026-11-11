@@ -5,7 +5,8 @@ Updated: 2026-11-11 (Europe/Warsaw)
 ## Current branch and commits
 
 - Active branch: `feat/velora-night-build-2`.
-- Latest tested implementation commit: `f157730a275c215b8114713ad1111656ce07dbb1`.
+- Latest tested implementation commit: `fbbc0e52343fffd9c68369bc6dc3dfe969df187f`.
+- Local stage-19 implementation commit `de31db486e07a1f9ba56216dd20481d5dd2b0ebe` is preserved under `refs/codex/local/remote-home-restore-stage-19`; its tree matches the published implementation.
 - Local stage-18 implementation commit `4f876cc19540e802dbb8c40cd85cdb7d8602563f` is preserved under `refs/codex/local/remote-home-focus-stage-18`; its tree matches the published implementation.
 - Local stage-17 implementation commit `329fcfc499a0a952baa115072798f3564d307b12` is preserved under `refs/codex/local/dialog-form-navigation-stage-17`; its tree matches the published implementation.
 - Local stage-16 implementation commit `adf81a6893538385330365233986d30bb4748a0a` is preserved under `refs/codex/local/backspace-text-edit-stage-16`; its tree matches the published implementation.
@@ -38,10 +39,11 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - TV navigation now leaves Backspace available for editing text in inputs, selects, textareas, and contenteditable targets while preserving Backspace/BrowserBack navigation elsewhere.
 - Controller and keyboard navigation inside dialogs now includes enabled checkboxes and other form controls, skips disabled/hidden controls, and lets text inputs and selects handle their native arrow-key editing.
 - The iPhone Remote Home command closes open panels and safely requests VELORA window focus. Windows focus refusal is caught and announced with an Alt+Tab fallback; app-return handlers use the same safe focus helper.
-- React tests: 25 files, 123 tests passed. TypeScript and Vite production build passed.
+- iPhone Remote Home now unminimizes VELORA before focusing it. Added the narrowly scoped Tauri unminimize capability and a test for restore/focus ordering and failure handling.
+- React tests: 25 files, 124 tests passed. TypeScript and Vite production build passed.
 - GitHub Actions run [43026294733](https://github.com/Milklosz/nexus-aurea/actions/runs/43026294733) passed on Windows and macOS, including React, Rust, TypeScript/Vite, and platform builds. The Release job was skipped.
 - GitHub Actions runs [43029135952](https://github.com/Milklosz/nexus-aurea/actions/runs/43029135952) (stage 09), [43029773813](https://github.com/Milklosz/nexus-aurea/actions/runs/43029773813) (stage 10), [43030395848](https://github.com/Milklosz/nexus-aurea/actions/runs/43030395848) (stage 11), [43031259001](https://github.com/Milklosz/nexus-aurea/actions/runs/43031259001) (stage 12), [43032589406](https://github.com/Milklosz/nexus-aurea/actions/runs/43032589406) (stage 13), stage 14 [43033436829](https://github.com/Milklosz/nexus-aurea/actions/runs/43033436829), stage 15 [43035329173](https://github.com/Milklosz/nexus-aurea/actions/runs/43035329173), stage 16 [43036042119](https://github.com/Milklosz/nexus-aurea/actions/runs/43036042119), and stage 17 [43036705267](https://github.com/Milklosz/nexus-aurea/actions/runs/43036705267) passed on Windows and macOS.
-- GitHub Actions stage-18 run [43039325451](https://github.com/Milklosz/nexus-aurea/actions/runs/43039325451) is running. The latest available Windows artifact is still from stage 17; no stage-18 installer is available yet.
+- GitHub Actions runs [43039325451](https://github.com/Milklosz/nexus-aurea/actions/runs/43039325451) (stage 18) passed on Windows and macOS. Stage-19 run [43040038281](https://github.com/Milklosz/nexus-aurea/actions/runs/43040038281) is running.
 - The artifact below is from the earlier, fully passing stage-08 checkpoint.
 - The currently installed MSI copy was only opened for visual inspection. Its Control Center is the older long-list layout; it was closed afterward. No installed files or settings were changed.
 
@@ -75,4 +77,4 @@ Updated: 2026-11-11 (Europe/Warsaw)
 
 ## Next step
 
-Review stage-18 CI and continue with another small VELORA navigation or Remote improvement and regression test. Keep GUI review marked `NOT TESTED` unless a supported, policy-compliant path becomes available; keep iPhone Remote safely disabled by default.
+Review stage-19 CI, record its Windows artifact if available, and continue with another small VELORA navigation or Remote improvement and regression test. Keep GUI review marked `NOT TESTED` unless a supported, policy-compliant path becomes available; keep iPhone Remote safely disabled by default.
