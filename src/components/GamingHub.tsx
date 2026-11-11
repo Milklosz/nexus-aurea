@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   emptyAppManagerSnapshot,
   getAppManagerStatus,
@@ -16,11 +16,14 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
   const [snapshot, setSnapshot] = useState<AppManagerSnapshot>(emptyAppManagerSnapshot);
   const [loading, setLoading] = useState(true);
   const [retrying, setRetrying] = useState(false);
+  const refreshRequestInFlight = useRef(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
   const refresh = async () => {
+    if (refreshRequestInFlight.current) return;
+    refreshRequestInFlight.current = true;
     setError("");
     setNotice("");
     setLoading(true);
@@ -32,6 +35,7 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
     } finally {
       setLoading(false);
       setRetrying(false);
+      refreshRequestInFlight.current = false;
     }
   };
 

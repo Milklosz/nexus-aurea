@@ -181,6 +181,33 @@ describe("Gaming Hub and App Manager integration", () => {
     expect(refreshButton.getAttribute("aria-busy")).toBe("false");
   });
 
+  it("ignores repeated refresh activations while a status request is pending", async () => {
+    mocks.snapshot = windowsSnapshot();
+    render(<GamingHub onActivateGaming={vi.fn(async () => true)} />);
+    const refreshButton = await screen.findByRole("button", { name: "Odśwież biblioteki" });
+    refreshButton.focus();
+    expect(document.activeElement).toBe(refreshButton);
+    const callsAfterInitialRead = mocks.getStatus.mock.calls.length;
+
+    let resolveStatus!: (snapshot: any) => void;
+    mocks.getStatus.mockImplementationOnce(() => new Promise((resolve) => { resolveStatus = resolve; }));
+    fireEvent.click(refreshButton);
+    expect(await screen.findByRole("button", { name: "Odświeżanie…" })).toBe(refreshButton);
+
+    fireEvent.click(refreshButton);
+
+    expect(mocks.getStatus).toHaveBeenCalledTimes(callsAfterInitialRead + 1);
+    expect(document.activeElement).toBe(refreshButton);
+    expect(refreshButton.getAttribute("aria-busy")).toBe("true");
+
+    resolveStatus(windowsSnapshot([{ id: "730", name: "Counter-Strike 2", launcher: "Steam" }]));
+
+    await screen.findByText("Counter-Strike 2");
+    await waitFor(() => expect(refreshButton.getAttribute("aria-busy")).toBe("false"));
+    expect(document.activeElement).toBe(refreshButton);
+    expect(mocks.getStatus).toHaveBeenCalledTimes(callsAfterInitialRead + 1);
+  });
+
   it("reports missing launchers and an unavailable Steam library without inventing games", async () => {
     mocks.snapshot = {
       ...windowsSnapshot([]),
