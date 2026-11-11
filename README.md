@@ -139,3 +139,12 @@ MusicKit / Apple Music API is a future option for catalog and personal-library f
 - CI REQUIRED: Windows and macOS Rust checks, including the native Windows SMTC code, and the Windows NSIS installer artifact.
 - NOT TESTED: Apple Music SMTC metadata/commands, full-screen media presentation, JBL volume routing, Bluetooth latency, PlayStation navigation through Music Mode, Panasonic display rendering, and any Apple Music/MusicKit authentication or playback.
 - NOT IMPLEMENTED: album artwork, lyrics, current endpoint name, endpoint selection, Bluetooth pairing/latency, and an Apple Music-specific MediaKit streaming client.
+
+## VELORA 1.0 — Experience (Draft)
+
+- Dokument zbiorczy: [docs/velora-v1-experience.md](docs/velora-v1-experience.md).
+- A. Edge Cinema — dedykowane, trwałe okno Microsoft Edge i dokładna allowlista HTTPS: [docs/edge-cinema-v1.md](docs/edge-cinema-v1.md).
+- B. Autostart — opcjonalny (opt-in), tylko jeden wpis HKCU Run i tryb awaryjny `--windowed`: [docs/autostart-v1.md](docs/autostart-v1.md).
+- C. Biblioteka Playnite — adapter + jawny fallback, metadane tylko do odczytu: [docs/playnite-library-v1.md](docs/playnite-library-v1.md).
+- D. AUREA Navigation — nawigacja 2D i stany fokusu wyłącznie wewnątrz UI VELORA: [docs/aurea-navigation-v1.md](docs/aurea-navigation-v1.md).
+- Gałąź **Draft** oparta na Night Build (PR #13): bez merge/release i bez integracji zmian DeepSeek (fix/velora-deepseek-p1, feat/velora-v1-core).
