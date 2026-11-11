@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { runInNewContext } from "node:vm";
+import { describe, expect, it, vi } from "vitest";
 
 describe("VELORA iPhone Remote", () => {
   const html = readFileSync("public/remote/index.html", "utf8");
@@ -44,8 +45,82 @@ describe("VELORA iPhone Remote", () => {
     expect(manifest.scope).toBe("./");
     expect(html).toContain('name="apple-mobile-web-app-capable"');
     const serviceWorker = readFileSync("public/remote/sw.js", "utf8");
-    expect(serviceWorker).toContain("nexus-aurea-remote-v0.9.2");
+    expect(serviceWorker).toContain("nexus-aurea-remote-v0.9.2-velora-storage-guard-1");
     expect(serviceWorker).toContain('key.startsWith("nexus-aurea-remote-")');
     expect(serviceWorker).toContain("self.skipWaiting()");
+  });
+
+  it("keeps pairing and commands disabled when secure key storage cannot be read", async () => {
+    const listeners = new Map<string, (event: { preventDefault: () => void }) => void>();
+    const element = (initial: Partial<{ hidden: boolean; disabled: boolean; textContent: string; value: string }> = {}) => ({
+      hidden: initial.hidden ?? false,
+      disabled: initial.disabled ?? false,
+      textContent: initial.textContent ?? "",
+      value: initial.value ?? "",
+      dataset: {} as Record<string, string>,
+      addEventListener: vi.fn((type: string, listener: (event: { preventDefault: () => void }) => void) => listeners.set(type, listener)),
+    });
+    const elements = new Map([
+      ["connection-state", element()],
+      ["server-state", element()],
+      ["origin-state", element()],
+      ["pairing-state", element()],
+      ["paired-count", element({ textContent: "0" })],
+      ["remote-message", element()],
+      ["pairing-form", element({ hidden: true })],
+      ["pair-button", element({ disabled: true })],
+      ["pairing-code", element()],
+      ["device-name", element()],
+    ]);
+    const commandButtons = [element({ disabled: true })];
+    const indexedDB = {
+      open: vi.fn(() => {
+        const request: { onupgradeneeded?: () => void; onsuccess?: () => void; onerror?: () => void } = {};
+        queueMicrotask(() => request.onerror?.());
+        return request;
+      }),
+    };
+    const fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ enabled: true, pairedDeviceCount: 0 }),
+    }));
+    const window = {
+      isSecureContext: true,
+      location: { protocol: "https:" },
+      crypto: { subtle: {} },
+      indexedDB,
+      addEventListener: vi.fn(),
+    };
+
+    runInNewContext(script, {
+      window,
+      document: {
+        getElementById: (id: string) => elements.get(id),
+        querySelectorAll: () => commandButtons,
+      },
+      navigator: { onLine: true, serviceWorker: { register: async () => {} } },
+      indexedDB,
+      fetch,
+      crypto: { getRandomValues: vi.fn() },
+      Uint8Array,
+      Promise,
+      Error,
+      String,
+      Number,
+      Boolean,
+      JSON,
+      Math,
+      btoa: (value: string) => value,
+      queueMicrotask,
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(elements.get("pairing-form")?.hidden).toBe(true);
+    expect(elements.get("pair-button")?.disabled).toBe(true);
+    expect(commandButtons[0].disabled).toBe(true);
+    expect(elements.get("pairing-state")?.textContent).toContain("pamięć klucza niedostępna");
+    expect(elements.get("remote-message")?.textContent).toContain("Parowanie i polecenia pozostają wyłączone");
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

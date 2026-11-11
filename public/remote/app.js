@@ -4,6 +4,7 @@
   const state = {
     secure: window.isSecureContext && window.location.protocol === "https:",
     serverReady: false,
+    storageReady: false,
     paired: false,
     inFlight: false,
     record: null,
@@ -25,9 +26,9 @@
   }
 
   function updateControls() {
-    const canSend = state.secure && state.serverReady && state.paired && navigator.onLine && !state.inFlight;
+    const canSend = state.secure && state.serverReady && state.storageReady && state.paired && navigator.onLine && !state.inFlight;
     for (const button of commandButtons) button.disabled = !canSend;
-    pairButton.disabled = !state.secure || !state.serverReady || state.paired || !navigator.onLine || state.inFlight;
+    pairButton.disabled = !state.secure || !state.serverReady || !state.storageReady || state.paired || !navigator.onLine || state.inFlight;
   }
 
   function bytesToBase64Url(bytes) {
@@ -120,12 +121,26 @@
       pairedCount.textContent = String(Number.isInteger(remote.pairedDeviceCount) ? remote.pairedDeviceCount : 0);
       connection.textContent = state.serverReady ? "HTTPS · lokalnie" : "serwer LAN wyłączony";
       if (!state.serverReady) {
+        state.storageReady = false;
         state.paired = false;
         state.record = null;
         pairingForm.hidden = true;
         showMessage("Serwer LAN został wyłączony w VELORA.");
       } else {
-        state.record = await readRecord().catch(() => null);
+        try {
+          state.record = await readRecord();
+          state.storageReady = true;
+        } catch {
+          state.record = null;
+          state.storageReady = false;
+          state.paired = false;
+          pairingForm.hidden = true;
+          pairingState.textContent = "pamięć klucza niedostępna";
+          connection.textContent = "wymagana bezpieczna pamięć";
+          showMessage("Bezpieczna pamięć klucza jest niedostępna. Parowanie i polecenia pozostają wyłączone.", true);
+          updateControls();
+          return;
+        }
         state.paired = Boolean(state.record && state.record.key && state.record.deviceId);
         pairingForm.hidden = state.paired;
         if (state.paired) showMessage("Pilot jest sparowany. Każda komenda wymaga podpisu urządzenia.");
@@ -147,7 +162,7 @@
 
   async function pair(event) {
     event.preventDefault();
-    if (!state.secure || !state.serverReady || state.inFlight) return;
+    if (!state.secure || !state.serverReady || !state.storageReady || state.inFlight) return;
     const code = document.getElementById("pairing-code").value.trim();
     const name = document.getElementById("device-name").value.trim().slice(0, 32);
     if (!/^\d{6}$/.test(code) || !name) {
@@ -218,7 +233,7 @@
   }
 
   async function sendCommand(command) {
-    if (!state.record || state.inFlight || !navigator.onLine) return;
+    if (!state.storageReady || !state.record || state.inFlight || !navigator.onLine) return;
     state.inFlight = true;
     updateControls();
     const record = state.record;

@@ -1,4 +1,4 @@
-const CACHE_NAME = "nexus-aurea-remote-v0.9.2-velora";
+const CACHE_NAME = "nexus-aurea-remote-v0.9.2-velora-storage-guard-1";
 const SHELL = [
   "./",
   "./index.html",
