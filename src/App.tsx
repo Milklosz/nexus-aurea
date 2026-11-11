@@ -115,14 +115,8 @@ export default function App() {
     () => navigation.focusApp(activeServiceRef.current),
     [navigation.focusApp],
   );
-  const restoreAfterControlCenterClose = useCallback(() => {
-    if (!diagnostics) restoreSelectedFocus();
-  }, [diagnostics, restoreSelectedFocus]);
-  const restoreAfterDiagnosticsClose = useCallback(() => {
-    if (!controlCenterOpen) restoreSelectedFocus();
-  }, [controlCenterOpen, restoreSelectedFocus]);
-  useFocusRestoreOnClose(diagnostics, restoreAfterDiagnosticsClose);
-  useFocusRestoreOnClose(controlCenterOpen, restoreAfterControlCenterClose);
+  useFocusRestoreOnClose(diagnostics, restoreSelectedFocus, !controlCenterOpen);
+  useFocusRestoreOnClose(controlCenterOpen, restoreSelectedFocus, !diagnostics);
   const closeDiagnostics = useCallback(() => setDiagnostics(false), []);
   const moveControllerFocus = useCallback((delta: -1 | 1) => {
     const dialog = document.querySelector("dialog[open]");

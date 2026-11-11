@@ -146,6 +146,29 @@ describe("gamepad without hardware", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close diagnostics" }));
     await waitFor(() => expect(document.activeElement?.textContent).toBe("Selected dock item"));
   });
+  it("does not restore home focus while handing off to another modal", () => {
+    const restore = vi.fn();
+    const requestFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
+    function FocusHandoffHarness() {
+      const [controlCenterOpen, setControlCenterOpen] = useState(false);
+      const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+      useFocusRestoreOnClose(controlCenterOpen, restore, !diagnosticsOpen);
+      return <>
+        <button onClick={() => setControlCenterOpen(true)}>Open Control Center</button>
+        {controlCenterOpen && <button onClick={() => { setControlCenterOpen(false); setDiagnosticsOpen(true); }}>Open diagnostics</button>}
+        {diagnosticsOpen && <div role="dialog"><button>Diagnostic action</button></div>}
+      </>;
+    }
+    render(<FocusHandoffHarness />);
+    fireEvent.click(screen.getByRole("button", { name: "Open Control Center" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open diagnostics" }));
+    expect(screen.getByRole("button", { name: "Diagnostic action" })).toBeTruthy();
+    expect(restore).not.toHaveBeenCalled();
+    expect(requestFrame).not.toHaveBeenCalled();
+  });
   it("does not poll while diagnostics disable navigation", () => {
     const getGamepads = vi.fn(() => [pad]);
     vi.stubGlobal("navigator", { getGamepads });
