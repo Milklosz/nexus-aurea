@@ -164,6 +164,29 @@ describe("Control Service diagnostics", () => {
     expect(screen.getByText("Usługa wyłączona skrótem awaryjnym.")).toBeTruthy();
   });
 
+  it("replaces a pending notice with the service error when a stop event arrives", async () => {
+    let resolveStart!: (nextStatus: ControlServiceStatus) => void;
+    mocks.start.mockImplementationOnce(() => new Promise((resolve) => { resolveStart = resolve; }));
+    render(<ControlServicePanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Włącz monitoring sesji" }));
+
+    await waitFor(() => expect(screen.getByText("Aktualizuję Control Service…")).toBeTruthy());
+    act(() => mocks.onStop?.("service-error"));
+
+    const expectedError = "Usługa została wyłączona po błędzie; uruchom ją ponownie z diagnostyki.";
+    expect((await screen.findByRole("alert")).textContent).toBe(expectedError);
+    expect(document.querySelector(".control-service-notice")?.textContent).toBe("");
+    expect(screen.getByRole("button", { name: "Włącz monitoring sesji" }).hasAttribute("disabled")).toBe(false);
+
+    await act(async () => {
+      resolveStart(status({ running: true, returnHotkeyRegistered: true }));
+    });
+
+    expect(screen.getByText(/^Stan:/).textContent).toContain("wyłączony");
+    expect(screen.getByRole("alert").textContent).toBe(expectedError);
+    expect(document.querySelector(".control-service-notice")?.textContent).toBe("");
+  });
+
   it("unregisters the return shortcut in game mode", async () => {
     mocks.status = status({ running: true, returnHotkeyRegistered: true });
     render(<ControlServicePanel />);

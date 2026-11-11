@@ -57,8 +57,13 @@ export function ControlServicePanel() {
         gameMode: false,
         returnHotkeyRegistered: false,
       }));
-      if (reason === "keyboard-emergency") setNotice("Usługa wyłączona skrótem awaryjnym.");
-      else setError("Usługa została wyłączona po błędzie; uruchom ją ponownie z diagnostyki.");
+      if (reason === "keyboard-emergency") {
+        setError("");
+        setNotice("Usługa wyłączona skrótem awaryjnym.");
+      } else {
+        setNotice("");
+        setError("Usługa została wyłączona po błędzie; uruchom ją ponownie z diagnostyki.");
+      }
     }).then((unlisten) => {
       if (active) stopServiceListener = unlisten;
       else unlisten();
