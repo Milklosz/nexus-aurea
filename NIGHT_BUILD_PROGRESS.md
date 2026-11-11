@@ -49,18 +49,18 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - React tests: 25 files, 125 tests passed. TypeScript and Vite production build passed.
 - GitHub Actions run [43026294733](https://github.com/Milklosz/nexus-aurea/actions/runs/43026294733) passed on Windows and macOS, including React, Rust, TypeScript/Vite, and platform builds. The Release job was skipped.
 - GitHub Actions runs [43029135952](https://github.com/Milklosz/nexus-aurea/actions/runs/43029135952) (stage 09), [43029773813](https://github.com/Milklosz/nexus-aurea/actions/runs/43029773813) (stage 10), [43030395848](https://github.com/Milklosz/nexus-aurea/actions/runs/43030395848) (stage 11), [43031259001](https://github.com/Milklosz/nexus-aurea/actions/runs/43031259001) (stage 12), [43032589406](https://github.com/Milklosz/nexus-aurea/actions/runs/43032589406) (stage 13), stage 14 [43033436829](https://github.com/Milklosz/nexus-aurea/actions/runs/43033436829), stage 15 [43035329173](https://github.com/Milklosz/nexus-aurea/actions/runs/43035329173), stage 16 [43036042119](https://github.com/Milklosz/nexus-aurea/actions/runs/43036042119), stage 17 [43036705267](https://github.com/Milklosz/nexus-aurea/actions/runs/43036705267), stage 18 [43039325451](https://github.com/Milklosz/nexus-aurea/actions/runs/43039325451), and stage 19 [43040038281](https://github.com/Milklosz/nexus-aurea/actions/runs/43040038281) passed on Windows and macOS.
-- GitHub Actions runs [43043218481](https://github.com/Milklosz/nexus-aurea/actions/runs/43043218481) (stage 20) and [43043740999](https://github.com/Milklosz/nexus-aurea/actions/runs/43043740999) (stage 21) passed on Windows and macOS; the Release job was skipped.
-- Stage 22 GitHub Actions run [43045040872](https://github.com/Milklosz/nexus-aurea/actions/runs/43045040872) is running.
+- GitHub Actions runs [43043218481](https://github.com/Milklosz/nexus-aurea/actions/runs/43043218481) (stage 20), [43043740999](https://github.com/Milklosz/nexus-aurea/actions/runs/43043740999) (stage 21), and [43045040872](https://github.com/Milklosz/nexus-aurea/actions/runs/43045040872) (stage 22) passed on Windows and macOS; the Release jobs were skipped.
 - The currently installed MSI copy was only opened for visual inspection. Its Control Center is the older long-list layout; it was closed afterward. No installed files or settings were changed.
 
 ## Artifact record
 
-- Latest Windows CI artifact for stage 21 from run [43043740999](https://github.com/Milklosz/nexus-aurea/actions/runs/43043740999): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-611acc37d31db2a8c47c279db782fcadc962133f.zip`.
-- ZIP SHA-256: `d2e9a42d6b6d4fe72064603a754b198a4a29c4263628d524a9860272befe4db0`.
-- Extracted installer (not run): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-611acc37d31db2a8c47c279db782fcadc962133f-extracted\VELORA_0.9.2_x64-setup.exe`.
-- Installer SHA-256: `a11c8c217b0e6ec469bdcea793814b08f8392889526630bf35016f8910bcb11a`; Authenticode status: `NotSigned`.
-- Checksum sidecar: `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-611acc37d31db2a8c47c279db782fcadc962133f-SHA256.txt`.
-- The stage-21 artifact digest matches the GitHub Actions artifact record; no installer was run or installed.
+- Latest Windows CI artifact for stage 22 from run [43045040872](https://github.com/Milklosz/nexus-aurea/actions/runs/43045040872): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-5ce71d8295d007940e8144a62cd69e28d4f4518f.zip`.
+- ZIP SHA-256: `4c4029a24370116f33d057baec6ff765c3ce599dc657f6b5ef835dd63a1024e8`.
+- Extracted installer (not run): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-5ce71d8295d007940e8144a62cd69e28d4f4518f-extracted\VELORA_0.9.2_x64-setup.exe`.
+- Installer SHA-256: `6ca72f8eb0dbdefa94a4bd118510207986821d9c1c3d6779c89f9234690eb166`; Authenticode status: `NotSigned`.
+- Checksum sidecar: `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-5ce71d8295d007940e8144a62cd69e28d4f4518f-SHA256.txt`.
+- The stage-22 artifact digest matches the GitHub Actions artifact record; no installer was run or installed.
+- Prior Windows CI artifact for stage 21 from run [43043740999](https://github.com/Milklosz/nexus-aurea/actions/runs/43043740999): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-611acc37d31db2a8c47c279db782fcadc962133f.zip` (SHA-256 `d2e9a42d6b6d4fe72064603a754b198a4a29c4263628d524a9860272befe4db0`). Installer SHA-256 `a11c8c217b0e6ec469bdcea793814b08f8392889526630bf35016f8910bcb11a`; Authenticode `NotSigned`; it was not run or installed.
 - Prior Windows CI artifact for stage 19 from run [43040038281](https://github.com/Milklosz/nexus-aurea/actions/runs/43040038281): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-fbbc0e52343fffd9c68369bc6dc3dfe969df187f.zip` (SHA-256 `f3dedafd2cb510cc7886be8598cd8776677cfe6684c56a40ddfba183b170bb13`).
 - Stage-19 installer SHA-256: `983a2fb40e56761c8be8145dfb8a260cf531301bed95707166324d76cb5629b8`; Authenticode status: `NotSigned`; it was not run or installed.
 - Prior Windows CI artifact for stage 17 from run [43036705267](https://github.com/Milklosz/nexus-aurea/actions/runs/43036705267): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-3be7517542ad6b164d3001cc4a4aa4063ab1bc4b.zip`.
@@ -91,4 +91,4 @@ Updated: 2026-11-11 (Europe/Warsaw)
 
 ## Next step
 
-Continue with another small VELORA navigation or Remote improvement and regression test after stage 22 CI completes. Keep GUI review marked `NOT TESTED` unless a supported, policy-compliant path becomes available; keep iPhone Remote safely disabled by default.
+Continue with another small VELORA navigation or Remote improvement and regression test. Keep GUI review marked `NOT TESTED` unless a supported, policy-compliant path becomes available; keep iPhone Remote safely disabled by default.
