@@ -1,7 +1,7 @@
 export function getDialogNavigationControls(dialog: ParentNode): HTMLElement[] {
   return Array.from(dialog.querySelectorAll<HTMLElement>(
     "button:not(:disabled), input:not([type='hidden']):not(:disabled), select:not(:disabled), textarea:not(:disabled)",
-  )).filter((control) => !control.closest("[hidden]") && !control.closest("[inert]"));
+  )).filter((control) => !control.closest("[hidden], [inert], [aria-hidden='true']"));
 }
 
 export function shouldUseNativeDialogArrowKey(target: EventTarget | null): boolean {

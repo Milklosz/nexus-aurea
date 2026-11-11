@@ -63,6 +63,17 @@ describe("TV home navigation", () => {
     expect(getDialogNavigationControls(dialog)).toEqual([action, checkbox]);
   });
 
+  it("skips controls inside aria-hidden dialog subtrees", () => {
+    const dialog = document.createElement("dialog");
+    const visible = document.createElement("button");
+    const hiddenRegion = document.createElement("section");
+    hiddenRegion.setAttribute("aria-hidden", "true");
+    hiddenRegion.append(document.createElement("button"));
+    dialog.append(visible, hiddenRegion);
+
+    expect(getDialogNavigationControls(dialog)).toEqual([visible]);
+  });
+
   it("keeps native arrow editing in text controls and navigates from checkboxes", () => {
     const textInput = document.createElement("input");
     const checkbox = document.createElement("input");
