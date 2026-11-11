@@ -20,6 +20,7 @@ import { useLaunchGuard } from "./hooks/useLaunchGuard";
 import { getDialogNavigationControls, shouldUseNativeDialogArrowKey } from "./services/dialogNavigation";
 import { useToast } from "./hooks/useToast";
 import { useWeather } from "./hooks/useWeather";
+import { focusWindowSafely } from "./services/focusWindowSafely";
 import { openStreamingService, streamingServiceErrorMessage } from "./services/openStreamingService";
 import { getControlServiceStatus, listenForNexusControlReturn, setControlGameMode } from "./services/controlService";
 import { launchManagedApp, listenForManagedAppExit, managedAppErrorMessage } from "./services/appManager";
@@ -107,7 +108,10 @@ export default function App() {
   const returnToNexus = useCallback(() => {
     setControlCenterOpen(false);
     setDiagnostics(false);
-  }, []);
+    void focusWindowSafely(() => getCurrentWindow().setFocus(), () => {
+      showToast("Windows zablokował powrót do VELORA. Wróć do aplikacji przez Alt+Tab.");
+    });
+  }, [showToast]);
   const openDiagnosticsFromCenter = useCallback(() => {
     setControlCenterOpen(false);
     setDiagnostics(true);
@@ -285,7 +289,7 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     void listenForNexusControlReturn(() => {
       if (!active) return;
-      void getCurrentWindow().setFocus().catch(() => {
+      void focusWindowSafely(() => getCurrentWindow().setFocus(), () => {
         showToast("Windows zablokował powrót do VELORA. Wróć do aplikacji przez Alt+Tab.");
       });
     }).then((stopListening) => {
@@ -328,7 +332,7 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     void listenForManagedAppExit((id) => {
       if (!active || id !== "playniteFullscreen") return;
-      void getCurrentWindow().setFocus().catch(() => {
+      void focusWindowSafely(() => getCurrentWindow().setFocus(), () => {
         showToast("Playnite został zamknięty. Wróć do VELORA przez Alt+Tab.");
       });
     }).then((stopListening) => {
