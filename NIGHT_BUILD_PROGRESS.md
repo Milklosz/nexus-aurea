@@ -6,7 +6,7 @@ Updated: 2026-11-11 (Europe/Warsaw)
 
 - Active branch: `feat/velora-night-build-2`.
 - Latest tested implementation commit: local `80c6e3876f1633e2c4b8f1bd34646f7aa59dccea`, published as `fd320d0079db003116bd019061aae6a63e79cb3d`; their trees match.
-- Latest progress checkpoint: local `901b5f09bd03dd226e5610039729be71623de11b`, published as `870ed5ec4dcb2c31e845516a233c4b4ff5597ac1`; their trees match.
+- Latest progress checkpoint: local `eb2d58590dd3d7e24d57c1ecb184c8b3f4b4d631`, published as `a0092854aa4ac3fe83f5d08d7a887833fda8b831`; their trees match.
 - Latest published implementation commit: local `b42757ad27530e2a5937ba46ac4faddbdbeecd6e`, published as `e0337167448b6c0ac70d31d3c5873e141a8dd0f8`; their trees match.
 - Latest published implementation commit: local `3d9c78533126fa679a2f3828b35d3e27b77c94bd`, published as `91ddcbf4804c7cd5a7454a5976e4b91a7dc7f5a7`; their trees match.
 - Latest progress checkpoint: local `e4f4efe3466de7c3cc12bc86a0196afd5c61e08a`, published as `91646dc0f9ec30fb05c0871167855a7c572ede5e`; their trees match.
@@ -87,18 +87,17 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - Stage 31 GitHub Actions runs [43057193890](https://github.com/Milklosz/nexus-aurea/actions/runs/43057193890) (PR) and [43057181243](https://github.com/Milklosz/nexus-aurea/actions/runs/43057181243) (push) passed on Windows and macOS.
 - Stage 32 GitHub Actions runs [43059553007](https://github.com/Milklosz/nexus-aurea/actions/runs/43059553007) (PR) and [43059538714](https://github.com/Milklosz/nexus-aurea/actions/runs/43059538714) (push) passed on Windows and macOS; Release jobs were skipped.
 - Stage 33 GitHub Actions runs [43061141004](https://github.com/Milklosz/nexus-aurea/actions/runs/43061141004) (PR) and [43061131133](https://github.com/Milklosz/nexus-aurea/actions/runs/43061131133) (push) passed on Windows and macOS; Release jobs were skipped.
-- Stage 34 GitHub Actions runs [43063442440](https://github.com/Milklosz/nexus-aurea/actions/runs/43063442440) (PR) and [43063432925](https://github.com/Milklosz/nexus-aurea/actions/runs/43063432925) (push) are running on Windows and macOS.
+- Stage 34 GitHub Actions runs [43063620136](https://github.com/Milklosz/nexus-aurea/actions/runs/43063620136) (PR) and [43063611269](https://github.com/Milklosz/nexus-aurea/actions/runs/43063611269) (push) passed on Windows and macOS; Release jobs were skipped.
 - Stage 29 GitHub Actions runs [43054839359](https://github.com/Milklosz/nexus-aurea/actions/runs/43054839359) (PR) and [43054826843](https://github.com/Milklosz/nexus-aurea/actions/runs/43054826843) (push) passed on Windows and macOS.
 - The currently installed MSI copy was only opened for visual inspection. Its Control Center is the older long-list layout; it was closed afterward. No installed files or settings were changed.
 
 ## Artifact record
 
-- Latest Windows CI artifact for stage 29 from run [43054839359](https://github.com/Milklosz/nexus-aurea/actions/runs/43054839359), artifact ID `13870378276`: `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-1468cdc18e24cd62f520c45307b862982ec2accf.zip`.
-- ZIP SHA-256: `bae7363ed061eb237171d920c5cb85d91b3bc458287f5451723267a53e110187` (matches the GitHub artifact digest).
-- Extracted installer (not run): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-1468cdc18e24cd62f520c45307b862982ec2accf-extracted\VELORA_0.9.2_x64-setup.exe`.
-- Installer SHA-256: `9ed71b1484f9080fb2deb1f4534d3289a80ca26ad0935807a4474b558503cbe7`; Authenticode status: `NotSigned`.
-- Checksum sidecar: `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-1468cdc18e24cd62f520c45307b862982ec2accf-SHA256.txt`.
-- The stage-29 artifact digest matches the GitHub Actions artifact record; no installer was run or installed. The MSI installation remains untouched.
+- Latest Windows CI artifact for stage 34 from run [43063611269](https://github.com/Milklosz/nexus-aurea/actions/runs/43063611269), artifact ID `13874273614`: `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-a0092854aa4ac3fe83f5d08d7a887833fda8b831.zip`.
+- ZIP SHA-256: `ff14d0a7ea0fb3f3dd728199a5c485ecc0491a7a1fd7be6fe488d51fb019e217` (matches the GitHub artifact digest); checksum sidecar: `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-a0092854aa4ac3fe83f5d08d7a887833fda8b831-SHA256.txt`.
+- Extracted installer (not run): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-a0092854aa4ac3fe83f5d08d7a887833fda8b831-extracted\VELORA_0.9.2_x64-setup.exe`.
+- Installer SHA-256: `a3ad2aeba5dc4729d6e403b0577152084800464e4a686a7ec1e3d2cee8ee510d`; Authenticode status: `NotSigned`. It was not executed or installed; the existing MSI remains untouched.
+- Prior stage-29 Windows artifact and checksum details remain recorded below.
 - Prior Windows CI artifact for stage 22 from run [43045040872](https://github.com/Milklosz/nexus-aurea/actions/runs/43045040872): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-5ce71d8295d007940e8144a62cd69e28d4f4518f.zip` (SHA-256 `4c4029a24370116f33d057baec6ff765c3ce599dc657f6b5ef835dd63a1024e8`). Installer SHA-256 `6ca72f8eb0dbdefa94a4bd118510207986821d9c1c3d6779c89f9234690eb166`; Authenticode `NotSigned`; it was not run or installed.
 
 ## Recovery checkpoints
@@ -121,6 +120,8 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - Stage 33 final standalone archive: `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111-stage33-final.zip`; its checksum sidecar is stored beside it.
 - Full recovery snapshot through Stage 33: `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111-full-through-stage33-final.zip`; its checksum sidecar is stored beside it.
 - Stage 34 source copies and patch are stored under `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-34` and `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-34.patch`; the full 139-test suite and TypeScript/Vite build pass.
+- Stage 34 final standalone archive: `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111-stage34-final.zip`; its checksum sidecar is stored beside it.
+- Full recovery snapshot through Stage 34: `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111-full-through-stage34-final.zip`; its checksum sidecar is stored beside it.
 - Prior Windows CI artifact for stage 19 from run [43040038281](https://github.com/Milklosz/nexus-aurea/actions/runs/43040038281): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-fbbc0e52343fffd9c68369bc6dc3dfe969df187f.zip` (SHA-256 `f3dedafd2cb510cc7886be8598cd8776677cfe6684c56a40ddfba183b170bb13`).
 - Stage-19 installer SHA-256: `983a2fb40e56761c8be8145dfb8a260cf531301bed95707166324d76cb5629b8`; Authenticode status: `NotSigned`; it was not run or installed.
 - Prior Windows CI artifact for stage 17 from run [43036705267](https://github.com/Milklosz/nexus-aurea/actions/runs/43036705267): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-3be7517542ad6b164d3001cc4a4aa4063ab1bc4b.zip`.
@@ -151,4 +152,4 @@ Updated: 2026-11-11 (Europe/Warsaw)
 
 ## Next step
 
-Stages 32 and 33 are locally tested, committed, published, and passed CI on Windows and macOS. Stage 34 is locally tested, committed, and published; its CI is running. The published Stage 34 checkpoint `870ed5ec4dcb2c31e845516a233c4b4ff5597ac1` compares 85 commits ahead and 0 behind, with exact merge base `6dbcc36abeded18b753a134bc8ede10fb37df391`. Stages 32–33 recovery archives are saved and verified. Next, verify Stage 34 CI and create its recovery archive. Keep GUI review marked `NOT TESTED`; keep iPhone Remote safely disabled by default.
+Stages 32–34 are locally tested, committed, published, and passed CI on Windows and macOS. The latest Stage 34 code artifact was checksum-verified and extracted only; it was not executed or installed. The published Stage 34 code checkpoint `870ed5ec4dcb2c31e845516a233c4b4ff5597ac1` compares 85 commits ahead and 0 behind; progress checkpoint `a0092854aa4ac3fe83f5d08d7a887833fda8b831` compares 86 ahead and 0 behind. Both comparisons use exact merge base `6dbcc36abeded18b753a134bc8ede10fb37df391`. Stages 32–33 recovery archives are saved and verified. Next, finalize the Stage 34 archive and prevent duplicate status requests while the Gaming Hub refresh control remains focusable. Keep GUI review marked `NOT TESTED`; keep iPhone Remote safely disabled by default.
