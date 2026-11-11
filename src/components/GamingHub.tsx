@@ -52,6 +52,7 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
         : "Wysłano żądanie uruchomienia " + (id === "steamBigPicture" ? "Steam Big Picture." : "Playnite Fullscreen."));
       await refresh();
     } catch (cause) {
+      setNotice("");
       setError(managedAppErrorMessage(cause));
     } finally {
       setBusy(null);
@@ -68,6 +69,7 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
       await launchManagedGame(game.id);
       setNotice("Wysłano żądanie uruchomienia " + game.name + " przez Steam.");
     } catch (cause) {
+      setNotice("");
       setError(managedAppErrorMessage(cause, "Steam nie uruchomił gry."));
     } finally {
       setBusy(null);

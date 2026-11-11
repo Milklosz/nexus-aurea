@@ -101,6 +101,7 @@ describe("Gaming Hub and App Manager integration", () => {
     render(<GamingHub onActivateGaming={vi.fn(async () => true)} />);
     fireEvent.click(await screen.findByRole("button", { name: "Fullscreen" }));
     expect((await screen.findByRole("alert")).textContent).toContain("Playnite odmówił uruchomienia.");
+    expect(screen.getByRole("status").textContent).toBe("");
   });
 
   it("surfaces a Steam launch failure without claiming the game started", async () => {
@@ -109,5 +110,6 @@ describe("Gaming Hub and App Manager integration", () => {
     render(<GamingHub onActivateGaming={vi.fn(async () => true)} />);
     fireEvent.click(await screen.findByRole("button", { name: "Uruchom" }));
     expect((await screen.findByRole("alert")).textContent).toContain("Steam odmówił uruchomienia.");
+    expect(screen.getByRole("status").textContent).toBe("");
   });
 });
