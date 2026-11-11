@@ -42,6 +42,13 @@ export function useGamepad(
     };
     const poll = () => {
       const focused = document.hasFocus() && document.visibilityState === "visible";
+      if (!focused || suspendRef.current?.()) {
+        engine.reset();
+        selectedPad = "";
+        frame = window.requestAnimationFrame(poll);
+        return;
+      }
+
       let pads: Gamepad[] = [];
       try {
         pads = Array.from(navigator.getGamepads() ?? []).filter(
@@ -50,16 +57,14 @@ export function useGamepad(
       } catch {
         engine.reset();
       }
-      const pad = focused ? pads.find((candidate) => readControllerSample(candidate, profile)) : undefined;
+      const pad = pads.find((candidate) => readControllerSample(candidate, profile));
       const identity = pad ? pad.index + ":" + pad.id : "";
       if (identity !== selectedPad) {
         engine.reset();
         selectedPad = identity;
       }
-      const samples = engine.update(pad ? readControllerSample(pad, profile) : null, performance.now(), focused);
-      if (!suspendRef.current?.()) {
-        for (const action of samples) dispatch(action);
-      }
+      const samples = engine.update(pad ? readControllerSample(pad, profile) : null, performance.now(), true);
+      for (const action of samples) dispatch(action);
       frame = window.requestAnimationFrame(poll);
     };
 

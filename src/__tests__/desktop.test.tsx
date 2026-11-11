@@ -157,5 +157,61 @@ describe("gamepad without hardware", () => {
     }, false));
     expect(getGamepads).not.toHaveBeenCalled();
   });
+  it("pauses and resets controller state while input is suspended", () => {
+    let suspended = false;
+    let now = 0;
+    let currentPad = { ...pad, buttons: [], axes: [0] } as unknown as Gamepad;
+    let scheduledFrame: FrameRequestCallback | undefined;
+    const getGamepads = vi.fn(() => [currentPad]);
+    const actions = { move: vi.fn(), confirm: vi.fn(), back: vi.fn(), options: vi.fn() };
+    vi.stubGlobal("navigator", { getGamepads });
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      scheduledFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    const poll = () => {
+      const callback = scheduledFrame;
+      scheduledFrame = undefined;
+      act(() => callback?.(now));
+    };
+
+    const { rerender } = renderHook(
+      ({ shouldSuspend }) => useGamepad(actions, true, "standard", () => shouldSuspend),
+      { initialProps: { shouldSuspend: false } },
+    );
+
+    poll();
+    currentPad = { ...currentPad, axes: [-0.75] };
+    now = 41;
+    poll();
+    now = 82;
+    poll();
+    expect(actions.move).toHaveBeenCalledTimes(1);
+
+    suspended = true;
+    rerender({ shouldSuspend: suspended });
+    now = 500;
+    poll();
+    expect(getGamepads).toHaveBeenCalledTimes(3);
+
+    suspended = false;
+    rerender({ shouldSuspend: suspended });
+    now = 1000;
+    poll();
+    expect(actions.move).toHaveBeenCalledTimes(1);
+
+    currentPad = { ...currentPad, axes: [0] };
+    now = 1010;
+    poll();
+    currentPad = { ...currentPad, axes: [-0.75] };
+    now = 1020;
+    poll();
+    now = 1061;
+    poll();
+    expect(actions.move).toHaveBeenCalledTimes(2);
+  });
 });
 
