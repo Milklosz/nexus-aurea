@@ -110,6 +110,38 @@ describe("Control Service diagnostics", () => {
     expect(document.querySelector(".control-service-notice")?.textContent).toBe("");
   });
 
+  it("keeps the emergency stop state when an in-flight action resolves late", async () => {
+    let resolveStoppedStart!: (nextStatus: ControlServiceStatus) => void;
+    let resolveRestart!: (nextStatus: ControlServiceStatus) => void;
+    mocks.start
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveStoppedStart = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRestart = resolve; }));
+    render(<ControlServicePanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Włącz monitoring sesji" }));
+
+    await waitFor(() => expect(screen.getByText("Aktualizuję Control Service…")).toBeTruthy());
+    act(() => mocks.onStop?.("keyboard-emergency"));
+    expect(await screen.findByText("Usługa wyłączona skrótem awaryjnym.")).toBeTruthy();
+    const startButton = await screen.findByRole("button", { name: "Włącz monitoring sesji" });
+    expect(startButton.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(startButton);
+    await waitFor(() => expect(screen.getByText("Aktualizuję Control Service…")).toBeTruthy());
+
+    await act(async () => {
+      resolveStoppedStart(status({ running: true, returnHotkeyRegistered: true }));
+    });
+
+    const restartingButton = screen.getAllByRole("button", { name: "Aktualizuję…" })[0];
+    expect(restartingButton.getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByText(/^Stan:/).textContent).toContain("wyłączony");
+    expect(screen.getByText("Aktualizuję Control Service…")).toBeTruthy();
+
+    await act(async () => {
+      resolveRestart(status({ running: true, returnHotkeyRegistered: true }));
+    });
+    expect(await screen.findByText("Control Service jest aktywny.")).toBeTruthy();
+  });
+
   it("unregisters the return shortcut in game mode", async () => {
     mocks.status = status({ running: true, returnHotkeyRegistered: true });
     render(<ControlServicePanel />);

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   disabledControlServiceStatus,
   getControlServiceStatus,
@@ -23,6 +23,7 @@ export function ControlServicePanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const actionGeneration = useRef(0);
   const foregroundClass = status.running
     ? classifyForegroundProcess(status.foregroundProcess)
     : "unknown";
@@ -45,6 +46,8 @@ export function ControlServicePanel() {
     }).catch(() => {});
     void listenForControlServiceStop((reason) => {
       if (!active) return;
+      actionGeneration.current += 1;
+      setBusy(false);
       setStatus((current) => ({
         ...current,
         running: false,
@@ -66,20 +69,23 @@ export function ControlServicePanel() {
   }, []);
 
   const runAction = async (action: () => Promise<ControlServiceStatus>) => {
+    const generation = actionGeneration.current;
     setBusy(true);
     setError("");
     setNotice("Aktualizuję Control Service…");
     try {
       const nextStatus = await action();
+      if (generation !== actionGeneration.current) return;
       setStatus(nextStatus);
       setNotice(nextStatus.gameMode
         ? "Control Service: tryb gry włączony."
         : nextStatus.running ? "Control Service jest aktywny." : "Control Service jest wyłączony.");
     } catch (cause) {
+      if (generation !== actionGeneration.current) return;
       setNotice("");
       setError(cause instanceof Error ? cause.message : "Control Service nie wykonał polecenia.");
     } finally {
-      setBusy(false);
+      if (generation === actionGeneration.current) setBusy(false);
     }
   };
 
