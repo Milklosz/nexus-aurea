@@ -5,7 +5,8 @@ Updated: 2026-11-11 (Europe/Warsaw)
 ## Current branch and commits
 
 - Active branch: `feat/velora-night-build-2`.
-- Latest tested implementation commit: `43ce5e9290359e350c27e54eb7e1248dd2dcfa0c`.
+- Latest tested implementation commit: `65dd4790e40519d707a75f633c8923af6c6a9708`.
+- Local stage-14 implementation commit `689ab0dff82ea0cc6712da4999e55121f67e8812` is preserved under `refs/codex/local/remote-resume-status-stage-14`; its tree matches the published implementation.
 - Local stage-13 source commit `119db2a7138f4c6cad2912ce8e3ed0944532366a` is preserved under `refs/codex/local/modal-focus-handoff-stage-13`; its tree matches the published commit.
 - Local stage-08 commit `8390a6555aa573063ff2d92bd0f9c6077082abc2` is preserved under `refs/codex/local/feat-velora-remote-storage-stage-08`; its tree matches the published commit.
 - Verified base commit: `6dbcc36abeded18b753a134bc8ede10fb37df391`; exact base tree `ea6aa33175216fd51036676c20aadc7ddd7e5773`.
@@ -28,9 +29,10 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - Improved the visible focus ring for Control Center buttons and inputs, and gave pressed controls a clearer gold state. The tab navigation regression test now verifies that focus follows the selected tab.
 - Focus returns to the selected dock item when Control Center closes, including the gamepad/options toggle. Switching directly to Diagnostics preserves focus in the new dialog.
 - Made modal focus restoration conditional so switching between Control Center and Diagnostics does not steal focus. Added a regression test for the handoff.
+- iPhone Remote rechecks its read-only server and pairing status when the PWA becomes visible again; hidden-page transitions do not trigger a request. The service-worker cache key was bumped.
 - React tests: 24 files, 117 tests passed. TypeScript and Vite production build passed.
 - GitHub Actions run [43026294733](https://github.com/Milklosz/nexus-aurea/actions/runs/43026294733) passed on Windows and macOS, including React, Rust, TypeScript/Vite, and platform builds. The Release job was skipped.
-- GitHub Actions runs [43029135952](https://github.com/Milklosz/nexus-aurea/actions/runs/43029135952) (stage 09), [43029773813](https://github.com/Milklosz/nexus-aurea/actions/runs/43029773813) (stage 10), [43030395848](https://github.com/Milklosz/nexus-aurea/actions/runs/43030395848) (stage 11), and [43031259001](https://github.com/Milklosz/nexus-aurea/actions/runs/43031259001) (stage 12) passed on Windows and macOS. Latest stage-13 CI [43032589406](https://github.com/Milklosz/nexus-aurea/actions/runs/43032589406) is running.
+- GitHub Actions runs [43029135952](https://github.com/Milklosz/nexus-aurea/actions/runs/43029135952) (stage 09), [43029773813](https://github.com/Milklosz/nexus-aurea/actions/runs/43029773813) (stage 10), [43030395848](https://github.com/Milklosz/nexus-aurea/actions/runs/43030395848) (stage 11), [43031259001](https://github.com/Milklosz/nexus-aurea/actions/runs/43031259001) (stage 12), and [43032589406](https://github.com/Milklosz/nexus-aurea/actions/runs/43032589406) (stage 13) passed on Windows and macOS. Stage-14 CI [43033436829](https://github.com/Milklosz/nexus-aurea/actions/runs/43033436829) is running.
 - The artifact below is from the earlier, fully passing stage-08 checkpoint.
 - The currently installed MSI copy was only opened for visual inspection. Its Control Center is the older long-list layout; it was closed afterward. No installed files or settings were changed.
 
@@ -53,4 +55,4 @@ Updated: 2026-11-11 (Europe/Warsaw)
 
 ## Next step
 
-Review stage-13 Windows and macOS CI, update the Draft PR summary, and continue with another small TV-navigation or Remote improvement plus a regression test. Keep GUI review marked `NOT TESTED` unless a supported, policy-compliant path becomes available; keep iPhone Remote safely disabled by default.
+Review stage-14 Windows and macOS CI, update the Draft PR summary, and continue with another small TV-navigation or Remote improvement plus a regression test. Keep GUI review marked `NOT TESTED` unless a supported, policy-compliant path becomes available; keep iPhone Remote safely disabled by default.
