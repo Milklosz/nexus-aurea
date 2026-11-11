@@ -5,9 +5,9 @@ Updated: 2026-11-11 (Europe/Warsaw)
 ## Current branch and commits
 
 - Active branch: `feat/velora-night-build-2`.
-- Latest tested implementation commit: local `abc85ea2b25919835db25d66cb6f89811eecf6bc`; Stage 35 is locally tested and committed, with GitHub publication pending.
+- Latest tested implementation commit: local `abc85ea2b25919835db25d66cb6f89811eecf6bc`, published as `a6376fb18573b79ef068f13492abf3707dbbee8d`; their trees match.
 - Latest published implementation commit: local `80c6e3876f1633e2c4b8f1bd34646f7aa59dccea`, published as `fd320d0079db003116bd019061aae6a63e79cb3d`; their trees match.
-- Latest progress checkpoint: local `8d935c90cfb644bbe5006ea40ff019c120f12210`, published as `7601202c4e4695a34bf1187969c782b6d15fa9bc`; their trees match.
+- Latest progress checkpoint: local `c5398e63b093a98dfd70789f56195c4542bbf5aa`, published as `9a297d011bcc8c8e5a5b467522f752bfa2654588`; their trees match.
 - Latest published implementation commit: local `b42757ad27530e2a5937ba46ac4faddbdbeecd6e`, published as `e0337167448b6c0ac70d31d3c5873e141a8dd0f8`; their trees match.
 - Latest published implementation commit: local `3d9c78533126fa679a2f3828b35d3e27b77c94bd`, published as `91ddcbf4804c7cd5a7454a5976e4b91a7dc7f5a7`; their trees match.
 - Latest progress checkpoint: local `e4f4efe3466de7c3cc12bc86a0196afd5c61e08a`, published as `91646dc0f9ec30fb05c0871167855a7c572ede5e`; their trees match.
@@ -15,6 +15,7 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - Local stage-34 implementation commit is preserved under `refs/codex/local/gaming-hub-error-retry-focus-stage-34`.
 - Local stage-34 validation checkpoint is preserved under `refs/codex/local/gaming-hub-error-retry-focus-stage-34-checkpoint`.
 - Local stage-35 implementation commit is preserved under `refs/codex/local/gaming-hub-deduplicate-refresh-stage-35`.
+- Local stage-35 validation checkpoint is preserved under `refs/codex/local/gaming-hub-deduplicate-refresh-stage-35-checkpoint`.
 - Local stage-32 implementation commit is preserved under `refs/codex/local/gaming-hub-retry-focus-stage-32`.
 - Local stage-31 implementation commit is preserved under `refs/codex/local/gaming-hub-refresh-feedback-stage-31`.
 - Local stage-30 implementation commit is preserved under `refs/codex/local/control-service-listener-diagnostics-stage-30`.
@@ -90,6 +91,7 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - Stage 32 GitHub Actions runs [43059553007](https://github.com/Milklosz/nexus-aurea/actions/runs/43059553007) (PR) and [43059538714](https://github.com/Milklosz/nexus-aurea/actions/runs/43059538714) (push) passed on Windows and macOS; Release jobs were skipped.
 - Stage 33 GitHub Actions runs [43061141004](https://github.com/Milklosz/nexus-aurea/actions/runs/43061141004) (PR) and [43061131133](https://github.com/Milklosz/nexus-aurea/actions/runs/43061131133) (push) passed on Windows and macOS; Release jobs were skipped.
 - Stage 34 GitHub Actions runs [43063620136](https://github.com/Milklosz/nexus-aurea/actions/runs/43063620136) (PR) and [43063611269](https://github.com/Milklosz/nexus-aurea/actions/runs/43063611269) (push) passed on Windows and macOS; Release jobs were skipped.
+- Stage 35 GitHub Actions runs [43066219552](https://github.com/Milklosz/nexus-aurea/actions/runs/43066219552) (PR) and [43066207610](https://github.com/Milklosz/nexus-aurea/actions/runs/43066207610) (push) are queued.
 - Stage 29 GitHub Actions runs [43054839359](https://github.com/Milklosz/nexus-aurea/actions/runs/43054839359) (PR) and [43054826843](https://github.com/Milklosz/nexus-aurea/actions/runs/43054826843) (push) passed on Windows and macOS.
 - The currently installed MSI copy was only opened for visual inspection. Its Control Center is the older long-list layout; it was closed afterward. No installed files or settings were changed.
 
@@ -157,4 +159,4 @@ Updated: 2026-11-11 (Europe/Warsaw)
 
 ## Next step
 
-Stages 32–34 are locally tested, committed, published, and passed CI on Windows and macOS. Stage 34 archives are finalized and verified; its Windows artifact was extracted only and was not executed or installed. Stage 35 is locally tested and committed; publish it and verify CI. The published Stage 34 progress checkpoint `7601202c4e4695a34bf1187969c782b6d15fa9bc` compares 87 commits ahead and 0 behind, with exact merge base `6dbcc36abeded18b753a134bc8ede10fb37df391`. Next, prevent duplicate status requests while the Gaming Hub refresh control remains focusable. Keep GUI review marked `NOT TESTED`; keep iPhone Remote safely disabled by default.
+Stages 32–34 are locally tested, committed, published, and passed CI on Windows and macOS. Stage 34 archives are finalized and verified; its Windows artifact was extracted only and was not executed or installed. Stage 35 is locally tested, committed, and published; CI is queued. The published Stage 35 checkpoint `9a297d011bcc8c8e5a5b467522f752bfa2654588` compares 89 commits ahead and 0 behind, with exact merge base `6dbcc36abeded18b753a134bc8ede10fb37df391`. Next, verify Stage 35 CI and create its recovery archive. Keep GUI review marked `NOT TESTED`; keep iPhone Remote safely disabled by default.
