@@ -56,6 +56,9 @@ export function ControlCenter(props: ControlCenterProps) {
   const [activePanel, setActivePanel] = useState<ControlPanelId>("cinema");
   const [status, setStatus] = useState<ControlServiceStatus>(disabledControlServiceStatus);
   const [loading, setLoading] = useState(true);
+  const [statusReadFailed, setStatusReadFailed] = useState(false);
+  const controlStatusRequestId = useRef(0);
+  const controlStatusRequestInFlight = useRef(false);
   const [busy, setBusy] = useState(false);
   const [remoteStatus, setRemoteStatus] = useState<RemoteAccessStatus>(disabledRemoteAccessStatus);
   const [remoteStatusReady, setRemoteStatusReady] = useState(false);
@@ -89,22 +92,41 @@ export function ControlCenter(props: ControlCenterProps) {
     }
   };
 
+  const readControlStatus = async (isActive: () => boolean = () => true) => {
+    if (controlStatusRequestInFlight.current) return;
+    controlStatusRequestInFlight.current = true;
+    const requestId = ++controlStatusRequestId.current;
+    setLoading(true);
+    setError("");
+    try {
+      const next = await getControlServiceStatus();
+      if (isActive() && requestId === controlStatusRequestId.current) {
+        setStatus(next);
+        setStatusReadFailed(false);
+      }
+    } catch {
+      if (isActive() && requestId === controlStatusRequestId.current) {
+        setStatus(disabledControlServiceStatus);
+        setStatusReadFailed(true);
+        setError("Nie udało się odczytać stanu Windows. Funkcje systemowe są niedostępne.");
+      }
+    } finally {
+      if (isActive() && requestId === controlStatusRequestId.current) {
+        setLoading(false);
+        controlStatusRequestInFlight.current = false;
+      }
+    }
+  };
+
   useEffect(() => {
     const element = dialog.current;
     if (element && !element.open && typeof element.showModal === "function") element.showModal();
     let active = true;
-    setLoading(true);
-    void getControlServiceStatus().then((next) => {
-      if (active) { setStatus(next); setLoading(false); }
-    }).catch(() => {
-      if (active) {
-        setStatus(disabledControlServiceStatus);
-        setError("Nie udało się odczytać stanu Windows. Funkcje systemowe są niedostępne.");
-        setLoading(false);
-      }
-    });
+    void readControlStatus(() => active);
     return () => {
       active = false;
+      controlStatusRequestId.current += 1;
+      controlStatusRequestInFlight.current = false;
       if (element?.open) element.close();
     };
   }, []);
@@ -287,6 +309,9 @@ export function ControlCenter(props: ControlCenterProps) {
               {status.foregroundProcess && <p>Aktywne okno: {status.foregroundProcess}</p>}
               {status.lastError && <p role="alert">{status.lastError}</p>}
             </div>
+            {statusReadFailed && <button type="button" aria-busy={loading} disabled={loading} onClick={() => void readControlStatus()}>
+              {loading ? "Odczytuję…" : "Ponów odczyt statusu Windows"}
+            </button>}
           </section>
         </div>
         {error && <p className="cc-feedback cc-error" role="alert">{error}</p>}

@@ -92,6 +92,37 @@ describe("Control Center", () => {
     expect(screen.getByText(/Regulacja głośności wymaga natywnego backendu Windows/)).toBeTruthy();
   });
 
+  it("retries a failed Windows status read without duplicate requests and keeps retry focus while pending", async () => {
+    setupDialog();
+    mocks.getStatus.mockRejectedValueOnce(new Error("status unavailable"));
+    renderCenter();
+
+    expect((await screen.findByRole("alert")).textContent).toContain("Nie udało się odczytać stanu Windows.");
+    const retryButton = screen.getByRole("button", { name: "Ponów odczyt statusu Windows" });
+    retryButton.focus();
+    expect(document.activeElement).toBe(retryButton);
+
+    let resolveStatus!: (status: typeof mocks.status) => void;
+    mocks.getStatus.mockImplementationOnce(() => new Promise((resolve) => { resolveStatus = resolve; }));
+    act(() => {
+      fireEvent.click(retryButton);
+      fireEvent.click(retryButton);
+    });
+
+    expect(screen.getByRole("button", { name: "Odczytuję…" })).toBe(retryButton);
+    expect(retryButton.getAttribute("aria-busy")).toBe("true");
+    expect(document.activeElement).toBe(retryButton);
+    expect(mocks.getStatus).toHaveBeenCalledTimes(2);
+
+    const recoveredStatus = { ...mocks.status, windows: true };
+    resolveStatus(recoveredStatus);
+
+    expect(await screen.findByRole("button", { name: "Głośność +" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Ponów odczyt statusu Windows" })).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(mocks.getStatus).toHaveBeenCalledTimes(2);
+  });
+
   it("uses the existing system volume actions when Windows is available", async () => {
     setupDialog();
     mocks.status = { ...mocks.status, windows: true };
