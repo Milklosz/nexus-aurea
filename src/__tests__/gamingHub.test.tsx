@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { GamingHub } from "../components/GamingHub";
 
 const mocks = vi.hoisted(() => ({
@@ -130,6 +130,36 @@ describe("Gaming Hub and App Manager integration", () => {
     expect(restoredButton).toBe(retryButton);
     expect(document.activeElement).toBe(retryButton);
     expect(retryButton.getAttribute("aria-busy")).toBe("false");
+  });
+
+  it("ignores repeated fallback retry activations while a status read is pending", async () => {
+    mocks.snapshot = { windows: false, foregroundProcess: null, apps: [], games: [], gamesError: null };
+    render(<GamingHub onActivateGaming={vi.fn(async () => true)} />);
+    const retryButton = await screen.findByRole("button", { name: "Spróbuj ponownie" });
+    retryButton.focus();
+    expect(document.activeElement).toBe(retryButton);
+    const callsAfterInitialRead = mocks.getStatus.mock.calls.length;
+
+    let resolveStatus!: (snapshot: any) => void;
+    mocks.getStatus.mockImplementationOnce(() => new Promise((resolve) => { resolveStatus = resolve; }));
+    act(() => {
+      fireEvent.click(retryButton);
+      fireEvent.click(retryButton);
+    });
+
+    const pendingButton = await screen.findByRole("button", { name: "Odczytuję…" });
+    expect(pendingButton).toBe(retryButton);
+    expect(mocks.getStatus).toHaveBeenCalledTimes(callsAfterInitialRead + 1);
+    expect(document.activeElement).toBe(retryButton);
+    expect(retryButton.getAttribute("aria-busy")).toBe("true");
+
+    resolveStatus({ windows: false, foregroundProcess: null, apps: [], games: [], gamesError: null });
+
+    const restoredButton = await screen.findByRole("button", { name: "Spróbuj ponownie" });
+    expect(restoredButton).toBe(retryButton);
+    expect(document.activeElement).toBe(retryButton);
+    expect(retryButton.getAttribute("aria-busy")).toBe("false");
+    expect(mocks.getStatus).toHaveBeenCalledTimes(callsAfterInitialRead + 1);
   });
 
   it("keeps the Windows library refresh control focused while status is pending", async () => {
