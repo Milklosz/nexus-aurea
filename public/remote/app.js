@@ -8,6 +8,7 @@
     paired: false,
     inFlight: false,
     record: null,
+    rejectedUnconfirmedRecord: false,
   };
   let statusRequestId = 0;
   let commandRequestId = 0;
@@ -40,6 +41,18 @@
     if (!message) return;
     message.textContent = text;
     message.dataset.kind = error ? "error" : "normal";
+  }
+
+  const requestTimeoutMs = 8000;
+
+  async function fetchWithTimeout(resource, options) {
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), requestTimeoutMs) : null;
+    try {
+      return await fetch(resource, controller ? { ...options, signal: controller.signal } : options);
+    } finally {
+      if (timer !== null) clearTimeout(timer);
+    }
   }
 
   function updateControls() {
@@ -129,7 +142,7 @@
     }
 
     try {
-      const response = await fetch("./api/status", {
+      const response = await fetchWithTimeout("./api/status", {
         method: "GET",
         cache: "no-store",
         credentials: "omit",
@@ -149,18 +162,32 @@
         state.storageReady = false;
         state.paired = false;
         state.record = null;
+        state.rejectedUnconfirmedRecord = false;
         pairingForm.hidden = true;
         showMessage("Serwer LAN został wyłączony w VELORA.");
       } else {
         try {
-          state.record = await readRecord();
+          const storedRecord = await readRecord();
           if (requestId !== statusRequestId) return;
+          const confirmed = Boolean(
+            storedRecord
+            && storedRecord.key
+            && storedRecord.deviceId
+            && storedRecord.confirmedByServer === true,
+          );
+          if (storedRecord && !confirmed) {
+            try { await clearRecord(); } catch { /* the unconfirmed record stays unusable */ }
+            if (requestId !== statusRequestId) return;
+          }
+          state.record = confirmed ? storedRecord : null;
           state.storageReady = true;
+          state.rejectedUnconfirmedRecord = Boolean(storedRecord && !confirmed);
         } catch {
           if (requestId !== statusRequestId) return;
           state.record = null;
           state.storageReady = false;
           state.paired = false;
+          state.rejectedUnconfirmedRecord = false;
           pairingForm.hidden = true;
           pairingState.textContent = "pamięć klucza niedostępna";
           connection.textContent = "wymagana bezpieczna pamięć";
@@ -168,9 +195,10 @@
           updateControls();
           return;
         }
-        state.paired = Boolean(state.record && state.record.key && state.record.deviceId);
+        state.paired = Boolean(state.record);
         pairingForm.hidden = state.paired;
         if (state.paired) showMessage("Pilot jest sparowany. Każda komenda wymaga podpisu urządzenia.");
+        else if (state.rejectedUnconfirmedRecord) showMessage("Zapisany klucz nie ma potwierdzenia serwera. Sparuj iPhone'a ponownie.", true);
         else showMessage("Wpisz jednorazowy kod wygenerowany w Control Center.");
       }
     } catch {
@@ -178,6 +206,7 @@
       state.serverReady = false;
       state.paired = false;
       state.record = null;
+      state.rejectedUnconfirmedRecord = false;
       pairingForm.hidden = true;
       server.textContent = "niedostępny";
       origin.textContent = "HTTPS bez odpowiedzi";
@@ -217,11 +246,9 @@
         false,
         ["sign"],
       );
-      const record = { deviceId, key, sequence: 0 };
-      await writeRecord(record);
       let response;
       try {
-        response = await fetch("./api/pair", {
+        response = await fetchWithTimeout("./api/pair", {
           method: "POST",
           cache: "no-store",
           credentials: "omit",
@@ -229,17 +256,25 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ code, deviceId, deviceName: name, token }),
         });
-      } catch {
-        state.record = record;
-        state.paired = true;
-        pairingForm.hidden = true;
-        showMessage("Parowanie przerwane. Klucz został zachowany; sprawdź połączenie i spróbuj polecenia.", true);
+      } catch (error) {
+        // A lost response is not proof that the server stored this device.
+        // Keep the pairing form open and require a fresh server-confirmed attempt.
+        state.record = null;
+        state.paired = false;
+        state.rejectedUnconfirmedRecord = false;
+        pairingForm.hidden = false;
+        pairingState.textContent = "parowanie niepotwierdzone";
+        connection.textContent = "HTTPS · brak potwierdzenia";
+        showMessage(error?.name === "AbortError"
+          ? "VELORA nie potwierdziła parowania w wyznaczonym czasie. Wygeneruj nowy kod i spróbuj ponownie."
+          : "Parowanie nie zostało potwierdzone przez VELORA. Sprawdź połączenie, wygeneruj nowy kod i spróbuj ponownie.", true);
         return;
       }
       if (response.status !== 201) {
-        await clearRecord();
+        try { await clearRecord(); } catch { /* the key remains unusable until a confirmed pairing */ }
         state.record = null;
         state.paired = false;
+        pairingForm.hidden = false;
         const reason = response.status === 429
           ? "Za dużo prób. Wygeneruj nowy kod później."
           : response.status === 409
@@ -250,15 +285,24 @@
         showMessage(reason, true);
         return;
       }
+      const record = { deviceId, key, sequence: 0, confirmedByServer: true };
+      await writeRecord(record);
       state.record = record;
       state.paired = true;
+      state.rejectedUnconfirmedRecord = false;
       pairingForm.hidden = true;
       pairedCount.textContent = String(Number(pairedCount.textContent || "0") + 1);
       pairingState.textContent = "sparowane";
       connection.textContent = "HTTPS · sparowano";
       showMessage("iPhone sparowany. Klucz podpisu zapisano jako nieeksportowalny klucz WebCrypto.");
     } catch {
-      showMessage("Nie udało się utworzyć bezpiecznego klucza na tym iPhonie.", true);
+      state.record = null;
+      state.paired = false;
+      state.rejectedUnconfirmedRecord = false;
+      pairingForm.hidden = false;
+      pairingState.textContent = "parowanie niepotwierdzone";
+      connection.textContent = "HTTPS · brak potwierdzenia";
+      showMessage("Nie udało się bezpiecznie przygotować klucza na tym iPhonie. Sparuj ponownie.", true);
     } finally {
       tokenBytes.fill(0);
       state.inFlight = false;
@@ -267,7 +311,7 @@
   }
 
   async function sendCommand(command) {
-    if (!state.storageReady || !state.record || state.inFlight || !navigator.onLine) return;
+    if (!state.storageReady || !state.paired || !state.record || state.inFlight || !navigator.onLine) return;
     const requestId = ++commandRequestId;
     state.inFlight = true;
     const commandLabel = commandLabels[command] || "polecenie";
@@ -286,7 +330,7 @@
         new TextEncoder().encode(payload),
       );
       if (requestId !== commandRequestId) return;
-      const response = await fetch("./api/command", {
+      const response = await fetchWithTimeout("./api/command", {
         method: "POST",
         cache: "no-store",
         credentials: "omit",

@@ -19,6 +19,8 @@ Pełne zaufanie certyfikatowi głównemu pozwala iPhone'owi ufać certyfikatom T
 
 ## Ochrona i wyłączenie
 
+- Klucz urządzenia jest zapisywany dopiero po odpowiedzi `201 Created` z serwera i zawiera znacznik potwierdzenia. Klucz bez tego znacznika (np. z wcześniejszej wersji pilota) jest odrzucany, więc po aktualizacji może być wymagane jednorazowe ponowne sparowanie.
+- Zapytania statusu, parowania i poleceń mają limit czasu 8 sekund z `AbortController`. Utracona odpowiedź parowania nie oznacza sukcesu; formularz pozostaje otwarty, a użytkownik musi wygenerować nowy kod i spróbować ponownie.
 - Serwer jest domyślnie wyłączony i wiąże się wyłącznie z wykrytym prywatnym adresem IPv4 na porcie 47862.
 - Komendy wymagają TLS, sparowanego klucza HMAC, rosnącego numeru sekwencji i dokładnego Origin/Host. Kod parowania wygasa po minucie; próby są ograniczone. Serwer przyjmuje najwyżej 8 iPhone'ów i 20 komend na sekundę na urządzenie.
 - Sekrety i klucz CA są przechowywane w Magazynie poświadczeń Windows. Safari przechowuje nieeksportowalny klucz HMAC w IndexedDB.

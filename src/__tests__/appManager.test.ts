@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ isTauri: vi.fn(() => true), invoke: vi.fn(), listen: vi.fn(async () => vi.fn()) }));
+const mocks = vi.hoisted(() => ({
+  isTauri: vi.fn(() => true),
+  invoke: vi.fn(),
+  listen: vi.fn(async (_event: string, _callback: (event: { payload: unknown }) => void) => vi.fn()),
+}));
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: mocks.isTauri, invoke: mocks.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen }));
 
@@ -39,11 +43,46 @@ describe("App Manager bridge", () => {
     expect(mocks.invoke).toHaveBeenCalledWith("launch_managed_app", { id: "appleMusic" });
   });
 
-  it("forwards only the managed app exit identifier", async () => {
+  it("forwards the managed app exit together with the backend focus decision", async () => {
     mocks.isTauri.mockReturnValue(true);
+    let handler: ((event: { payload: unknown }) => void) | undefined;
+    mocks.listen.mockImplementationOnce(async (_event: string, callback: (event: { payload: unknown }) => void) => {
+      handler = callback;
+      return vi.fn();
+    });
     const callback = vi.fn();
     await listenForManagedAppExit(callback);
+
+    handler?.({
+      payload: {
+        id: "playniteFullscreen",
+        foregroundProcess: "chrome.exe",
+        shouldFocus: false,
+      },
+    });
+
     expect(mocks.listen).toHaveBeenCalledWith("managed-app-exited", expect.any(Function));
+    expect(callback).toHaveBeenCalledWith({
+      id: "playniteFullscreen",
+      foregroundProcess: "chrome.exe",
+      shouldFocus: false,
+    });
+  });
+
+  it("ignores malformed managed app exit events", async () => {
+    mocks.isTauri.mockReturnValue(true);
+    let handler: ((event: { payload: unknown }) => void) | undefined;
+    mocks.listen.mockImplementationOnce(async (_event: string, callback: (event: { payload: unknown }) => void) => {
+      handler = callback;
+      return vi.fn();
+    });
+    const callback = vi.fn();
+    await listenForManagedAppExit(callback);
+
+    handler?.({ payload: { id: "playniteFullscreen" } });
+    handler?.({ payload: "playniteFullscreen" });
+
+    expect(callback).not.toHaveBeenCalled();
   });
 
   it("passes a numeric Steam app ID to the native verified launcher", async () => {

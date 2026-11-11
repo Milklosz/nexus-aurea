@@ -37,6 +37,9 @@ describe("VELORA iPhone Remote", () => {
     expect(script).not.toMatch(/WebSocket|EventSource|XMLHttpRequest|sendBeacon/);
     expect(script).toContain('credentials: "omit"');
     expect(script).toContain('cache: "no-store"');
+    expect(script).toContain("new AbortController()");
+    expect(script).toContain("fetchWithTimeout");
+    expect(script).toContain("confirmedByServer === true");
   });
 
   it("declares an iPhone-capable standalone app and updates its offline shell version", () => {
@@ -45,7 +48,7 @@ describe("VELORA iPhone Remote", () => {
     expect(manifest.scope).toBe("./");
     expect(html).toContain('name="apple-mobile-web-app-capable"');
     const serviceWorker = readFileSync("public/remote/sw.js", "utf8");
-    expect(serviceWorker).toContain("nexus-aurea-remote-v0.9.2-velora-offline-command-4");
+    expect(serviceWorker).toContain("nexus-aurea-remote-v0.9.2-velora-offline-command-5");
     expect(serviceWorker).toContain('key.startsWith("nexus-aurea-remote-")');
     expect(serviceWorker).toContain("self.skipWaiting()");
   });
@@ -116,6 +119,9 @@ describe("VELORA iPhone Remote", () => {
       JSON,
       Math,
       btoa: (value: string) => value,
+      setTimeout: () => 0,
+      clearTimeout: () => {},
+      AbortController,
       queueMicrotask,
     });
 
@@ -136,6 +142,168 @@ describe("VELORA iPhone Remote", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(elements.get("pairing-form")?.hidden).toBe(true);
     expect(commandButtons[0].disabled).toBe(true);
+  });
+
+  it("does not claim pairing when the server does not confirm before the timeout", async () => {
+    const listeners = new Map<string, (event: { preventDefault: () => void }) => void>();
+    const element = (initial: Partial<{ hidden: boolean; disabled: boolean; textContent: string; value: string }> = {}) => ({
+      hidden: initial.hidden ?? false,
+      disabled: initial.disabled ?? false,
+      textContent: initial.textContent ?? "",
+      value: initial.value ?? "",
+      dataset: {} as Record<string, string>,
+      addEventListener: vi.fn((type: string, listener: (event: { preventDefault: () => void }) => void) => listeners.set(type, listener)),
+    });
+    const elements = new Map([
+      ["connection-state", element()],
+      ["server-state", element()],
+      ["origin-state", element()],
+      ["pairing-state", element()],
+      ["paired-count", element({ textContent: "0" })],
+      ["remote-message", element()],
+      ["pairing-form", element({ hidden: true })],
+      ["pair-button", element({ disabled: true })],
+      ["pairing-code", element({ value: "123456" })],
+      ["device-name", element({ value: "iPhone" })],
+    ]);
+    const commandButton = element({ disabled: true });
+    commandButton.dataset.command = "home";
+    const put = vi.fn();
+    const indexedDB = {
+      open: vi.fn(() => {
+        const request: { result?: unknown; onsuccess?: () => void } = {};
+        const database = {
+          objectStoreNames: { contains: () => true },
+          close: vi.fn(),
+          transaction: () => {
+            const transaction: {
+              oncomplete?: () => void;
+              objectStore: () => { get: () => { result?: unknown; onsuccess?: () => void }; put: (value: unknown) => void };
+            } = {
+              objectStore: () => ({
+                get: () => {
+                  const getRequest: { result?: unknown; onsuccess?: () => void } = {};
+                  queueMicrotask(() => {
+                    getRequest.onsuccess?.();
+                    transaction.oncomplete?.();
+                  });
+                  return getRequest;
+                },
+                put: (value: unknown) => {
+                  put(value);
+                  queueMicrotask(() => transaction.oncomplete?.());
+                },
+              }),
+            };
+            return transaction;
+          },
+        };
+        queueMicrotask(() => {
+          request.result = database;
+          request.onsuccess?.();
+        });
+        return request;
+      }),
+    };
+    const timers = new Map<number, () => void>();
+    let nextTimer = 0;
+    let pairStatus = 0;
+    const schedule = vi.fn((callback: () => void) => {
+      nextTimer += 1;
+      timers.set(nextTimer, callback);
+      return nextTimer;
+    });
+    const cancel = vi.fn((id: number) => { timers.delete(id); });
+    const fetch = vi.fn((url: string, init?: { signal?: AbortSignal }) => {
+      if (url === "./api/status") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ enabled: true, pairedDeviceCount: 0 }),
+        });
+      }
+      if (pairStatus === 201) return Promise.resolve({ status: 201 });
+      return new Promise((_, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          const error = new Error("aborted");
+          error.name = "AbortError";
+          reject(error);
+        });
+      });
+    });
+    const window = {
+      isSecureContext: true,
+      location: { protocol: "https:" },
+      crypto: { subtle: { importKey: async () => ({}) } },
+      indexedDB,
+      addEventListener: vi.fn(),
+    };
+
+    runInNewContext(script, {
+      window,
+      document: {
+        visibilityState: "visible",
+        getElementById: (id: string) => elements.get(id),
+        querySelectorAll: () => [commandButton],
+        addEventListener: vi.fn(),
+      },
+      navigator: { onLine: true, serviceWorker: { register: async () => {} } },
+      indexedDB,
+      fetch,
+      crypto: {
+        getRandomValues: (bytes: Uint8Array) => bytes.fill(7),
+        subtle: { importKey: async () => ({}) },
+      },
+      TextEncoder,
+      Uint8Array,
+      Promise,
+      Error,
+      String,
+      Number,
+      Boolean,
+      JSON,
+      Math,
+      btoa: (value: string) => value,
+      setTimeout: schedule,
+      clearTimeout: cancel,
+      AbortController,
+      queueMicrotask,
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(elements.get("pairing-form")?.hidden).toBe(false);
+    listeners.get("submit")?.({ preventDefault: () => {} });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const pairCall = fetch.mock.calls.find(([url]) => url === "./api/pair");
+    expect(pairCall?.[1]?.signal).toBeDefined();
+
+    for (const [id, callback] of [...timers]) {
+      timers.delete(id);
+      callback();
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(put).not.toHaveBeenCalled();
+    expect(elements.get("pairing-form")?.hidden).toBe(false);
+    expect(elements.get("pairing-state")?.textContent).toBe("parowanie niepotwierdzone");
+    expect(elements.get("remote-message")?.textContent).toContain("nie potwierdziła parowania");
+    expect(elements.get("paired-count")?.textContent).toBe("0");
+    expect(commandButton.disabled).toBe(true);
+
+    pairStatus = 201;
+    put.mockClear();
+    listeners.get("submit")?.({ preventDefault: () => {} });
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(put).toHaveBeenCalledOnce();
+    expect(put.mock.calls[0][0]).toMatchObject({ confirmedByServer: true });
+    expect(elements.get("pairing-form")?.hidden).toBe(true);
+    expect(elements.get("pairing-state")?.textContent).toBe("sparowane");
+    expect(elements.get("paired-count")?.textContent).toBe("1");
+    expect(commandButton.disabled).toBe(false);
   });
 
   it("announces a pending command while the remote controls are disabled", async () => {
@@ -162,7 +330,7 @@ describe("VELORA iPhone Remote", () => {
     ]);
     const commandButton = element({ disabled: true });
     commandButton.dataset.command = "home";
-    const record = { deviceId: "iphone", key: {}, sequence: 0 };
+    const record = { deviceId: "iphone", key: {}, sequence: 0, confirmedByServer: true };
     const indexedDB = {
       open: vi.fn(() => {
         const request: { result?: unknown; onsuccess?: () => void } = {};
@@ -237,6 +405,9 @@ describe("VELORA iPhone Remote", () => {
       JSON,
       Math,
       btoa: (value: string) => value,
+      setTimeout: () => 0,
+      clearTimeout: () => {},
+      AbortController,
       queueMicrotask,
     });
 
@@ -318,6 +489,9 @@ describe("VELORA iPhone Remote", () => {
       JSON,
       Math,
       btoa: (value: string) => value,
+      setTimeout: () => 0,
+      clearTimeout: () => {},
+      AbortController,
       queueMicrotask,
     });
 

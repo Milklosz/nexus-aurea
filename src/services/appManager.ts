@@ -43,6 +43,12 @@ export type LaunchReceipt = {
   focusRestoreSupported: boolean;
 };
 
+export type ManagedAppExit = {
+  id: string;
+  foregroundProcess: string | null;
+  shouldFocus: boolean;
+};
+
 export type ManagedAppId = "steamBigPicture" | "appleMusic" | "playniteFullscreen" | "chrome" | "edge" | "firefox";
 
 function userFacingManagedAppError(message: string): string {
@@ -97,7 +103,16 @@ export async function launchManagedGame(id: string): Promise<{ id: string; launc
   return invoke<{ id: string; launched: boolean }>("launch_managed_game", { id });
 }
 
-export async function listenForManagedAppExit(callback: (id: string) => void): Promise<() => void> {
+export async function listenForManagedAppExit(callback: (exit: ManagedAppExit) => void): Promise<() => void> {
   if (!isTauri()) return () => {};
-  return listen<string>("managed-app-exited", event => callback(event.payload));
+  return listen<ManagedAppExit>("managed-app-exited", event => {
+    const exit = event.payload;
+    if (
+      typeof exit?.id === "string"
+      && typeof exit.shouldFocus === "boolean"
+      && (exit?.foregroundProcess === null || typeof exit.foregroundProcess === "string")
+    ) {
+      callback(exit);
+    }
+  });
 }
