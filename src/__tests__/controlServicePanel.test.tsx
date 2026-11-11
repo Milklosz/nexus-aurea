@@ -213,4 +213,23 @@ describe("Control Service diagnostics", () => {
     expect(await screen.findByText("Usługa wyłączona skrótem awaryjnym.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Włącz monitoring sesji" })).toBeTruthy();
   });
+
+  it("announces emergency stops assertively while routine action feedback stays polite", async () => {
+    mocks.status = status({ running: true, returnHotkeyRegistered: true });
+    render(<ControlServicePanel />);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Wyłącz usługę" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Wyłącz usługę" }));
+    await waitFor(() => expect(screen.getByText("Control Service jest wyłączony.")).toBeTruthy());
+
+    const routineNotice = document.querySelector(".control-service-notice");
+    expect(routineNotice?.getAttribute("role")).toBe("status");
+    expect(routineNotice?.getAttribute("aria-live")).toBe("polite");
+
+    act(() => mocks.onStop?.("keyboard-emergency"));
+
+    const emergencyNotice = await screen.findByRole("alert");
+    expect(emergencyNotice.textContent).toBe("Usługa wyłączona skrótem awaryjnym.");
+    expect(emergencyNotice.getAttribute("aria-live")).toBe("assertive");
+  });
 });

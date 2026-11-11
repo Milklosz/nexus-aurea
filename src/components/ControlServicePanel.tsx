@@ -23,6 +23,7 @@ export function ControlServicePanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [urgentNotice, setUrgentNotice] = useState(false);
   const actionGeneration = useRef(0);
   const foregroundClass = status.running
     ? classifyForegroundProcess(status.foregroundProcess)
@@ -59,8 +60,10 @@ export function ControlServicePanel() {
       }));
       if (reason === "keyboard-emergency") {
         setError("");
+        setUrgentNotice(true);
         setNotice("Usługa wyłączona skrótem awaryjnym.");
       } else {
+        setUrgentNotice(false);
         setNotice("");
         setError("Usługa została wyłączona po błędzie; uruchom ją ponownie z diagnostyki.");
       }
@@ -80,6 +83,7 @@ export function ControlServicePanel() {
     const generation = actionGeneration.current;
     setBusy(true);
     setError("");
+    setUrgentNotice(false);
     setNotice("Aktualizuję Control Service…");
     try {
       const nextStatus = await action();
@@ -134,7 +138,7 @@ export function ControlServicePanel() {
         <p>Ctrl+Alt+N wraca do VELORA. Ctrl+Alt+F12 natychmiast wyłącza usługę. Tryb gry zwalnia skrót powrotu i pozostawia wyłącznie awaryjne wyłączenie.</p>
         <p>Globalne mapowanie przycisków, ruch kursora i głośność są wyłączone w tym prototypie. Nie odczytujemy raportów pada.</p>
         {error && <p role="alert">{error}</p>}
-        <p className="control-service-notice" role="status" aria-live="polite">{notice}</p>
+        <p className="control-service-notice" role={urgentNotice ? "alert" : "status"} aria-live={urgentNotice ? "assertive" : "polite"}>{notice}</p>
       </>}
   </section>;
 }
