@@ -5,8 +5,8 @@ Updated: 2026-11-11 (Europe/Warsaw)
 ## Current branch and commits
 
 - Active branch: `feat/velora-night-build-2`.
-- Latest tested implementation commit: local `fa92a76e6d5952311456c9b0bebb4b0a80cc8d29`, published as `6dfa872de9441b34de25866b85fec8045b95bb58`; their trees match.
-- Local stage-25 implementation commit is preserved under `refs/codex/local/control-service-status-stage-25`.
+- Latest tested implementation commit: local `5c656f7e07598d07e3b26f588d91f7a09f08e9c6`, published as `78b508367a26cb34872d751627898fa15bb9a490`; their trees match.
+- Local stage-26 implementation commit is preserved under `refs/codex/local/control-service-emergency-stop-stage-26`.
 - Local stage-24 implementation commit `3ca7b50b565bda5197d45aefb9f1f1230a9b5db3` is preserved under `refs/codex/local/gaming-launch-failure-status-stage-24`; its tree matches published commit `a1f8de1176117bfe2da24c0a661c665b02109e50`.
 - Local stage-23 implementation commit `fdadd1e1e26effcd9cbfaff570f4f3d90eb89e62` is preserved under `refs/codex/local/gaming-launch-status-stage-23`; its tree matches published commit `c345a500339e4096e16427b9f0280b69781d4dff`.
 - Local stage-22 implementation commit is preserved under `refs/codex/local/remote-offline-command-race-stage-22`.
@@ -51,13 +51,15 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - iPhone Remote invalidates pending command UI updates when the iPhone goes offline, so a late response cannot overwrite the offline status. Added a regression case and bumped the service-worker cache key; commands are never retried automatically.
 - Gaming Hub now announces pending Steam Big Picture, Playnite, and game launches, and exposes busy state on each launch button. Added a pending-launch accessibility regression test.
 - Gaming Hub clears its pending live status when a Steam, Playnite, or game launch fails, leaving the error alert as the current message.
-- Control Service actions now announce pending work and the resulting state, expose busy status on both controls, and clear pending feedback after errors.
-- React tests: 25 files, 128 tests passed. TypeScript and Vite production build passed.
+- Control Service actions announce pending work and the resulting state, expose busy status on both controls, and clear pending feedback after errors.
+- The emergency-stop event invalidates pending Control Service action results, immediately clears busy state, and prevents an older operation finalizer from clearing a newer action busy state.
+- Latest local React run: 25 files, 129 tests passed. TypeScript and Vite production build passed.
 - GitHub Actions run [43026294733](https://github.com/Milklosz/nexus-aurea/actions/runs/43026294733) passed on Windows and macOS, including React, Rust, TypeScript/Vite, and platform builds. The Release job was skipped.
 - GitHub Actions runs [43029135952](https://github.com/Milklosz/nexus-aurea/actions/runs/43029135952) (stage 09), [43029773813](https://github.com/Milklosz/nexus-aurea/actions/runs/43029773813) (stage 10), [43030395848](https://github.com/Milklosz/nexus-aurea/actions/runs/43030395848) (stage 11), [43031259001](https://github.com/Milklosz/nexus-aurea/actions/runs/43031259001) (stage 12), [43032589406](https://github.com/Milklosz/nexus-aurea/actions/runs/43032589406) (stage 13), stage 14 [43033436829](https://github.com/Milklosz/nexus-aurea/actions/runs/43033436829), stage 15 [43035329173](https://github.com/Milklosz/nexus-aurea/actions/runs/43035329173), stage 16 [43036042119](https://github.com/Milklosz/nexus-aurea/actions/runs/43036042119), stage 17 [43036705267](https://github.com/Milklosz/nexus-aurea/actions/runs/43036705267), stage 18 [43039325451](https://github.com/Milklosz/nexus-aurea/actions/runs/43039325451), and stage 19 [43040038281](https://github.com/Milklosz/nexus-aurea/actions/runs/43040038281) passed on Windows and macOS.
 - GitHub Actions runs [43043218481](https://github.com/Milklosz/nexus-aurea/actions/runs/43043218481) (stage 20), [43043740999](https://github.com/Milklosz/nexus-aurea/actions/runs/43043740999) (stage 21), and [43045040872](https://github.com/Milklosz/nexus-aurea/actions/runs/43045040872) (stage 22) passed on Windows and macOS; the Release jobs were skipped.
 - GitHub Actions runs [43047036322](https://github.com/Milklosz/nexus-aurea/actions/runs/43047036322) (stage 23) and [43047629891](https://github.com/Milklosz/nexus-aurea/actions/runs/43047629891) (stage 24) passed on Windows and macOS; Release was skipped.
 - Stage 25 GitHub Actions run [43048341666](https://github.com/Milklosz/nexus-aurea/actions/runs/43048341666) passed on Windows and macOS; React, Rust, TypeScript/Vite, and platform builds succeeded. The Release job was skipped.
+- Stage 26 Actions runs [43051591281](https://github.com/Milklosz/nexus-aurea/actions/runs/43051591281) (PR) and [43051579122](https://github.com/Milklosz/nexus-aurea/actions/runs/43051579122) (push) are running.
 - The currently installed MSI copy was only opened for visual inspection. Its Control Center is the older long-list layout; it was closed afterward. No installed files or settings were changed.
 
 ## Artifact record
@@ -77,6 +79,7 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - Stage 22 standalone archive: `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111-continuation22-final.zip` (SHA-256 `bb39338eec234f39c83696a92fabdf66b01701d3404295df415584bd73aae65f`).
 - Stage 25 standalone snapshot: `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111-stage25-final.zip` (SHA-256 `3a2b3b09c3266722823689c501da6e6095909a9ed8d0737d53188ce09dbaf189`).
 - Full recovery snapshot through stage 25: `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111-full-through-stage25-final.zip`; checksum sidecar: `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111-full-through-stage25-final-SHA256.txt`. All 218 manifest entries are verified with no mismatches.
+- Stage 26 source copies and patch are stored under `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-26` and `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-26.patch`; the full snapshot will be refreshed after CI and the progress commit.
 - Prior Windows CI artifact for stage 19 from run [43040038281](https://github.com/Milklosz/nexus-aurea/actions/runs/43040038281): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-fbbc0e52343fffd9c68369bc6dc3dfe969df187f.zip` (SHA-256 `f3dedafd2cb510cc7886be8598cd8776677cfe6684c56a40ddfba183b170bb13`).
 - Stage-19 installer SHA-256: `983a2fb40e56761c8be8145dfb8a260cf531301bed95707166324d76cb5629b8`; Authenticode status: `NotSigned`; it was not run or installed.
 - Prior Windows CI artifact for stage 17 from run [43036705267](https://github.com/Milklosz/nexus-aurea/actions/runs/43036705267): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-3be7517542ad6b164d3001cc4a4aa4063ab1bc4b.zip`.
@@ -107,4 +110,4 @@ Updated: 2026-11-11 (Europe/Warsaw)
 
 ## Next step
 
-Stage 25 is verified and archived. Stage 26: guard Control Service UI state against a late action response after an emergency-stop event, with a focused regression test. Keep GUI review marked `NOT TESTED`; keep iPhone Remote safely disabled by default.
+Stage 26 is locally tested, committed, and published. Stage 27: prevent the initial Control Service status read from reviving a stale running state after an emergency-stop event. Keep GUI review marked `NOT TESTED`; keep iPhone Remote safely disabled by default.
