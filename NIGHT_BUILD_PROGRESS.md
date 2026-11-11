@@ -23,22 +23,25 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - While Control Service is running, non-VELORA or unknown foreground states suspend local Gamepad polling. With the service off, existing behavior is unchanged.
 - iPhone Remote now fails closed if IndexedDB cannot read the secure device-key record: the pairing form remains hidden, pairing is disabled, and no commands can be sent. The service-worker cache key was bumped so the PWA fetches the updated script.
 - React tests: 24 files, 115 tests passed. TypeScript and Vite production build passed.
-- Previous GitHub Actions run [43023723699](https://github.com/Milklosz/nexus-aurea/actions/runs/43023723699) passed on Windows and macOS, including Rust tests and platform builds. The Release job was skipped.
+- GitHub Actions run [43026294733](https://github.com/Milklosz/nexus-aurea/actions/runs/43026294733) passed on Windows and macOS, including React, Rust, TypeScript/Vite, and platform builds. The Release job was skipped.
+- The currently installed MSI copy was only opened for visual inspection. Its Control Center is the older long-list layout; it was closed afterward. No installed files or settings were changed.
 
 ## Artifact record
 
-- Previous Windows CI artifact ZIP: `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-6ed483a5f06074f90ecf918cbb0f00efe45637a8.zip`.
-- ZIP SHA-256: `8af5f900627252f751a0cde0deaa8a2878eec04a70122b8fae3cd840664e1e22`.
-- Embedded `VELORA_0.9.2_x64-setup.exe` SHA-256: `d09249bed3b42cf7ef775eb2dd1b81c9bc3a7f11e8b53af3428b44d93a99015b`.
-- This artifact is from the prior CI checkpoint, not the new remote-storage commit. The new commit's CI is pending; no artifact from it is claimed yet.
-- No installer was run or installed.
+- Latest Windows CI artifact from run [43026294733](https://github.com/Milklosz/nexus-aurea/actions/runs/43026294733): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-92d942a17173f8af3e244995d9c409df94716897.zip`.
+- ZIP SHA-256: `ff512ee2a362516a3a067d9655597643b62346e106a3837fe9002b9af01a9eb9`.
+- Extracted installer (not run): `C:\Users\milos\Documents\Codex\VELORA_0.9.2_x64-setup-92d942a17173f8af3e244995d9c409df94716897.exe`.
+- Installer SHA-256: `eab9905c006b3beef847a0e063e8dafd336b0b2a07386ae48181eac917a108ac`; Authenticode status: `NotSigned`.
+- Checksum sidecar: `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-92d942a17173f8af3e244995d9c409df94716897-SHA256.txt`.
+- No installer was executed or installed; the existing MSI installation remains untouched.
 
 ## Blockers
 
 - Codex artifact attachment for PR #13 did not return; the Draft PR remains available at the link above.
 - Git CLI push stalled during authorization. Commits were published with GitHub tools after verifying each expected remote SHA; updates were fast-forward only.
 - The controller signal is process-based and has not been validated against Steam Input ownership on the MSI. The installed VELORA was not replaced.
+- The locally redesigned Control Center has not yet been viewed in the branch's development build. The installed copy shown during visual inspection predates this branch's redesign.
 
 ## Next step
 
-Review Windows and macOS CI for the remote-storage commit. Record its artifact checksums when available, without installing it. Continue with another small Full Cinema Console improvement while keeping iPhone Remote safely disabled by default.
+Open the branch's development build in a separate window and visually review the redesigned Control Center at the available TV-like resolution. Make a small layout improvement if the view reveals a clear issue, then run the requested tests/build and commit it. Keep iPhone Remote safely disabled by default.
