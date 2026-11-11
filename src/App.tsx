@@ -18,7 +18,7 @@ import { useFocusRestoreOnClose } from "./hooks/useFocusRestoreOnClose";
 import { useLaunchGuard } from "./hooks/useLaunchGuard";
 import { useToast } from "./hooks/useToast";
 import { useWeather } from "./hooks/useWeather";
-import { openStreamingService } from "./services/openStreamingService";
+import { openStreamingService, streamingServiceErrorMessage } from "./services/openStreamingService";
 import { getControlServiceStatus, listenForNexusControlReturn, setControlGameMode } from "./services/controlService";
 import { launchManagedApp, listenForManagedAppExit, managedAppErrorMessage } from "./services/appManager";
 import { readCinemaProfile, saveCinemaProfile, type CinemaProfile } from "./services/cinemaMode";
@@ -86,7 +86,9 @@ export default function App() {
             ? `${service.name} już działa.`
             : `Uruchamiam ${service.name}${service.id === "steam" ? " Big Picture" : ""}.`);
         } catch (cause) {
-          showToast(managedAppErrorMessage(cause, `Nie udało się otworzyć ${service.name}.`));
+          showToast(service.kind === "web"
+            ? streamingServiceErrorMessage(cause, service.name)
+            : managedAppErrorMessage(cause, `Nie udało się otworzyć ${service.name}.`));
         }
       });
     },
