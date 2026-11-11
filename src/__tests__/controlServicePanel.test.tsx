@@ -12,6 +12,14 @@ const mocks = vi.hoisted(() => ({
   stop: vi.fn(async () => mocks.status!),
   onStatus: null as ((status: ControlServiceStatus) => void) | null,
   onStop: null as ((reason: string) => void) | null,
+  listenStatus: vi.fn(async (callback: (status: ControlServiceStatus) => void) => {
+    mocks.onStatus = callback;
+    return () => { mocks.onStatus = null; };
+  }),
+  listenStop: vi.fn(async (callback: (reason: string) => void) => {
+    mocks.onStop = callback;
+    return () => { mocks.onStop = null; };
+  }),
 }));
 
 vi.mock("../services/controlService", () => ({
@@ -29,14 +37,8 @@ vi.mock("../services/controlService", () => ({
   startControlService: mocks.start,
   setControlGameMode: mocks.setGameMode,
   stopControlService: mocks.stop,
-  listenForControlServiceStatus: vi.fn(async (callback: (status: ControlServiceStatus) => void) => {
-    mocks.onStatus = callback;
-    return () => { mocks.onStatus = null; };
-  }),
-  listenForControlServiceStop: vi.fn(async (callback: (reason: string) => void) => {
-    mocks.onStop = callback;
-    return () => { mocks.onStop = null; };
-  }),
+  listenForControlServiceStatus: mocks.listenStatus,
+  listenForControlServiceStop: mocks.listenStop,
 }));
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
@@ -231,5 +233,15 @@ describe("Control Service diagnostics", () => {
     const emergencyNotice = await screen.findByRole("alert");
     expect(emergencyNotice.textContent).toBe("Usługa wyłączona skrótem awaryjnym.");
     expect(emergencyNotice.getAttribute("aria-live")).toBe("assertive");
+  });
+
+  it.each(["status", "stop"] as const)("reports a failed %s listener registration", async (listener) => {
+    const expected = "Nie udało się monitorować zmian usługi; stan może być nieaktualny.";
+    if (listener === "status") mocks.listenStatus.mockRejectedValueOnce(new Error("status listener unavailable"));
+    else mocks.listenStop.mockRejectedValueOnce(new Error("stop listener unavailable"));
+
+    render(<ControlServicePanel />);
+
+    expect((await screen.findByRole("alert")).textContent).toBe(expected);
   });
 });

@@ -47,7 +47,9 @@ export function ControlServicePanel() {
     }).then((unlisten) => {
       if (active) stopStatusListener = unlisten;
       else unlisten();
-    }).catch(() => {});
+    }).catch(() => {
+      if (active) setError("Nie udało się monitorować zmian usługi; stan może być nieaktualny.");
+    });
     void listenForControlServiceStop((reason) => {
       if (!active) return;
       actionGeneration.current += 1;
@@ -70,7 +72,9 @@ export function ControlServicePanel() {
     }).then((unlisten) => {
       if (active) stopServiceListener = unlisten;
       else unlisten();
-    }).catch(() => {});
+    }).catch(() => {
+      if (active) setError("Nie udało się monitorować zmian usługi; stan może być nieaktualny.");
+    });
 
     return () => {
       active = false;
