@@ -5,10 +5,10 @@ Updated: 2026-11-11 (Europe/Warsaw)
 ## Current branch and commits
 
 - Active branch: `feat/velora-night-build-2`.
-- Latest tested implementation commit: local `3ca7b50b565bda5197d45aefb9f1f1230a9b5db3`, published as `a1f8de1176117bfe2da24c0a661c665b02109e50`; their trees match.
-- Local stage-24 implementation commit is preserved under `refs/codex/local/gaming-launch-failure-status-stage-24`.
+- Latest tested implementation commit: local `fa92a76e6d5952311456c9b0bebb4b0a80cc8d29`, published as `6dfa872de9441b34de25866b85fec8045b95bb58`; their trees match.
+- Local stage-25 implementation commit is preserved under `refs/codex/local/control-service-status-stage-25`.
+- Local stage-24 implementation commit `3ca7b50b565bda5197d45aefb9f1f1230a9b5db3` is preserved under `refs/codex/local/gaming-launch-failure-status-stage-24`; its tree matches published commit `a1f8de1176117bfe2da24c0a661c665b02109e50`.
 - Local stage-23 implementation commit `fdadd1e1e26effcd9cbfaff570f4f3d90eb89e62` is preserved under `refs/codex/local/gaming-launch-status-stage-23`; its tree matches published commit `c345a500339e4096e16427b9f0280b69781d4dff`.
-- Local stage-23 implementation commit is preserved under `refs/codex/local/gaming-launch-status-stage-23`.
 - Local stage-22 implementation commit is preserved under `refs/codex/local/remote-offline-command-race-stage-22`.
 - Local stage-21 implementation commit `b3cd86440621d33d2251eac8d508d3872c0ec066` is preserved under `refs/codex/local/remote-command-feedback-stage-21`; its tree matches published commit `611acc37d31db2a8c47c279db782fcadc962133f`.
 - Local stage-20 implementation commit `0f196da0076e9d89d9a39b1a9ab56d9200eb905f` is preserved under `refs/codex/local/remote-command-status-stage-20`; its tree matches published commit `a2bd3208ec114b94a4bbed8d212bb8f5bf4d92f3`.
@@ -51,23 +51,24 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - iPhone Remote invalidates pending command UI updates when the iPhone goes offline, so a late response cannot overwrite the offline status. Added a regression case and bumped the service-worker cache key; commands are never retried automatically.
 - Gaming Hub now announces pending Steam Big Picture, Playnite, and game launches, and exposes busy state on each launch button. Added a pending-launch accessibility regression test.
 - Gaming Hub clears its pending live status when a Steam, Playnite, or game launch fails, leaving the error alert as the current message.
-- React tests: 25 files, 126 tests passed. TypeScript and Vite production build passed.
+- Control Service actions now announce pending work and the resulting state, expose busy status on both controls, and clear pending feedback after errors.
+- React tests: 25 files, 128 tests passed. TypeScript and Vite production build passed.
 - GitHub Actions run [43026294733](https://github.com/Milklosz/nexus-aurea/actions/runs/43026294733) passed on Windows and macOS, including React, Rust, TypeScript/Vite, and platform builds. The Release job was skipped.
 - GitHub Actions runs [43029135952](https://github.com/Milklosz/nexus-aurea/actions/runs/43029135952) (stage 09), [43029773813](https://github.com/Milklosz/nexus-aurea/actions/runs/43029773813) (stage 10), [43030395848](https://github.com/Milklosz/nexus-aurea/actions/runs/43030395848) (stage 11), [43031259001](https://github.com/Milklosz/nexus-aurea/actions/runs/43031259001) (stage 12), [43032589406](https://github.com/Milklosz/nexus-aurea/actions/runs/43032589406) (stage 13), stage 14 [43033436829](https://github.com/Milklosz/nexus-aurea/actions/runs/43033436829), stage 15 [43035329173](https://github.com/Milklosz/nexus-aurea/actions/runs/43035329173), stage 16 [43036042119](https://github.com/Milklosz/nexus-aurea/actions/runs/43036042119), stage 17 [43036705267](https://github.com/Milklosz/nexus-aurea/actions/runs/43036705267), stage 18 [43039325451](https://github.com/Milklosz/nexus-aurea/actions/runs/43039325451), and stage 19 [43040038281](https://github.com/Milklosz/nexus-aurea/actions/runs/43040038281) passed on Windows and macOS.
 - GitHub Actions runs [43043218481](https://github.com/Milklosz/nexus-aurea/actions/runs/43043218481) (stage 20), [43043740999](https://github.com/Milklosz/nexus-aurea/actions/runs/43043740999) (stage 21), and [43045040872](https://github.com/Milklosz/nexus-aurea/actions/runs/43045040872) (stage 22) passed on Windows and macOS; the Release jobs were skipped.
-- Stage 23 GitHub Actions run [43047036322](https://github.com/Milklosz/nexus-aurea/actions/runs/43047036322) is running.
-- Stage 24 GitHub Actions run [43047629891](https://github.com/Milklosz/nexus-aurea/actions/runs/43047629891) is running.
+- GitHub Actions runs [43047036322](https://github.com/Milklosz/nexus-aurea/actions/runs/43047036322) (stage 23) and [43047629891](https://github.com/Milklosz/nexus-aurea/actions/runs/43047629891) (stage 24) passed on Windows and macOS; Release was skipped.
+- Stage 25 GitHub Actions run [43048341666](https://github.com/Milklosz/nexus-aurea/actions/runs/43048341666) is queued.
 - The currently installed MSI copy was only opened for visual inspection. Its Control Center is the older long-list layout; it was closed afterward. No installed files or settings were changed.
 
 ## Artifact record
 
-- Latest Windows CI artifact for stage 22 from run [43045040872](https://github.com/Milklosz/nexus-aurea/actions/runs/43045040872): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-5ce71d8295d007940e8144a62cd69e28d4f4518f.zip`.
-- ZIP SHA-256: `4c4029a24370116f33d057baec6ff765c3ce599dc657f6b5ef835dd63a1024e8`.
-- Extracted installer (not run): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-5ce71d8295d007940e8144a62cd69e28d4f4518f-extracted\VELORA_0.9.2_x64-setup.exe`.
-- Installer SHA-256: `6ca72f8eb0dbdefa94a4bd118510207986821d9c1c3d6779c89f9234690eb166`; Authenticode status: `NotSigned`.
-- Checksum sidecar: `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-5ce71d8295d007940e8144a62cd69e28d4f4518f-SHA256.txt`.
-- The stage-22 artifact digest matches the GitHub Actions artifact record; no installer was run or installed.
-- Prior Windows CI artifact for stage 21 from run [43043740999](https://github.com/Milklosz/nexus-aurea/actions/runs/43043740999): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-611acc37d31db2a8c47c279db782fcadc962133f.zip` (SHA-256 `d2e9a42d6b6d4fe72064603a754b198a4a29c4263628d524a9860272befe4db0`). Installer SHA-256 `a11c8c217b0e6ec469bdcea793814b08f8392889526630bf35016f8910bcb11a`; Authenticode `NotSigned`; it was not run or installed.
+- Latest Windows CI artifact for stage 24 from run [43047629891](https://github.com/Milklosz/nexus-aurea/actions/runs/43047629891): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-a1f8de1176117bfe2da24c0a661c665b02109e50.zip`.
+- ZIP SHA-256: `b61bd8df5b0bfbf7756b1ae10cd5a730f574f734a9c09ef7a915afe66eac7a90`.
+- Extracted installer (not run): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-a1f8de1176117bfe2da24c0a661c665b02109e50-extracted\VELORA_0.9.2_x64-setup.exe`.
+- Installer SHA-256: `bde1810a35eaf8a33d737fc4b96436dc4bf783100e9cdf67c2d4690f342684d8`; Authenticode status: `NotSigned`.
+- Checksum sidecar: `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-a1f8de1176117bfe2da24c0a661c665b02109e50-SHA256.txt`.
+- The stage-24 artifact digest matches the GitHub Actions artifact record; no installer was run or installed.
+- Prior Windows CI artifact for stage 22 from run [43045040872](https://github.com/Milklosz/nexus-aurea/actions/runs/43045040872): `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-5ce71d8295d007940e8144a62cd69e28d4f4518f.zip` (SHA-256 `4c4029a24370116f33d057baec6ff765c3ce599dc657f6b5ef835dd63a1024e8`). Installer SHA-256 `6ca72f8eb0dbdefa94a4bd118510207986821d9c1c3d6779c89f9234690eb166`; Authenticode `NotSigned`; it was not run or installed.
 
 ## Recovery checkpoints
 
@@ -105,4 +106,4 @@ Updated: 2026-11-11 (Europe/Warsaw)
 
 ## Next step
 
-Continue with another small VELORA Gaming Hub, navigation, or Remote improvement while checking stage 23 and 24 CI and finishing their recovery snapshots. Keep GUI review marked `NOT TESTED` unless a supported, policy-compliant path becomes available; keep iPhone Remote safely disabled by default.
+Continue with another small VELORA Control Center, Gaming Hub, navigation, or Remote improvement while checking stage 25 CI and finishing the recent recovery snapshots. Keep GUI review marked `NOT TESTED` unless a supported, policy-compliant path becomes available; keep iPhone Remote safely disabled by default.
