@@ -5,7 +5,9 @@ Updated: 2026-11-11 (Europe/Warsaw)
 ## Current branch and commits
 
 - Active branch: `feat/velora-night-build-2`.
-- Latest tested implementation commit: local `fdadd1e1e26effcd9cbfaff570f4f3d90eb89e62`, published as `c345a500339e4096e16427b9f0280b69781d4dff`; their trees match.
+- Latest tested implementation commit: local `3ca7b50b565bda5197d45aefb9f1f1230a9b5db3`, published as `a1f8de1176117bfe2da24c0a661c665b02109e50`; their trees match.
+- Local stage-24 implementation commit is preserved under `refs/codex/local/gaming-launch-failure-status-stage-24`.
+- Local stage-23 implementation commit `fdadd1e1e26effcd9cbfaff570f4f3d90eb89e62` is preserved under `refs/codex/local/gaming-launch-status-stage-23`; its tree matches published commit `c345a500339e4096e16427b9f0280b69781d4dff`.
 - Local stage-23 implementation commit is preserved under `refs/codex/local/gaming-launch-status-stage-23`.
 - Local stage-22 implementation commit is preserved under `refs/codex/local/remote-offline-command-race-stage-22`.
 - Local stage-21 implementation commit `b3cd86440621d33d2251eac8d508d3872c0ec066` is preserved under `refs/codex/local/remote-command-feedback-stage-21`; its tree matches published commit `611acc37d31db2a8c47c279db782fcadc962133f`.
@@ -48,11 +50,13 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - iPhone Remote now uses the same localized command label while sending and after successful delivery. Added the completion assertion and bumped the service-worker cache key.
 - iPhone Remote invalidates pending command UI updates when the iPhone goes offline, so a late response cannot overwrite the offline status. Added a regression case and bumped the service-worker cache key; commands are never retried automatically.
 - Gaming Hub now announces pending Steam Big Picture, Playnite, and game launches, and exposes busy state on each launch button. Added a pending-launch accessibility regression test.
+- Gaming Hub clears its pending live status when a Steam, Playnite, or game launch fails, leaving the error alert as the current message.
 - React tests: 25 files, 126 tests passed. TypeScript and Vite production build passed.
 - GitHub Actions run [43026294733](https://github.com/Milklosz/nexus-aurea/actions/runs/43026294733) passed on Windows and macOS, including React, Rust, TypeScript/Vite, and platform builds. The Release job was skipped.
 - GitHub Actions runs [43029135952](https://github.com/Milklosz/nexus-aurea/actions/runs/43029135952) (stage 09), [43029773813](https://github.com/Milklosz/nexus-aurea/actions/runs/43029773813) (stage 10), [43030395848](https://github.com/Milklosz/nexus-aurea/actions/runs/43030395848) (stage 11), [43031259001](https://github.com/Milklosz/nexus-aurea/actions/runs/43031259001) (stage 12), [43032589406](https://github.com/Milklosz/nexus-aurea/actions/runs/43032589406) (stage 13), stage 14 [43033436829](https://github.com/Milklosz/nexus-aurea/actions/runs/43033436829), stage 15 [43035329173](https://github.com/Milklosz/nexus-aurea/actions/runs/43035329173), stage 16 [43036042119](https://github.com/Milklosz/nexus-aurea/actions/runs/43036042119), stage 17 [43036705267](https://github.com/Milklosz/nexus-aurea/actions/runs/43036705267), stage 18 [43039325451](https://github.com/Milklosz/nexus-aurea/actions/runs/43039325451), and stage 19 [43040038281](https://github.com/Milklosz/nexus-aurea/actions/runs/43040038281) passed on Windows and macOS.
 - GitHub Actions runs [43043218481](https://github.com/Milklosz/nexus-aurea/actions/runs/43043218481) (stage 20), [43043740999](https://github.com/Milklosz/nexus-aurea/actions/runs/43043740999) (stage 21), and [43045040872](https://github.com/Milklosz/nexus-aurea/actions/runs/43045040872) (stage 22) passed on Windows and macOS; the Release jobs were skipped.
 - Stage 23 GitHub Actions run [43047036322](https://github.com/Milklosz/nexus-aurea/actions/runs/43047036322) is running.
+- Stage 24 GitHub Actions run [43047629891](https://github.com/Milklosz/nexus-aurea/actions/runs/43047629891) is running.
 - The currently installed MSI copy was only opened for visual inspection. Its Control Center is the older long-list layout; it was closed afterward. No installed files or settings were changed.
 
 ## Artifact record
@@ -101,4 +105,4 @@ Updated: 2026-11-11 (Europe/Warsaw)
 
 ## Next step
 
-Continue with another small VELORA Gaming Hub, navigation, or Remote improvement after stage 23 CI completes. Keep GUI review marked `NOT TESTED` unless a supported, policy-compliant path becomes available; keep iPhone Remote safely disabled by default.
+Continue with another small VELORA Gaming Hub, navigation, or Remote improvement while checking stage 23 and 24 CI and finishing their recovery snapshots. Keep GUI review marked `NOT TESTED` unless a supported, policy-compliant path becomes available; keep iPhone Remote safely disabled by default.
