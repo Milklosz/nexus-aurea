@@ -5,8 +5,8 @@ Updated: 2026-11-11 (Europe/Warsaw)
 ## Current branch and commits
 
 - Active branch: `feat/velora-night-build-2`.
-- Latest tested implementation commit on the branch: `b369f72a7dcdad733e93b2c3c90e40d729dd44b0`.
-- The local stage-05 commit `215fe969aa6e5d9d4d6f82e9fe87edf15194d237` is preserved under `refs/codex/local/feat-velora-foreground-stage-05`; its tree matches the published commit.
+- Latest tested implementation commit on the branch: `69514f774f1d375cebbf8cf233739936af1072b2`.
+- The local stage-06 commit `fdb5a6411af3ac12f253d18cff6602e27915cc18` is preserved under `refs/codex/local/feat-velora-suspend-stage-06`; its tree matches the published commit.
 - Verified base commit: `6dbcc36abeded18b753a134bc8ede10fb37df391`; exact base tree `ea6aa33175216fd51036676c20aadc7ddd7e5773`.
 - Night Build 2 published commit: `7c93d3443770fd55dc030b554880896f7efcfeb6`.
 - Dock launch-guard published commit: `c1e8a51d6e99832295626b099d0f6ecfc2a4b9e9`.
@@ -22,9 +22,10 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - Added per-service duplicate-launch protection with accessible busy feedback.
 - Added Polish retry guidance for website opener failures while preserving unsafe-address validation.
 - Added Windows app launch guidance for missing executables, permission errors, and other spawn failures.
-- Gamepad polling now stops while the window is unfocused or input is suspended, and resets held/repeat state before resuming.
-- Control Service diagnostics classify the foreground process as VELORA, Steam, external, or unknown. Steam is explicitly advisory; no controller ownership is claimed and global mapping stays off.
-- React tests: 23 files, 110 tests passed.
+- Gamepad polling stops while VELORA is unfocused or input is suspended, and resets held/repeat state before resuming.
+- Control Service diagnostics classify the foreground process as VELORA, Steam, external, or unknown. Steam is advisory; no controller ownership is claimed.
+- While Control Service is running, a non-VELORA or unknown foreground process suspends local Gamepad polling. With the service off, existing behavior is unchanged.
+- React tests: 24 files, 114 tests passed.
 - TypeScript and Vite production build passed.
 - The latest feature commit is published to the Draft PR; local and GitHub commit IDs differ because GitHub tools created the remote commit, but their tree SHA is identical.
 
@@ -32,8 +33,8 @@ Updated: 2026-11-11 (Europe/Warsaw)
 
 - Codex artifact attachment for PR #13 did not return; the Draft PR remains available at the link above.
 - Git CLI push stalled during authorization. Commits were published with GitHub tools after verifying each expected remote SHA; updates were fast-forward only.
-- Rust tooling is not present in this environment. Native Windows process ownership work still needs Rust tests and Windows/MSI validation before any global input action is considered.
+- Rust tooling is not present in this environment. Steam/game ownership has not been verified on the MSI; this stage only uses the existing read-only foreground process signal.
 
 ## Next step
 
-Continue the controller-safety roadmap with read-only Windows process evidence for games and Steam. Keep the result advisory, default uncertain states to suspended, and leave global controller actions disabled until the Windows behavior is independently tested.
+Review Windows and macOS CI for this commit, then continue the read-only Windows process work. Keep uncertain states suspended and leave global controller actions disabled until process detection and hardware behavior are independently tested.
