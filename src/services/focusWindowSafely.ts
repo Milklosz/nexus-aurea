@@ -1,9 +1,15 @@
+type FocusableWindow = {
+  unminimize: () => Promise<void>;
+  setFocus: () => Promise<void>;
+};
+
 export async function focusWindowSafely(
-  focusWindow: () => void | Promise<void>,
+  window: FocusableWindow,
   onBlocked: () => void,
 ): Promise<void> {
   try {
-    await focusWindow();
+    await window.unminimize();
+    await window.setFocus();
   } catch {
     onBlocked();
   }

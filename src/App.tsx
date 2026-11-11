@@ -108,7 +108,7 @@ export default function App() {
   const returnToNexus = useCallback(() => {
     setControlCenterOpen(false);
     setDiagnostics(false);
-    void focusWindowSafely(() => getCurrentWindow().setFocus(), () => {
+    void focusWindowSafely(getCurrentWindow(), () => {
       showToast("Windows zablokował powrót do VELORA. Wróć do aplikacji przez Alt+Tab.");
     });
   }, [showToast]);
@@ -289,7 +289,7 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     void listenForNexusControlReturn(() => {
       if (!active) return;
-      void focusWindowSafely(() => getCurrentWindow().setFocus(), () => {
+      void focusWindowSafely(getCurrentWindow(), () => {
         showToast("Windows zablokował powrót do VELORA. Wróć do aplikacji przez Alt+Tab.");
       });
     }).then((stopListening) => {
@@ -332,7 +332,7 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     void listenForManagedAppExit((id) => {
       if (!active || id !== "playniteFullscreen") return;
-      void focusWindowSafely(() => getCurrentWindow().setFocus(), () => {
+      void focusWindowSafely(getCurrentWindow(), () => {
         showToast("Playnite został zamknięty. Wróć do VELORA przez Alt+Tab.");
       });
     }).then((stopListening) => {
