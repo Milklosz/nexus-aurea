@@ -1,31 +1,32 @@
-# VELORA Night Build 2 Progress
+# VELORA Night Build Progress
 
 Updated: 2026-11-11 (Europe/Warsaw)
 
-## Current commit and branch
+## Current branch and commits
 
-- Local branch: `feat/velora-night-build-2`.
-- Night Build 2 implementation commit: `d39dd68992246e231938bd025f7bc06a9861e9c9` (parent `6dbcc36abeded18b753a134bc8ede10fb37df391`).
-- Upstream base SHA verified on both GitHub branches: `6dbcc36abeded18b753a134bc8ede10fb37df391`.
-- Verified upstream base tree: `ea6aa33175216fd51036676c20aadc7ddd7e5773`.
-- The Git CLI could not fetch the signed base object because GitHub DNS resolution fails. The local repository uses a Git replace ref to a reconstructed anchor with the exact verified base tree (`b09f6f0c839ba4094cd0bca9a892618a5f5da182`). The implementation commit itself has the actual upstream SHA as its parent.
+- Branch: `feat/velora-night-build-2`.
+- Current implementation commit: `ae267723eaa27bcd5e882f68424f01a0c2b3976c` (`feat: guard duplicate dock launches`).
+- Verified upstream base: `6dbcc36abeded18b753a134bc8ede10fb37df391`; its exact tree is `ea6aa33175216fd51036676c20aadc7ddd7e5773`.
+- Published Night Build 2 commit: `7c93d3443770fd55dc030b554880896f7efcfeb6`.
+- Draft PR: [#13](https://github.com/Milklosz/nexus-aurea/pull/13), targeting `feat/aurea-v0.9.1-secure-iphone-remote`.
+- The original local Night Build commit `d39dd68992246e231938bd025f7bc06a9861e9c9` remains in the earlier recovery checkout; this clean clone has the actual Git history from `6dbcc36…` onward.
 
 ## Completed
 
-- Preserved five Night Build 2 areas: Control Center, dock, HBO Max, TV navigation, and Steam Big Picture.
-- Secured all 12 changed files plus SHA-256 manifest at `nexus-velora-night-build-2-recovery-20261111`.
-- Saved `night-build-2.patch` against the verified upstream base tree.
-- Restored the working tree from the exact base tree and copied only the 12 checksum-verified Night Build 2 files.
-- Verified all 12 files match in the source export and the recovered checkout.
-- React tests: 20 files, 99 tests passed.
+- Preserved Control Center, dock, HBO Max, TV navigation, and Steam Big Picture changes.
+- Secured the 12 original Night Build 2 files and SHA-256 manifest at `nexus-velora-night-build-2-recovery-20261111`.
+- Saved the Night Build 2 patch and continuation-stage patch outside the source folders.
+- Published Night Build 2 through GitHub and verified its Draft PR contains the expected file set.
+- Added a per-service launch guard to ignore repeated launches while one is pending.
+- Added accessible busy state and clear launch feedback in the dock.
+- React tests: 22 files, 101 tests passed.
 - TypeScript and Vite production build passed.
-- Local implementation commit created before any GitHub write.
 
 ## Blockers
 
-- Git CLI fetch cannot resolve GitHub in this environment. GitHub branch reads and writes are available through the connected GitHub tools.
-- Package installation inside the recovered checkout is blocked by Windows link permissions. Tests and build ran against the source export after verifying all recovered files by SHA-256.
+- Codex artifact attachment for PR #13 did not return; the Draft PR is available at the link above.
+- Git fetch and package installation now work in the clean checkout.
 
 ## Next step
 
-Publish the verified tree through the GitHub connection, after rechecking that `feat/velora-night-build-2` still points to `6dbcc36abeded18b753a134bc8ede10fb37df391`. Compare it with `feat/aurea-v0.9.1-secure-iphone-remote`; open a Draft PR if the diff is correct. Then continue implementation in small tested commits.
+Publish the launch-guard commit to Draft PR #13. Then improve error feedback when an external app or website fails to open, with a focused test and commit.

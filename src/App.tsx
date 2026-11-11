@@ -15,6 +15,7 @@ import { useClock } from "./hooks/useClock";
 import { useGamepad } from "./hooks/useGamepad";
 import { useNavigation } from "./hooks/useNavigation";
 import { useFocusRestoreOnClose } from "./hooks/useFocusRestoreOnClose";
+import { useLaunchGuard } from "./hooks/useLaunchGuard";
 import { useToast } from "./hooks/useToast";
 import { useWeather } from "./hooks/useWeather";
 import { openStreamingService } from "./services/openStreamingService";
@@ -63,6 +64,7 @@ export default function App() {
   const { now, time } = useClock();
   const { label: weatherLabel, title: weatherTitle } = useWeather();
   const { message, showToast } = useToast();
+  const { launchingIds, run: runServiceLaunch } = useLaunchGuard();
   const activeServiceRef = useRef(0);
   const showMenu = useCallback(() => { setControlCenterOpen(false); setDiagnostics(true); }, []);
   const toggleControlCenter = useCallback(() => {
@@ -72,20 +74,23 @@ export default function App() {
   const openService = useCallback(
     async (index: number) => {
       const service = streamingServices[index];
-      try {
-        if (service.kind === "web") {
-          await openStreamingService(service);
-          return;
+      if (!service) return;
+      await runServiceLaunch(service.id, async () => {
+        try {
+          if (service.kind === "web") {
+            await openStreamingService(service);
+            return;
+          }
+          const receipt = await launchManagedApp(service.managedAppId);
+          showToast(receipt.alreadyRunning
+            ? `${service.name} już działa.`
+            : `Uruchamiam ${service.name}${service.id === "steam" ? " Big Picture" : ""}.`);
+        } catch (cause) {
+          showToast(managedAppErrorMessage(cause, `Nie udało się otworzyć ${service.name}.`));
         }
-        const receipt = await launchManagedApp(service.managedAppId);
-        showToast(receipt.alreadyRunning
-          ? `${service.name} już działa.`
-          : `Uruchamiam ${service.name}${service.id === "steam" ? " Big Picture" : ""}.`);
-      } catch (cause) {
-        showToast(managedAppErrorMessage(cause, `Nie udało się otworzyć ${service.name}.`));
-      }
+      });
     },
-    [showToast],
+    [runServiceLaunch, showToast],
   );
   const activateSelected = useCallback(() => void openService(activeServiceRef.current), [openService]);
   const navigation = useNavigation(streamingServices.length, activateSelected, showMenu);
@@ -352,6 +357,7 @@ export default function App() {
       <AppDock
         services={streamingServices}
         activeIndex={navigation.activeIndex}
+        launchingIds={launchingIds}
         buttonRefs={navigation.buttonRefs}
         onFocus={handleFocus}
         onActivate={handleActivate}

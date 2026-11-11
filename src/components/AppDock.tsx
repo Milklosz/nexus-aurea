@@ -5,6 +5,7 @@ import { emptyAppManagerSnapshot, getAppManagerStatus, type AppManagerSnapshot }
 type AppDockProps = {
   services: StreamingService[];
   activeIndex: number;
+  launchingIds: ReadonlySet<string>;
   buttonRefs: RefObject<Array<HTMLButtonElement | null>>;
   onFocus: (index: number) => void;
   onActivate: (index: number) => void;
@@ -21,9 +22,10 @@ function ServiceMark({ service }: { service: StreamingService }) {
   return <>N</>;
 }
 
-export function AppDock({ services, activeIndex, buttonRefs, onFocus, onActivate, onUnavailable }: AppDockProps) {
+export function AppDock({ services, activeIndex, launchingIds, buttonRefs, onFocus, onActivate, onUnavailable }: AppDockProps) {
   const [appManager, setAppManager] = useState<AppManagerSnapshot>(emptyAppManagerSnapshot);
   const selectedService = services[activeIndex];
+  const selectedServiceLaunching = launchingIds.has(selectedService.id);
 
   useEffect(() => {
     let active = true;
@@ -51,6 +53,7 @@ export function AppDock({ services, activeIndex, buttonRefs, onFocus, onActivate
               className={`app ${service.className}`}
               type="button"
               aria-label={`Otwórz ${service.name}`}
+              aria-busy={launchingIds.has(service.id)}
               aria-pressed={activeIndex === index}
               onFocus={() => onFocus(index)}
               onClick={() => {
@@ -72,21 +75,25 @@ export function AppDock({ services, activeIndex, buttonRefs, onFocus, onActivate
           <span className="focus-label">WYBRANA APLIKACJA</span>
           <span className="focus-name">{selectedService.name}</span>
           <span className="focus-status">
-            {selectedService.kind === "web"
+            {selectedServiceLaunching
+              ? "uruchamianie w toku"
+              : selectedService.kind === "web"
               ? "oficjalna strona internetowa"
               : !appManager.windows
                 ? "aplikacja Windows"
                 : selectedManagedApp?.installed ? "aplikacja wykryta" : "brak wykrytej instalacji"}
           </span>
           <span className="focus-hint">
-            {selectedService.kind === "managed"
+            {selectedServiceLaunching
+              ? `Uruchamiam ${selectedService.name}… Poczekaj chwilę.`
+              : selectedService.kind === "managed"
               ? !appManager.windows
                 ? "Aplikacja Windows · sprawdź dostępność po uruchomieniu"
                 : selectedManagedApp?.installed
                   ? `Wykryto · ${selectedManagedApp.runningInstances ? "działa" : "gotowa do uruchomienia"}`
                   : "Nie wykryto instalacji · wybierz, aby zobaczyć pomoc"
               : "Oficjalna strona · otwórz w domyślnej przeglądarce"}
-            <br />✕ / Enter &nbsp;Otwórz
+            {!selectedServiceLaunching && <><br />✕ / Enter &nbsp;Otwórz</>}
           </span>
         </aside>
       </section>
