@@ -77,6 +77,27 @@ jobs:
         if: runner.os == 'Windows'
         run: pnpm tauri build --ci --target x86_64-pc-windows-msvc
 
+      - name: Record Windows installer SHA-256
+        if: runner.os == 'Windows' && success()
+        shell: pwsh
+        run: |
+          $bundleDirectory = 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis'
+          $installers = @(Get-ChildItem -LiteralPath $bundleDirectory -Filter '*-setup.exe' -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one Windows installer; found $($installers.Count)."
+          }
+          $commit = (git rev-parse HEAD).Trim()
+          $hash = (Get-FileHash -LiteralPath $installers[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          @(
+            '## Windows installer'
+            ''
+            "- Commit: $commit"
+            "- File: $($installers[0].Name)"
+            "- SHA-256: $hash"
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          Write-Output "Installer commit: $commit"
+          Write-Output "Installer SHA-256: $hash"
+
       - name: Build Tauri app (macOS)
         if: runner.os == 'macOS'
         run: pnpm tauri build --no-bundle --ci

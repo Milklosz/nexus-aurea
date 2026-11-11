@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-export function useFocusRestoreOnClose(isOpen: boolean, restoreFocus: () => void) {
+export function useFocusRestoreOnClose(isOpen: boolean, restoreFocus: () => void, shouldRestore = true) {
   const wasOpen = useRef(false);
 
   useEffect(() => {
@@ -11,7 +11,9 @@ export function useFocusRestoreOnClose(isOpen: boolean, restoreFocus: () => void
     if (!wasOpen.current) return;
 
     wasOpen.current = false;
+    if (!shouldRestore) return;
+
     const frame = window.requestAnimationFrame(restoreFocus);
     return () => window.cancelAnimationFrame(frame);
-  }, [isOpen, restoreFocus]);
+  }, [isOpen, restoreFocus, shouldRestore]);
 }

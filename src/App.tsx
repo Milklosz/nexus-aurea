@@ -13,13 +13,17 @@ import { Toast } from "./components/Toast";
 import { streamingServices } from "./data/streamingServices";
 import { useClock } from "./hooks/useClock";
 import { useGamepad } from "./hooks/useGamepad";
-import { useNavigation } from "./hooks/useNavigation";
+import { useControllerOwnershipSuspension } from "./hooks/useControllerOwnershipSuspension";
+import { isTextEntryTarget, useNavigation } from "./hooks/useNavigation";
 import { useFocusRestoreOnClose } from "./hooks/useFocusRestoreOnClose";
+import { useLaunchGuard } from "./hooks/useLaunchGuard";
+import { getDialogNavigationControls, shouldUseNativeDialogArrowKey } from "./services/dialogNavigation";
 import { useToast } from "./hooks/useToast";
 import { useWeather } from "./hooks/useWeather";
-import { openStreamingService } from "./services/openStreamingService";
+import { focusWindowSafely } from "./services/focusWindowSafely";
+import { openStreamingService, streamingServiceErrorMessage } from "./services/openStreamingService";
 import { getControlServiceStatus, listenForNexusControlReturn, setControlGameMode } from "./services/controlService";
-import { launchManagedApp, listenForManagedAppExit } from "./services/appManager";
+import { launchManagedApp, listenForManagedAppExit, managedAppErrorMessage } from "./services/appManager";
 import { readCinemaProfile, saveCinemaProfile, type CinemaProfile } from "./services/cinemaMode";
 import {
   adjustSystemVolume,
@@ -60,37 +64,54 @@ export default function App() {
   const [ambientSettings, setAmbientSettings] = useState<AmbientSettings>(readAmbientSettings);
   const mediaIsPlaying = musicStatus.appleSessionFound && musicStatus.playbackState === "playing";
   const ambient = useAmbient(ambientSettings, mediaIsPlaying);
+  const suspendForForegroundOwner = useControllerOwnershipSuspension();
   const { now, time } = useClock();
   const { label: weatherLabel, title: weatherTitle } = useWeather();
   const { message, showToast } = useToast();
+  const { launchingIds, run: runServiceLaunch } = useLaunchGuard();
   const activeServiceRef = useRef(0);
   const showMenu = useCallback(() => { setControlCenterOpen(false); setDiagnostics(true); }, []);
-  const toggleControlCenter = useCallback(() => {
-    setDiagnostics(false);
-    setControlCenterOpen((open) => !open);
-  }, []);
   const openService = useCallback(
     async (index: number) => {
       const service = streamingServices[index];
-      try {
-        await openStreamingService(service);
-      } catch {
-        showToast(`Nie udało się otworzyć ${service.name}. Spróbuj ponownie.`);
-      }
+      if (!service) return;
+      await runServiceLaunch(service.id, async () => {
+        try {
+          if (service.kind === "web") {
+            await openStreamingService(service);
+            return;
+          }
+          const receipt = await launchManagedApp(service.managedAppId);
+          showToast(receipt.alreadyRunning
+            ? `${service.name} już działa.`
+            : `Uruchamiam ${service.name}${service.id === "steam" ? " Big Picture" : ""}.`);
+        } catch (cause) {
+          showToast(service.kind === "web"
+            ? streamingServiceErrorMessage(cause, service.name)
+            : managedAppErrorMessage(cause, `Nie udało się otworzyć ${service.name}.`));
+        }
+      });
     },
-    [showToast],
+    [runServiceLaunch, showToast],
   );
   const activateSelected = useCallback(() => void openService(activeServiceRef.current), [openService]);
   const navigation = useNavigation(streamingServices.length, activateSelected, showMenu);
-  const closeControlCenter = useCallback(() => {
-    setControlCenterOpen(false);
-    window.requestAnimationFrame(() => navigation.focusApp(activeServiceRef.current));
-  }, [navigation.focusApp]);
+  const closeControlCenter = useCallback(() => setControlCenterOpen(false), []);
+  const toggleControlCenter = useCallback(() => {
+    if (controlCenterOpen) {
+      closeControlCenter();
+      return;
+    }
+    setDiagnostics(false);
+    setControlCenterOpen(true);
+  }, [closeControlCenter, controlCenterOpen]);
   const returnToNexus = useCallback(() => {
     setControlCenterOpen(false);
     setDiagnostics(false);
-    window.requestAnimationFrame(() => navigation.focusApp(activeServiceRef.current));
-  }, [navigation.focusApp]);
+    void focusWindowSafely(getCurrentWindow(), () => {
+      showToast("Windows zablokował powrót do VELORA. Wróć do aplikacji przez Alt+Tab.");
+    });
+  }, [showToast]);
   const openDiagnosticsFromCenter = useCallback(() => {
     setControlCenterOpen(false);
     setDiagnostics(true);
@@ -99,7 +120,8 @@ export default function App() {
     () => navigation.focusApp(activeServiceRef.current),
     [navigation.focusApp],
   );
-  useFocusRestoreOnClose(diagnostics, restoreSelectedFocus);
+  useFocusRestoreOnClose(diagnostics, restoreSelectedFocus, !controlCenterOpen);
+  useFocusRestoreOnClose(controlCenterOpen, restoreSelectedFocus, !diagnostics);
   const closeDiagnostics = useCallback(() => setDiagnostics(false), []);
   const moveControllerFocus = useCallback((delta: -1 | 1) => {
     const dialog = document.querySelector("dialog[open]");
@@ -107,9 +129,7 @@ export default function App() {
       navigation.moveApp(delta);
       return;
     }
-    const controls = Array.from(dialog.querySelectorAll<HTMLElement>(
-      "button:not(:disabled), select:not(:disabled)",
-    ));
+    const controls = getDialogNavigationControls(dialog);
     const index = controls.indexOf(document.activeElement as HTMLElement);
     const nextIndex = index < 0
       ? (delta > 0 ? 0 : controls.length - 1)
@@ -210,18 +230,44 @@ export default function App() {
     showToast(receipt.alreadyRunning ? "Apple Music już działa." : "Uruchamiam oficjalną aplikację Apple Music.");
     window.setTimeout(() => void refreshMusicStatus().catch(() => showToast("Nie udało się odczytać sesji Windows SMTC.")), 1800);
   }, [refreshMusicStatus, showToast]);
+  const shouldSuspendControllerInput = useCallback(
+    () => ambient.controllerSuppressedRef.current || suspendForForegroundOwner(),
+    [ambient.controllerSuppressedRef, suspendForForegroundOwner],
+  );
   useGamepad({
     move: moveControllerFocus,
     confirm: confirmControllerFocus,
     back: backControllerFocus,
     options: toggleControlCenter,
-  }, !ambient.active && !ambient.controllerSuppressed, controllerProfile, () => ambient.controllerSuppressedRef.current);
+  }, !ambient.active && !ambient.controllerSuppressed, controllerProfile, shouldSuspendControllerInput);
   useEffect(() => {
     const recover = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && document.querySelector("dialog[open]")) {
+      const openDialog = document.querySelector("dialog[open]");
+      if (event.key === "Escape" && openDialog) {
         event.preventDefault();
         if (controlCenterOpen) closeControlCenter();
         else closeDiagnostics();
+        return;
+      }
+      if (
+        openDialog &&
+        ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key) &&
+        !shouldUseNativeDialogArrowKey(event.target)
+      ) {
+        event.preventDefault();
+        moveControllerFocus(event.key === "ArrowUp" || event.key === "ArrowLeft" ? -1 : 1);
+        return;
+      }
+      if (event.key === "Backspace" && isTextEntryTarget(event.target)) return;
+      if ((event.key === "Backspace" || event.key === "BrowserBack") && openDialog) {
+        event.preventDefault();
+        if (controlCenterOpen) closeControlCenter();
+        else closeDiagnostics();
+        return;
+      }
+      if (event.key === "Backspace" || event.key === "BrowserBack") {
+        event.preventDefault();
+        navigation.focusApp(0);
         return;
       }
       if (event.key === "Escape" || event.key === "F11") {
@@ -236,14 +282,14 @@ export default function App() {
     window.addEventListener("keydown", recover);
     window.addEventListener("focus", restore);
     return () => { window.removeEventListener("keydown", recover); window.removeEventListener("focus", restore); };
-  }, [closeControlCenter, closeDiagnostics, controlCenterOpen, diagnostics, navigation.focusApp, showMenu, showToast]);
+  }, [closeControlCenter, closeDiagnostics, controlCenterOpen, diagnostics, moveControllerFocus, navigation.focusApp, showMenu, showToast]);
 
   useEffect(() => {
     let active = true;
     let unlisten: (() => void) | undefined;
     void listenForNexusControlReturn(() => {
       if (!active) return;
-      void getCurrentWindow().setFocus().catch(() => {
+      void focusWindowSafely(getCurrentWindow(), () => {
         showToast("Windows zablokował powrót do VELORA. Wróć do aplikacji przez Alt+Tab.");
       });
     }).then((stopListening) => {
@@ -286,9 +332,9 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     void listenForManagedAppExit((id) => {
       if (!active || id !== "playniteFullscreen") return;
-      void getCurrentWindow().setFocus().catch(() => {
+      void focusWindowSafely(getCurrentWindow(), () => {
         showToast("Playnite został zamknięty. Wróć do VELORA przez Alt+Tab.");
-      });
+      }, () => showToast("Wrócono do VELORA. Profil Gaming jest gotowy."));
     }).then((stopListening) => {
       if (active) unlisten = stopListening;
       else stopListening();
@@ -313,6 +359,9 @@ export default function App() {
     },
     [openService],
   );
+  const handleUnavailable = useCallback((name: string) => {
+    showToast(`Nie wykryto aplikacji ${name}. Zainstaluj ją w Windows i spróbuj ponownie.`);
+  }, [showToast]);
 
   return (
     <main className="screen" aria-label="VELORA — ekran główny">
@@ -325,9 +374,11 @@ export default function App() {
       <AppDock
         services={streamingServices}
         activeIndex={navigation.activeIndex}
+        launchingIds={launchingIds}
         buttonRefs={navigation.buttonRefs}
         onFocus={handleFocus}
         onActivate={handleActivate}
+        onUnavailable={handleUnavailable}
       />
       {musicBackgroundMode && <MusicMiniPlayer status={musicStatus} profile={cinemaProfile} onControl={handleMusicControl} />}
       <footer className="controls">

@@ -1,4 +1,5 @@
-export type StreamingService = {
+export type WebStreamingService = {
+  kind: "web";
   id: "netflix" | "disney" | "max" | "prime" | "youtube";
   name: string;
   label: string;
@@ -7,8 +8,20 @@ export type StreamingService = {
   allowedHost: string;
 };
 
+export type ManagedMediaApp = {
+  kind: "managed";
+  id: "appleMusic" | "steam";
+  name: string;
+  label: string;
+  className: string;
+  managedAppId: "appleMusic" | "steamBigPicture";
+};
+
+export type StreamingService = WebStreamingService | ManagedMediaApp;
+
 export const streamingServices: StreamingService[] = [
   {
+    kind: "web",
     id: "netflix",
     name: "Netflix",
     label: "NETFLIX",
@@ -17,6 +30,7 @@ export const streamingServices: StreamingService[] = [
     allowedHost: "www.netflix.com",
   },
   {
+    kind: "web",
     id: "disney",
     name: "Disney+",
     label: "DISNEY+",
@@ -25,14 +39,16 @@ export const streamingServices: StreamingService[] = [
     allowedHost: "www.disneyplus.com",
   },
   {
+    kind: "web",
     id: "max",
-    name: "Max",
-    label: "MAX",
+    name: "HBO Max",
+    label: "HBO MAX",
     className: "max",
     href: "https://www.hbomax.com/pl/pl",
     allowedHost: "www.hbomax.com",
   },
   {
+    kind: "web",
     id: "prime",
     name: "Prime Video",
     label: "PRIME VIDEO",
@@ -41,12 +57,29 @@ export const streamingServices: StreamingService[] = [
     allowedHost: "www.primevideo.com",
   },
   {
+    kind: "web",
     id: "youtube",
     name: "YouTube",
     label: "YOUTUBE",
     className: "youtube",
     href: "https://www.youtube.com/",
     allowedHost: "www.youtube.com",
+  },
+  {
+    kind: "managed",
+    id: "appleMusic",
+    name: "Apple Music",
+    label: "APPLE MUSIC",
+    className: "apple-music",
+    managedAppId: "appleMusic",
+  },
+  {
+    kind: "managed",
+    id: "steam",
+    name: "Steam",
+    label: "STEAM",
+    className: "steam",
+    managedAppId: "steamBigPicture",
   },
 ];
 

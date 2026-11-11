@@ -4,10 +4,13 @@
   const state = {
     secure: window.isSecureContext && window.location.protocol === "https:",
     serverReady: false,
+    storageReady: false,
     paired: false,
     inFlight: false,
     record: null,
   };
+  let statusRequestId = 0;
+  let commandRequestId = 0;
   const connection = document.getElementById("connection-state");
   const server = document.getElementById("server-state");
   const origin = document.getElementById("origin-state");
@@ -17,6 +20,21 @@
   const pairingForm = document.getElementById("pairing-form");
   const pairButton = document.getElementById("pair-button");
   const commandButtons = [...document.querySelectorAll("[data-command]")];
+  const commandLabels = {
+    up: "Góra",
+    down: "Dół",
+    left: "Lewo",
+    right: "Prawo",
+    select: "Wybierz",
+    back: "Wstecz",
+    home: "Home",
+    "volume-up": "Głośniej",
+    "volume-down": "Ciszej",
+    mute: "Wycisz",
+    "profile-cinema": "Cinema",
+    "profile-gaming": "Gaming",
+    "profile-desktop": "Desktop",
+  };
 
   function showMessage(text, error = false) {
     if (!message) return;
@@ -25,9 +43,9 @@
   }
 
   function updateControls() {
-    const canSend = state.secure && state.serverReady && state.paired && navigator.onLine && !state.inFlight;
+    const canSend = state.secure && state.serverReady && state.storageReady && state.paired && navigator.onLine && !state.inFlight;
     for (const button of commandButtons) button.disabled = !canSend;
-    pairButton.disabled = !state.secure || !state.serverReady || state.paired || !navigator.onLine || state.inFlight;
+    pairButton.disabled = !state.secure || !state.serverReady || !state.storageReady || state.paired || !navigator.onLine || state.inFlight;
   }
 
   function bytesToBase64Url(bytes) {
@@ -94,6 +112,7 @@
   }
 
   async function refreshStatus() {
+    const requestId = ++statusRequestId;
     if (!state.secure) {
       connection.textContent = "wymaga zaufanego HTTPS";
       server.textContent = "wyłączony";
@@ -104,6 +123,11 @@
       return;
     }
 
+    if (!navigator.onLine) {
+      showOfflineStatus();
+      return;
+    }
+
     try {
       const response = await fetch("./api/status", {
         method: "GET",
@@ -111,8 +135,10 @@
         credentials: "omit",
         referrerPolicy: "no-referrer",
       });
+      if (requestId !== statusRequestId) return;
       if (!response.ok) throw new Error("Serwer pilota jest niedostępny.");
       const remote = await response.json();
+      if (requestId !== statusRequestId) return;
       state.serverReady = remote.enabled === true;
       server.textContent = state.serverReady ? "włączony" : "wyłączony";
       origin.textContent = "HTTPS";
@@ -120,18 +146,35 @@
       pairedCount.textContent = String(Number.isInteger(remote.pairedDeviceCount) ? remote.pairedDeviceCount : 0);
       connection.textContent = state.serverReady ? "HTTPS · lokalnie" : "serwer LAN wyłączony";
       if (!state.serverReady) {
+        state.storageReady = false;
         state.paired = false;
         state.record = null;
         pairingForm.hidden = true;
         showMessage("Serwer LAN został wyłączony w VELORA.");
       } else {
-        state.record = await readRecord().catch(() => null);
+        try {
+          state.record = await readRecord();
+          if (requestId !== statusRequestId) return;
+          state.storageReady = true;
+        } catch {
+          if (requestId !== statusRequestId) return;
+          state.record = null;
+          state.storageReady = false;
+          state.paired = false;
+          pairingForm.hidden = true;
+          pairingState.textContent = "pamięć klucza niedostępna";
+          connection.textContent = "wymagana bezpieczna pamięć";
+          showMessage("Bezpieczna pamięć klucza jest niedostępna. Parowanie i polecenia pozostają wyłączone.", true);
+          updateControls();
+          return;
+        }
         state.paired = Boolean(state.record && state.record.key && state.record.deviceId);
         pairingForm.hidden = state.paired;
         if (state.paired) showMessage("Pilot jest sparowany. Każda komenda wymaga podpisu urządzenia.");
         else showMessage("Wpisz jednorazowy kod wygenerowany w Control Center.");
       }
     } catch {
+      if (requestId !== statusRequestId) return;
       state.serverReady = false;
       state.paired = false;
       state.record = null;
@@ -145,9 +188,15 @@
     updateControls();
   }
 
+  function showOfflineStatus() {
+    connection.textContent = "offline";
+    showMessage("iPhone jest offline. Polecenia są wstrzymane.", true);
+    updateControls();
+  }
+
   async function pair(event) {
     event.preventDefault();
-    if (!state.secure || !state.serverReady || state.inFlight) return;
+    if (!state.secure || !state.serverReady || !state.storageReady || state.inFlight) return;
     const code = document.getElementById("pairing-code").value.trim();
     const name = document.getElementById("device-name").value.trim().slice(0, 32);
     if (!/^\d{6}$/.test(code) || !name) {
@@ -218,20 +267,25 @@
   }
 
   async function sendCommand(command) {
-    if (!state.record || state.inFlight || !navigator.onLine) return;
+    if (!state.storageReady || !state.record || state.inFlight || !navigator.onLine) return;
+    const requestId = ++commandRequestId;
     state.inFlight = true;
+    const commandLabel = commandLabels[command] || "polecenie";
+    showMessage("Wysyłam: " + commandLabel + "…");
     updateControls();
     const record = state.record;
     const sequence = record.sequence + 1;
     record.sequence = sequence;
     try {
       await writeRecord(record);
+      if (requestId !== commandRequestId) return;
       const payload = ["NEXUS-AUREA-REMOTE-V1", record.deviceId, String(sequence), command].join("\n");
       const signature = await crypto.subtle.sign(
         "HMAC",
         record.key,
         new TextEncoder().encode(payload),
       );
+      if (requestId !== commandRequestId) return;
       const response = await fetch("./api/command", {
         method: "POST",
         cache: "no-store",
@@ -245,8 +299,10 @@
           signature: bytesToBase64Url(new Uint8Array(signature)),
         }),
       });
+      if (requestId !== commandRequestId) return;
       if (response.status === 401) {
         await clearRecord();
+        if (requestId !== commandRequestId) return;
         state.record = null;
         state.paired = false;
         pairingForm.hidden = false;
@@ -256,10 +312,12 @@
       } else if (!response.ok) {
         showMessage("VELORA odrzuciła polecenie. Połączenie pozostaje zabezpieczone.", true);
       } else {
-        showMessage("Wysłano: " + command + ".");
+        showMessage("Wysłano: " + commandLabel + ".");
       }
     } catch {
-      showMessage("Połączenie przerwane. Polecenie nie zostało automatycznie ponowione.", true);
+      if (requestId === commandRequestId) {
+        showMessage("Połączenie przerwane. Polecenie nie zostało automatycznie ponowione.", true);
+      }
     } finally {
       state.inFlight = false;
       updateControls();
@@ -283,9 +341,12 @@
   }
 
   window.addEventListener("offline", () => {
-    connection.textContent = "offline";
-    showMessage("iPhone jest offline. Polecenia są wstrzymane.", true);
-    updateControls();
+    statusRequestId += 1;
+    commandRequestId += 1;
+    showOfflineStatus();
   });
   window.addEventListener("online", () => void refreshStatus());
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") void refreshStatus();
+  });
 })();

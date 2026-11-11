@@ -21,6 +21,22 @@ export type AppManagerSnapshot = {
   gamesError: string | null;
 };
 
+export type GamingDiagnostics = {
+  windows: boolean;
+  playniteDetected: boolean;
+  gogGalaxyDetected: boolean;
+  gogGalaxyRunningInstances: number | null;
+  gogGalaxyProcessError: string | null;
+  cyberpunkInstallDetected: boolean;
+  diskSpace: Array<{
+    drive: string;
+    availableBytes: number | null;
+    totalBytes: number | null;
+    error: string | null;
+  }>;
+  diskSpaceError: string | null;
+};
+
 export type LaunchReceipt = {
   id: string;
   alreadyRunning: boolean;
@@ -29,11 +45,22 @@ export type LaunchReceipt = {
 
 export type ManagedAppId = "steamBigPicture" | "appleMusic" | "playniteFullscreen" | "chrome" | "edge" | "firefox";
 
+function userFacingManagedAppError(message: string): string {
+  const spawnFailure = message.match(/^Windows nie uruchomił aplikacji (.+?):\s*(.*)$/i);
+  if (!spawnFailure) return message;
+
+  const appName = spawnFailure[1].trim();
+  const osError = spawnFailure[2].match(/\(os error (\d+)\)/i)?.[1];
+  if (osError === "2") return `Nie znaleziono pliku aplikacji ${appName}. Sprawdź instalację.`;
+  if (osError === "5") return `Windows odmówił uruchomienia ${appName}. Sprawdź uprawnienia.`;
+  return `Nie udało się uruchomić ${appName}. Sprawdź instalację i spróbuj ponownie.`;
+}
+
 export function managedAppErrorMessage(cause: unknown, fallback = "Uruchomienie aplikacji nie powiodło się."): string {
-  if (typeof cause === "string" && cause.trim()) return cause;
-  if (cause instanceof Error && cause.message) return cause.message;
+  if (typeof cause === "string" && cause.trim()) return userFacingManagedAppError(cause);
+  if (cause instanceof Error && cause.message) return userFacingManagedAppError(cause.message);
   if (typeof cause === "object" && cause !== null && "message" in cause && typeof cause.message === "string" && cause.message) {
-    return cause.message;
+    return userFacingManagedAppError(cause.message);
   }
   return fallback;
 }
@@ -49,6 +76,11 @@ export const emptyAppManagerSnapshot: AppManagerSnapshot = {
 export async function getAppManagerStatus(): Promise<AppManagerSnapshot> {
   if (!isTauri()) return emptyAppManagerSnapshot;
   return invoke<AppManagerSnapshot>("get_app_manager_status");
+}
+
+export async function getGamingDiagnostics(): Promise<GamingDiagnostics> {
+  if (!isTauri()) throw new Error("Diagnostyka wymaga natywnej aplikacji Windows.");
+  return invoke<GamingDiagnostics>("get_gaming_diagnostics");
 }
 
 export async function launchManagedApp(id: ManagedAppId): Promise<LaunchReceipt> {

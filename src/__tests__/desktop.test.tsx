@@ -146,6 +146,29 @@ describe("gamepad without hardware", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close diagnostics" }));
     await waitFor(() => expect(document.activeElement?.textContent).toBe("Selected dock item"));
   });
+  it("does not restore home focus while handing off to another modal", () => {
+    const restore = vi.fn();
+    const requestFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
+    function FocusHandoffHarness() {
+      const [controlCenterOpen, setControlCenterOpen] = useState(false);
+      const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+      useFocusRestoreOnClose(controlCenterOpen, restore, !diagnosticsOpen);
+      return <>
+        <button onClick={() => setControlCenterOpen(true)}>Open Control Center</button>
+        {controlCenterOpen && <button onClick={() => { setControlCenterOpen(false); setDiagnosticsOpen(true); }}>Open diagnostics</button>}
+        {diagnosticsOpen && <div role="dialog"><button>Diagnostic action</button></div>}
+      </>;
+    }
+    render(<FocusHandoffHarness />);
+    fireEvent.click(screen.getByRole("button", { name: "Open Control Center" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open diagnostics" }));
+    expect(screen.getByRole("button", { name: "Diagnostic action" })).toBeTruthy();
+    expect(restore).not.toHaveBeenCalled();
+    expect(requestFrame).not.toHaveBeenCalled();
+  });
   it("does not poll while diagnostics disable navigation", () => {
     const getGamepads = vi.fn(() => [pad]);
     vi.stubGlobal("navigator", { getGamepads });
@@ -156,6 +179,62 @@ describe("gamepad without hardware", () => {
       options: vi.fn(),
     }, false));
     expect(getGamepads).not.toHaveBeenCalled();
+  });
+  it("pauses and resets controller state while input is suspended", () => {
+    let suspended = false;
+    let now = 0;
+    let currentPad = { ...pad, buttons: [], axes: [0] } as unknown as Gamepad;
+    let scheduledFrame: FrameRequestCallback | undefined;
+    const getGamepads = vi.fn(() => [currentPad]);
+    const actions = { move: vi.fn(), confirm: vi.fn(), back: vi.fn(), options: vi.fn() };
+    vi.stubGlobal("navigator", { getGamepads });
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      scheduledFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    const poll = () => {
+      const callback = scheduledFrame;
+      scheduledFrame = undefined;
+      act(() => callback?.(now));
+    };
+
+    const { rerender } = renderHook(
+      ({ shouldSuspend }) => useGamepad(actions, true, "standard", () => shouldSuspend),
+      { initialProps: { shouldSuspend: false } },
+    );
+
+    poll();
+    currentPad = { ...currentPad, axes: [-0.75] };
+    now = 41;
+    poll();
+    now = 82;
+    poll();
+    expect(actions.move).toHaveBeenCalledTimes(1);
+
+    suspended = true;
+    rerender({ shouldSuspend: suspended });
+    now = 500;
+    poll();
+    expect(getGamepads).toHaveBeenCalledTimes(3);
+
+    suspended = false;
+    rerender({ shouldSuspend: suspended });
+    now = 1000;
+    poll();
+    expect(actions.move).toHaveBeenCalledTimes(1);
+
+    currentPad = { ...currentPad, axes: [0] };
+    now = 1010;
+    poll();
+    currentPad = { ...currentPad, axes: [-0.75] };
+    now = 1020;
+    poll();
+    now = 1061;
+    poll();
+    expect(actions.move).toHaveBeenCalledTimes(2);
   });
 });
 
