@@ -291,4 +291,15 @@ describe("Gaming Hub and App Manager integration", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("Steam odmówił uruchomienia.");
     expect(screen.getByRole("status").textContent).toBe("");
   });
+
+  it("does not announce a Steam launch when App Manager returns an unlaunched receipt", async () => {
+    mocks.snapshot = windowsSnapshot();
+    mocks.launchGame.mockResolvedValueOnce({ id: "440", launched: false });
+    render(<GamingHub onActivateGaming={vi.fn(async () => true)} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Uruchom" }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe("Steam nie potwierdził uruchomienia gry.");
+    expect(screen.queryByText("Wysłano żądanie uruchomienia Team Fortress 2 przez Steam.")).toBeNull();
+  });
 });

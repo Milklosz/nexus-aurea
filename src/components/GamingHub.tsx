@@ -80,7 +80,8 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
     setNotice("Uruchamiam " + game.name + " przez Steam…");
     try {
       if (!await onActivateGaming()) throw new Error("Nie udało się wybrać profilu Gaming.");
-      await launchManagedGame(game.id);
+      const receipt = await launchManagedGame(game.id);
+      if (!receipt.launched) throw new Error("Steam nie potwierdził uruchomienia gry.");
       setNotice("Wysłano żądanie uruchomienia " + game.name + " przez Steam.");
     } catch (cause) {
       setNotice("");
