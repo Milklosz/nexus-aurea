@@ -86,7 +86,7 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
     }
   };
 
-  if (loading && !(retrying && !snapshot.windows)) return <section className="gaming-hub" aria-label="VELORA Gaming Hub"><p role="status">Odczytuję stan App Managera…</p></section>;
+  if (loading && !snapshot.windows && !retrying) return <section className="gaming-hub" aria-label="VELORA Gaming Hub"><p role="status">Odczytuję stan App Managera…</p></section>;
 
   if (!snapshot.windows) return <section className="gaming-hub" aria-label="VELORA Gaming Hub">
     <p>Wykrywanie bibliotek gier wymaga natywnego App Managera Windows. Podgląd webowy pozostaje tylko do odczytu.</p>
@@ -136,8 +136,10 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
         : <p>Brak listy gier. Wyświetlamy wyłącznie dane zwrócone przez bibliotekę Steam.</p>}
 
     <p className="gaming-hub-note">Lista gier pochodzi z lokalnych plików appmanifest Steam. Playnite jest wykrywany i może być otwarty, ale jego biblioteka nie jest jeszcze odczytywana.</p>
-    <button type="button" onClick={() => void refresh()} disabled={busy !== null}>Odśwież biblioteki</button>
+    <button key="app-manager-refresh" type="button" aria-busy={loading} onClick={() => void refresh()} disabled={busy !== null}>
+      {loading ? "Odświeżanie…" : "Odśwież biblioteki"}
+    </button>
     {error && <p role="alert">{error}</p>}
-    <p role="status" aria-live="polite">{notice}</p>
+    <p role="status" aria-live="polite">{loading ? "Odświeżam biblioteki gier…" : notice}</p>
   </section>;
 }
