@@ -59,13 +59,35 @@ export function ControlCenter(props: ControlCenterProps) {
   const [busy, setBusy] = useState(false);
   const [remoteStatus, setRemoteStatus] = useState<RemoteAccessStatus>(disabledRemoteAccessStatus);
   const [remoteStatusReady, setRemoteStatusReady] = useState(false);
+  const [remoteStatusLoading, setRemoteStatusLoading] = useState(true);
   const [remoteStatusError, setRemoteStatusError] = useState("");
+  const remoteStatusRequestId = useRef(0);
   const [remoteBusy, setRemoteBusy] = useState(false);
   const [trustConfirmed, setTrustConfirmed] = useState(false);
   const [remoteError, setRemoteError] = useState("");
   const [remoteNotice, setRemoteNotice] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+
+  const readRemoteStatus = async (isActive: () => boolean = () => true) => {
+    const requestId = ++remoteStatusRequestId.current;
+    setRemoteStatusLoading(true);
+    setRemoteStatusError("");
+    try {
+      const next = await getRemoteAccessStatus();
+      if (isActive() && requestId === remoteStatusRequestId.current) {
+        setRemoteStatus(next);
+        setRemoteStatusReady(true);
+      }
+    } catch {
+      if (isActive() && requestId === remoteStatusRequestId.current) {
+        setRemoteStatusReady(false);
+        setRemoteStatusError("Nie udało się odczytać bezpiecznego stanu iPhone Remote. Sterowanie pozostaje wyłączone.");
+      }
+    } finally {
+      if (isActive() && requestId === remoteStatusRequestId.current) setRemoteStatusLoading(false);
+    }
+  };
 
   useEffect(() => {
     const element = dialog.current;
@@ -90,22 +112,13 @@ export function ControlCenter(props: ControlCenterProps) {
   useEffect(() => {
     let active = true;
     let unlisten: (() => void) | undefined;
-    void getRemoteAccessStatus().then((next) => {
-      if (active) {
-        setRemoteStatus(next);
-        setRemoteStatusReady(true);
-        setRemoteStatusError("");
-      }
-    }).catch(() => {
-      if (active) {
-        setRemoteStatusReady(false);
-        setRemoteStatusError("Nie udało się odczytać bezpiecznego stanu iPhone Remote. Sterowanie pozostaje wyłączone.");
-      }
-    });
+    void readRemoteStatus(() => active);
     void listenForRemoteAccessStatus((next) => {
       if (active) {
+        remoteStatusRequestId.current += 1;
         setRemoteStatus(next);
         setRemoteStatusReady(true);
+        setRemoteStatusLoading(false);
         setRemoteStatusError("");
       }
     }).then((stopListening) => {
@@ -114,6 +127,7 @@ export function ControlCenter(props: ControlCenterProps) {
     }).catch(() => {});
     return () => {
       active = false;
+      remoteStatusRequestId.current += 1;
       unlisten?.();
     };
   }, []);
@@ -122,7 +136,7 @@ export function ControlCenter(props: ControlCenterProps) {
     action: () => Promise<RemoteAccessStatus>,
     success: string,
   ) => {
-    if (!remoteStatusReady || remoteBusy) return;
+    if (!remoteStatusReady || remoteStatusLoading || remoteBusy) return;
     setRemoteBusy(true);
     setRemoteError("");
     setRemoteNotice("");
@@ -300,8 +314,11 @@ export function ControlCenter(props: ControlCenterProps) {
             <li><span>Sparowane urządzenia</span><strong>{remoteStatusReady ? remoteStatus.pairedDeviceCount : "?"}</strong></li>
           </ul>
           {!remoteStatusReady && <p className={remoteStatusError ? "cc-feedback cc-error" : "cc-feedback"} role={remoteStatusError ? "alert" : "status"}>
-            {remoteStatusError || "Odczytuję bezpieczny stan iPhone Remote…"}
+            {remoteStatusLoading ? "Odczytuję bezpieczny stan iPhone Remote…" : remoteStatusError}
           </p>}
+          {remoteStatusError && <button type="button" disabled={remoteStatusLoading} onClick={() => void readRemoteStatus()}>
+            Ponów odczyt statusu
+          </button>}
           {remoteStatusReady && !remoteStatus.enabled && <div className="cc-remote-actions">
             <button type="button" disabled={!remoteStatusReady || remoteBusy} onClick={() => void runRemoteAction(
               prepareRemoteTrustProfile,

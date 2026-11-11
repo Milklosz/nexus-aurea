@@ -138,6 +138,10 @@ describe("Control Center", () => {
     expect(screen.getByLabelText("Stan iPhone Remote").textContent).toContain("stan nieznany");
     expect(screen.queryByRole("button", { name: "Przygotuj profil zaufania iPhone'a" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Wygeneruj kod parowania" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Ponów odczyt statusu" }));
+    expect(await screen.findByRole("button", { name: "Przygotuj profil zaufania iPhone'a" })).toBeTruthy();
+    expect(mocks.getRemoteStatus).toHaveBeenCalledTimes(2);
   });
 
   it("keeps one panel visible and supports remote left-right tab navigation", async () => {
