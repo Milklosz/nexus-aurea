@@ -68,7 +68,7 @@ describe("Control Center", () => {
     renderCenter();
     await waitFor(() => expect(screen.getByText(/backend Windows: niedostępny/i)).toBeTruthy());
     expect(screen.queryByRole("button", { name: "Głośność +" })).toBeNull();
-    expect(screen.getByText(/Regulacja głośności jest niedostępna/)).toBeTruthy();
+    expect(screen.getByText(/Regulacja głośności wymaga natywnego backendu Windows/)).toBeTruthy();
   });
 
   it("uses the existing system volume actions when Windows is available", async () => {
@@ -95,11 +95,28 @@ describe("Control Center", () => {
   it("includes the Gaming Hub and keeps the LAN server off until trust is confirmed", async () => {
     setupDialog();
     renderCenter();
+    fireEvent.click(screen.getByRole("tab", { name: "Gaming" }));
     expect(screen.getByRole("heading", { name: "Gaming Hub" })).toBeTruthy();
-    expect(screen.getByText(/Serwer LAN: wyłączony/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "iPhone Remote" }));
+    const remoteStatus = screen.getByLabelText("Stan iPhone Remote");
+    expect(remoteStatus.textContent).toContain("Serwer LAN");
+    expect(remoteStatus.textContent).toContain("wyłączony");
     expect(screen.queryByRole("button", { name: "Uruchom serwer HTTPS" })).toBeNull();
     expect(screen.getByRole("button", { name: "Przygotuj profil zaufania iPhone'a" })).toBeTruthy();
     expect(screen.getByText(/Serwer domyślnie nie nasłuchuje w sieci/)).toBeTruthy();
+  });
+
+  it("keeps one panel visible and supports remote left-right tab navigation", () => {
+    setupDialog();
+    renderCenter();
+    const cinemaTab = screen.getByRole("tab", { name: "Cinema" });
+    expect(cinemaTab.getAttribute("aria-selected")).toBe("true");
+    fireEvent.keyDown(cinemaTab, { key: "ArrowRight" });
+    expect(screen.getByRole("tab", { name: "Gaming" }).getAttribute("aria-selected")).toBe("true");
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Gaming" }), { key: "ArrowRight" });
+    expect(screen.getByRole("tab", { name: "iPhone Remote" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.queryByRole("heading", { name: "Gaming Hub" })).toBeNull();
+    expect(screen.getByLabelText("Stan iPhone Remote").textContent).toContain("wyłączony");
   });
 
   it("cycles the Ambient idle interval through supported values", async () => {

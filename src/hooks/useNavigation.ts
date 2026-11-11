@@ -41,7 +41,16 @@ export function useNavigation(count: number, onActivate: () => void, onMenu: () 
         return;
       }
 
-      if (event.key === "ArrowRight") {
+      if (event.key === "ArrowUp") {
+        const quickSettings = document.querySelector<HTMLButtonElement>(".quick-settings-trigger");
+        if (quickSettings && target !== quickSettings) {
+          event.preventDefault();
+          quickSettings.focus({ preventScroll: true });
+        }
+      } else if (event.key === "ArrowDown" && target instanceof HTMLElement && target.closest(".quick-settings-trigger")) {
+        event.preventDefault();
+        focusApp(activeIndexRef.current);
+      } else if (event.key === "ArrowRight") {
         event.preventDefault();
         focusApp(activeIndexRef.current + 1);
       } else if (event.key === "ArrowLeft") {

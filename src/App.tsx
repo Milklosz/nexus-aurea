@@ -19,7 +19,7 @@ import { useToast } from "./hooks/useToast";
 import { useWeather } from "./hooks/useWeather";
 import { openStreamingService } from "./services/openStreamingService";
 import { getControlServiceStatus, listenForNexusControlReturn, setControlGameMode } from "./services/controlService";
-import { launchManagedApp, listenForManagedAppExit } from "./services/appManager";
+import { launchManagedApp, listenForManagedAppExit, managedAppErrorMessage } from "./services/appManager";
 import { readCinemaProfile, saveCinemaProfile, type CinemaProfile } from "./services/cinemaMode";
 import {
   adjustSystemVolume,
@@ -73,9 +73,16 @@ export default function App() {
     async (index: number) => {
       const service = streamingServices[index];
       try {
-        await openStreamingService(service);
-      } catch {
-        showToast(`Nie udało się otworzyć ${service.name}. Spróbuj ponownie.`);
+        if (service.kind === "web") {
+          await openStreamingService(service);
+          return;
+        }
+        const receipt = await launchManagedApp(service.managedAppId);
+        showToast(receipt.alreadyRunning
+          ? `${service.name} już działa.`
+          : `Uruchamiam ${service.name}${service.id === "steam" ? " Big Picture" : ""}.`);
+      } catch (cause) {
+        showToast(managedAppErrorMessage(cause, `Nie udało się otworzyć ${service.name}.`));
       }
     },
     [showToast],
@@ -109,7 +116,7 @@ export default function App() {
     }
     const controls = Array.from(dialog.querySelectorAll<HTMLElement>(
       "button:not(:disabled), select:not(:disabled)",
-    ));
+    )).filter((control) => !control.closest("[hidden]") && !control.closest("[inert]"));
     const index = controls.indexOf(document.activeElement as HTMLElement);
     const nextIndex = index < 0
       ? (delta > 0 ? 0 : controls.length - 1)
@@ -218,10 +225,27 @@ export default function App() {
   }, !ambient.active && !ambient.controllerSuppressed, controllerProfile, () => ambient.controllerSuppressedRef.current);
   useEffect(() => {
     const recover = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && document.querySelector("dialog[open]")) {
+      const openDialog = document.querySelector("dialog[open]");
+      if (event.key === "Escape" && openDialog) {
         event.preventDefault();
         if (controlCenterOpen) closeControlCenter();
         else closeDiagnostics();
+        return;
+      }
+      if (openDialog && ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
+        event.preventDefault();
+        moveControllerFocus(event.key === "ArrowUp" || event.key === "ArrowLeft" ? -1 : 1);
+        return;
+      }
+      if ((event.key === "Backspace" || event.key === "BrowserBack") && openDialog) {
+        event.preventDefault();
+        if (controlCenterOpen) closeControlCenter();
+        else closeDiagnostics();
+        return;
+      }
+      if (event.key === "Backspace" || event.key === "BrowserBack") {
+        event.preventDefault();
+        navigation.focusApp(0);
         return;
       }
       if (event.key === "Escape" || event.key === "F11") {
@@ -236,7 +260,7 @@ export default function App() {
     window.addEventListener("keydown", recover);
     window.addEventListener("focus", restore);
     return () => { window.removeEventListener("keydown", recover); window.removeEventListener("focus", restore); };
-  }, [closeControlCenter, closeDiagnostics, controlCenterOpen, diagnostics, navigation.focusApp, showMenu, showToast]);
+  }, [closeControlCenter, closeDiagnostics, controlCenterOpen, diagnostics, moveControllerFocus, navigation.focusApp, showMenu, showToast]);
 
   useEffect(() => {
     let active = true;
@@ -313,6 +337,9 @@ export default function App() {
     },
     [openService],
   );
+  const handleUnavailable = useCallback((name: string) => {
+    showToast(`Nie wykryto aplikacji ${name}. Zainstaluj ją w Windows i spróbuj ponownie.`);
+  }, [showToast]);
 
   return (
     <main className="screen" aria-label="VELORA — ekran główny">
@@ -328,6 +355,7 @@ export default function App() {
         buttonRefs={navigation.buttonRefs}
         onFocus={handleFocus}
         onActivate={handleActivate}
+        onUnavailable={handleUnavailable}
       />
       {musicBackgroundMode && <MusicMiniPlayer status={musicStatus} profile={cinemaProfile} onControl={handleMusicControl} />}
       <footer className="controls">

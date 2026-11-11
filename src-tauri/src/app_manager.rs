@@ -78,6 +78,11 @@ fn spec_for(id: &str) -> Option<&'static AppSpec> {
     APP_SPECS.iter().find(|spec| spec.id == id)
 }
 
+fn should_dispatch_when_running(id: &str) -> bool {
+    // Steam uses its single-instance URI handoff to switch an already-open client to Big Picture.
+    id == "steamBigPicture"
+}
+
 #[tauri::command]
 pub fn get_app_manager_status() -> AppManagerSnapshot {
     #[cfg(target_os = "windows")]
@@ -149,7 +154,8 @@ pub fn launch_managed_app(app: AppHandle, id: String) -> Result<LaunchReceipt, S
         let executable = app_path(spec.id)
             .ok_or_else(|| format!("Nie wykryto zainstalowanej aplikacji: {}.", spec.name))?;
         let count = process_count(spec.process_name)?;
-        if count > 0 {
+        let already_running = count > 0;
+        if already_running && !should_dispatch_when_running(spec.id) {
             return Ok(LaunchReceipt {
                 id,
                 already_running: true,
@@ -169,7 +175,7 @@ pub fn launch_managed_app(app: AppHandle, id: String) -> Result<LaunchReceipt, S
         }
         Ok(LaunchReceipt {
             id,
-            already_running: false,
+            already_running,
             focus_restore_supported: spec.focus_restore_supported,
         })
     }
@@ -467,13 +473,20 @@ fn watch_owned_process(app: AppHandle, id: String, mut child: Child) {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_valid_steam_app_id, parse_steam_manifest, parse_vdf_pair, process_entry_matches, spec_for};
+    use super::{is_valid_steam_app_id, parse_steam_manifest, parse_vdf_pair, process_entry_matches, should_dispatch_when_running, spec_for};
 
     #[test]
     fn app_registry_rejects_unlisted_ids() {
         assert!(spec_for("appleMusic").is_some());
         assert!(spec_for("C:\\Users\\someone\\app.exe").is_none());
         assert!(spec_for("arbitraryCommand").is_none());
+    }
+
+    #[test]
+    fn steam_dispatches_big_picture_to_its_single_existing_client() {
+        assert!(should_dispatch_when_running("steamBigPicture"));
+        assert!(!should_dispatch_when_running("appleMusic"));
+        assert!(!should_dispatch_when_running("playniteFullscreen"));
     }
 
     #[test]
