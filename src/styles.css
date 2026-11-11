@@ -194,7 +194,8 @@
 .cc-card button, .cc-footer button { border: 1px solid rgba(218, 193, 151, .3); border-radius: 13px; color: #eee4d3; background: linear-gradient(145deg, rgba(37, 36, 36, .94), rgba(18, 19, 22, .95)); box-shadow: inset 0 1px rgba(255,255,255,.07); cursor: pointer; font: inherit; font-size: clamp(.86rem, 1vw, .98rem); font-weight: 600; transition: transform .16s ease, border-color .16s ease, background .16s ease, box-shadow .16s ease; }
 .cc-card button:hover:not(:disabled), .cc-footer button:hover { border-color: rgba(231, 201, 154, .76); background: linear-gradient(145deg, rgba(69, 56, 43, .84), rgba(30, 27, 27, .96)); transform: translateY(-1px); }
 .cc-card button:disabled { opacity: .48; cursor: not-allowed; }
-.control-center button:focus-visible, .cc-panel:focus-visible { outline: 3px solid #f3d59f; outline-offset: 3px; box-shadow: 0 0 0 5px rgba(219, 181, 119, .2), 0 0 26px rgba(228, 190, 128, .25); }
+.control-center button:focus-visible, .control-center input:focus-visible, .cc-panel:focus-visible { outline: 3px solid #f3d59f; outline-offset: 3px; box-shadow: 0 0 0 5px rgba(219, 181, 119, .2), 0 0 26px rgba(228, 190, 128, .25); }
+.control-center .cc-card button[aria-pressed="true"] { border-color: rgba(230, 199, 150, .78); color: #f2dfbb; background: linear-gradient(135deg, rgba(212, 178, 127, .22), rgba(212, 178, 127, .09)); box-shadow: inset 0 1px rgba(255,255,255,.09), 0 0 20px rgba(212,178,127,.1); }
 .cc-system-status { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .35rem 1rem; }
 .cc-system-status p { display: flex; align-items: center; gap: .5rem; min-width: 0; margin: .15rem 0; color: #bab3a6; font-size: clamp(.76rem, .92vw, .89rem); line-height: 1.45; overflow-wrap: anywhere; }
 .cc-status-dot { display: inline-block; flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; background: #ad7769; box-shadow: 0 0 12px #b8756366; }

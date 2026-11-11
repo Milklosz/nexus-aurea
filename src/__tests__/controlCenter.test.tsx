@@ -151,8 +151,10 @@ describe("Control Center", () => {
     expect(cinemaTab.getAttribute("aria-selected")).toBe("true");
     fireEvent.keyDown(cinemaTab, { key: "ArrowRight" });
     expect(screen.getByRole("tab", { name: "Gaming" }).getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Gaming" }));
     fireEvent.keyDown(screen.getByRole("tab", { name: "Gaming" }), { key: "ArrowRight" });
     expect(screen.getByRole("tab", { name: "iPhone Remote" }).getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "iPhone Remote" }));
     expect(screen.queryByRole("heading", { name: "Gaming Hub" })).toBeNull();
     await waitFor(() => expect(screen.getByLabelText("Stan iPhone Remote").textContent).toContain("wyłączony"));
   });
