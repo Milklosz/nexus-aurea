@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+export function isTextEntryTarget(target: EventTarget | null): target is HTMLElement {
+  return target instanceof HTMLElement && (
+    target.isContentEditable || ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName)
+  );
+}
+
 export function useNavigation(count: number, onActivate: () => void, onMenu: () => void) {
   const [activeIndex, setActiveIndex] = useState(0);
   const activeIndexRef = useRef(0);
@@ -34,12 +40,7 @@ export function useNavigation(count: number, onActivate: () => void, onMenu: () 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (document.querySelector("dialog[open]")) return;
       const target = event.target;
-      if (
-        target instanceof HTMLElement &&
-        (target.isContentEditable || ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName))
-      ) {
-        return;
-      }
+      if (isTextEntryTarget(target)) return;
 
       if (event.key === "ArrowUp") {
         const quickSettings = document.querySelector<HTMLButtonElement>(".quick-settings-trigger");

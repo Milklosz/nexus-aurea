@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useNavigation } from "../hooks/useNavigation";
+import { isTextEntryTarget, useNavigation } from "../hooks/useNavigation";
 
 const activate = vi.fn();
 const openMenu = vi.fn();
@@ -32,5 +32,16 @@ describe("TV home navigation", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Control Center" }));
     act(() => { fireEvent.keyDown(screen.getByRole("button", { name: "Control Center" }), { key: "ArrowDown" }); });
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "App 2" }));
+  });
+
+  it("leaves Backspace available for text editing while identifying other targets", () => {
+    const input = document.createElement("input");
+    const textarea = document.createElement("textarea");
+    const button = document.createElement("button");
+
+    expect(isTextEntryTarget(input)).toBe(true);
+    expect(isTextEntryTarget(textarea)).toBe(true);
+    expect(isTextEntryTarget(button)).toBe(false);
+    expect(isTextEntryTarget(null)).toBe(false);
   });
 });

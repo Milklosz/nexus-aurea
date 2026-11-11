@@ -14,7 +14,7 @@ import { streamingServices } from "./data/streamingServices";
 import { useClock } from "./hooks/useClock";
 import { useGamepad } from "./hooks/useGamepad";
 import { useControllerOwnershipSuspension } from "./hooks/useControllerOwnershipSuspension";
-import { useNavigation } from "./hooks/useNavigation";
+import { isTextEntryTarget, useNavigation } from "./hooks/useNavigation";
 import { useFocusRestoreOnClose } from "./hooks/useFocusRestoreOnClose";
 import { useLaunchGuard } from "./hooks/useLaunchGuard";
 import { useToast } from "./hooks/useToast";
@@ -251,6 +251,7 @@ export default function App() {
         moveControllerFocus(event.key === "ArrowUp" || event.key === "ArrowLeft" ? -1 : 1);
         return;
       }
+      if (event.key === "Backspace" && isTextEntryTarget(event.target)) return;
       if ((event.key === "Backspace" || event.key === "BrowserBack") && openDialog) {
         event.preventDefault();
         if (controlCenterOpen) closeControlCenter();
