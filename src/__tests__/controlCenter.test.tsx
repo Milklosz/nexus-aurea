@@ -4,13 +4,18 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { ControlCenter } from "../components/ControlCenter";
 import type { AmbientSettings } from "../services/ambient";
 import type { CinemaProfile } from "../services/cinemaMode";
+import type { RemoteAccessStatus } from "../services/remoteAccess";
 
 const mocks = vi.hoisted(() => ({
   status: { windows: false, running: false, gameMode: false, controllerCount: 0, playstationControllerCount: 0, foregroundProcess: null, returnHotkeyRegistered: false, lastError: null },
   getStatus: vi.fn(async () => mocks.status),
   remoteStatus: { enabled: false, secureOriginAvailable: false, pairingAvailable: false, pairedDeviceCount: 0, pairedDevices: [], origin: null, caFingerprint: null, trustProfilePath: null, pairingCode: null, pairingExpiresInSeconds: 0 },
   getRemoteStatus: vi.fn(async () => mocks.remoteStatus),
-  listenRemoteStatus: vi.fn(async () => () => {}),
+  remoteStatusListener: null as ((status: RemoteAccessStatus) => void) | null,
+  listenRemoteStatus: vi.fn(async (listener: (status: RemoteAccessStatus) => void) => {
+    mocks.remoteStatusListener = listener;
+    return () => {};
+  }),
   prepareTrustProfile: vi.fn(async () => mocks.remoteStatus),
   startRemoteAccess: vi.fn(async () => mocks.remoteStatus),
   beginRemotePairing: vi.fn(async () => mocks.remoteStatus),
@@ -35,7 +40,7 @@ vi.mock("../services/remoteAccess", () => ({
   revokeRemoteDevice: mocks.revokeRemoteDevice,
 }));
 
-afterEach(() => { cleanup(); vi.clearAllMocks(); });
+afterEach(() => { cleanup(); vi.clearAllMocks(); mocks.remoteStatusListener = null; });
 
 function setupDialog() {
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
@@ -208,6 +213,26 @@ describe("Control Center", () => {
     expect(mocks.getRemoteStatus).toHaveBeenCalledTimes(2);
     expect(mocks.beginRemotePairing).not.toHaveBeenCalled();
     expect(mocks.startRemoteAccess).not.toHaveBeenCalled();
+  });
+
+  it("ignores a late secure status read after a newer status event arrives", async () => {
+    setupDialog();
+    let resolveStatus!: (status: typeof mocks.remoteStatus) => void;
+    mocks.getRemoteStatus.mockImplementationOnce(() => new Promise((resolve) => { resolveStatus = resolve; }));
+    renderCenter();
+    fireEvent.click(screen.getByRole("tab", { name: "iPhone Remote" }));
+    const remoteStatus = screen.getByLabelText("Stan iPhone Remote");
+    await waitFor(() => expect(mocks.remoteStatusListener).toBeTypeOf("function"));
+
+    const eventStatus = { ...mocks.remoteStatus, enabled: true, secureOriginAvailable: true, pairedDeviceCount: 2 };
+    act(() => { mocks.remoteStatusListener?.(eventStatus); });
+    expect(remoteStatus.textContent).toContain("2");
+
+    await act(async () => { resolveStatus({ ...mocks.remoteStatus, pairedDeviceCount: 0 }); });
+
+    expect(remoteStatus.textContent).toContain("2");
+    expect(remoteStatus.textContent).toContain("HTTPSaktywny");
+    expect(mocks.getRemoteStatus).toHaveBeenCalledOnce();
   });
 
   it("keeps one panel visible and supports remote left-right tab navigation", async () => {
