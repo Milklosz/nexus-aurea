@@ -5,6 +5,9 @@ mod remote_access;
 mod app_manager;
 mod music_service;
 mod platform_launchers;
+mod edge_cinema;
+mod autostart;
+mod playnite_library;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -33,6 +36,12 @@ pub fn run() {
             music_service::get_apple_music_status,
             music_service::control_apple_music,
             music_service::adjust_system_volume,
+            edge_cinema::launch_edge_cinema,
+            edge_cinema::get_edge_cinema_status,
+            autostart::get_autostart_status,
+            autostart::set_autostart_enabled,
+            autostart::get_startup_mode,
+            playnite_library::get_playnite_library,
         ])
         .setup(|app| {
             if std::env::args().any(|arg| arg == "--windowed") {
