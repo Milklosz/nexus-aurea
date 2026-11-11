@@ -5,9 +5,8 @@ Updated: 2026-11-11 (Europe/Warsaw)
 ## Current branch and commits
 
 - Active branch: `feat/velora-night-build-2`.
-- Latest tested implementation commit: `69514f774f1d375cebbf8cf233739936af1072b2`.
-- Latest published checkpoint containing the CI result: `f821b85b954ad23a6247af61a5b9f4bccf916a2f`.
-- The local stage-06 implementation commit is preserved under `refs/codex/local/feat-velora-suspend-stage-06`; its tree matches the published implementation commit.
+- Latest tested implementation commit: `b26b7ce884cecd5a9a9f7dd2edf97947c6f50605`.
+- Local stage-08 commit `8390a6555aa573063ff2d92bd0f9c6077082abc2` is preserved under `refs/codex/local/feat-velora-remote-storage-stage-08`; its tree matches the published commit.
 - Verified base commit: `6dbcc36abeded18b753a134bc8ede10fb37df391`; exact base tree `ea6aa33175216fd51036676c20aadc7ddd7e5773`.
 - Draft PR: [#13](https://github.com/Milklosz/nexus-aurea/pull/13), targeting `feat/aurea-v0.9.1-secure-iphone-remote`.
 
@@ -22,10 +21,17 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - Gamepad polling stops while VELORA is unfocused or input is suspended, and resets held/repeat state before resuming.
 - Control Service diagnostics classify the foreground process as VELORA, Steam, external, or unknown. Steam is advisory; no controller ownership is claimed.
 - While Control Service is running, non-VELORA or unknown foreground states suspend local Gamepad polling. With the service off, existing behavior is unchanged.
-- React tests: 24 files, 114 tests passed. TypeScript and Vite production build passed.
-- GitHub Actions run [43023723699](https://github.com/Milklosz/nexus-aurea/actions/runs/43023723699) passed on Windows and macOS, including Rust tests and platform builds. The Release job was skipped.
-- Windows CI produced `VELORA_0.9.2_x64-setup.exe` inside the downloaded artifact ZIP. ZIP SHA-256: `8af5f900627252f751a0cde0deaa8a2878eec04a70122b8fae3cd840664e1e22`. Installer SHA-256: `d09249bed3b42cf7ef775eb2dd1b81c9bc3a7f11e8b53af3428b44d93a99015b`.
-- The installer is stored at `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-6ed483a5f06074f90ecf918cbb0f00efe45637a8.zip`; it was not run or installed.
+- iPhone Remote now fails closed if IndexedDB cannot read the secure device-key record: the pairing form remains hidden, pairing is disabled, and no commands can be sent. The service-worker cache key was bumped so the PWA fetches the updated script.
+- React tests: 24 files, 115 tests passed. TypeScript and Vite production build passed.
+- Previous GitHub Actions run [43023723699](https://github.com/Milklosz/nexus-aurea/actions/runs/43023723699) passed on Windows and macOS, including Rust tests and platform builds. The Release job was skipped.
+
+## Artifact record
+
+- Previous Windows CI artifact ZIP: `C:\Users\milos\Documents\Codex\VELORA-Windows-x64-6ed483a5f06074f90ecf918cbb0f00efe45637a8.zip`.
+- ZIP SHA-256: `8af5f900627252f751a0cde0deaa8a2878eec04a70122b8fae3cd840664e1e22`.
+- Embedded `VELORA_0.9.2_x64-setup.exe` SHA-256: `d09249bed3b42cf7ef775eb2dd1b81c9bc3a7f11e8b53af3428b44d93a99015b`.
+- This artifact is from the prior CI checkpoint, not the new remote-storage commit. The new commit's CI is pending; no artifact from it is claimed yet.
+- No installer was run or installed.
 
 ## Blockers
 
@@ -35,4 +41,4 @@ Updated: 2026-11-11 (Europe/Warsaw)
 
 ## Next step
 
-Continue with a separate, locally testable Full Cinema Console improvement. Keep iPhone Remote safely disabled by default, avoid Windows network/security setting changes, and do not install the generated artifact on the MSI.
+Review Windows and macOS CI for the remote-storage commit. Record its artifact checksums when available, without installing it. Continue with another small Full Cinema Console improvement while keeping iPhone Remote safely disabled by default.
