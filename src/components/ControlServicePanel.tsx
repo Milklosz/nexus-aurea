@@ -32,11 +32,14 @@ export function ControlServicePanel() {
     let active = true;
     let stopStatusListener: (() => void) | undefined;
     let stopServiceListener: (() => void) | undefined;
+    const initialStatusGeneration = actionGeneration.current;
 
     void getControlServiceStatus().then((next) => {
-      if (active) setStatus(next);
+      if (active && initialStatusGeneration === actionGeneration.current) setStatus(next);
     }).catch(() => {
-      if (active) setError("Nie udało się odczytać stanu usługi.");
+      if (active && initialStatusGeneration === actionGeneration.current) {
+        setError("Nie udało się odczytać stanu usługi.");
+      }
     });
     void listenForControlServiceStatus((next) => {
       if (active) setStatus(next);
