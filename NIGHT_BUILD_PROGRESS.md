@@ -5,13 +5,13 @@ Updated: 2026-11-11 (Europe/Warsaw)
 ## Current branch and commits
 
 - Active branch: `feat/velora-night-build-2`.
-- Latest tested implementation commit: local `810c9a3af6fb1b2b5818697fa2716b671b9deabd`, published as `b71900aedd69dd11d16f4683ba75ddf767150e81`; their trees match. Stage 38 verifies focus across fallback-to-Windows Gaming Hub recovery; 143 React tests and TypeScript/Vite build pass locally.
+- Latest tested implementation commit: local `acb32fafd7b9fb7cc79d96ad8aea865edb6b7a2f`, published as `e839f37c736f3fb5798911bd5da212cf8e77e34c`; their trees match. Stage 39 excludes CSS-hidden dialog controls from navigation; 144 React tests and TypeScript/Vite build pass locally.
 - Stage 36 tested implementation: local `8d4cf0a89a58e18894a099f2828696fe98b9ca2b`, published as `9cf4d4d9bf662a27558b071a8b68400917f364da`; their trees match.
 - Stage 35 final recovery checkpoint: local `c9dd9be49be86d514e5d9cb0fb536d520a84a8f4`, published as `d56a7ee6778849c65b706af7afa9afb91af723ee`; their trees match, and the full snapshot verifies 308 entries.
 - Stage 36 final progress checkpoint: local `ed92f8d0f227e24b08639fa95200a433c3aeb465`, published as `2fc1bb7150697e3bc773912bf285712c8cdf4044`; their trees match, with 315 verified recovery entries.
 - Stage 37 final recovery checkpoint: local `8fe4493ec4cff2b03beef61bbfd1786bc369bd0c`, published as `e818274c3656cfac14edce63ae725ebe27fb0b15`; their trees match, with 324 verified recovery entries.
-- Stage 37 final recovery checkpoint: local `8fe4493ec4cff2b03beef61bbfd1786bc369bd0c`, published as `e818274c3656cfac14edce63ae725ebe27fb0b15`; their trees match, with 324 verified recovery entries.
-- Latest Stage 38 progress checkpoint before CI/archive finalization: local `688e8651309282a71bd08d46804c017c1f904b4c`, published as `953e02c2cc92cd24b960617cdd529c11751798d0`; their trees match. It compared 100 commits ahead, 0 behind, with the exact merge base below.
+- Stage 38 final recovery checkpoint: local `9671d25e62e3eab5745e71615f16a241eee2a100`, published as `c344baa2f8d99e39f270a21d040b960430144c68`; their trees match, with 331 verified recovery entries.
+- Latest Stage 39 progress checkpoint before CI/archive finalization: local `688e8651309282a71bd08d46804c017c1f904b4c`, published as `953e02c2cc92cd24b960617cdd529c11751798d0`; their trees match. It compared 100 commits ahead, 0 behind, with the exact merge base below.
 - Latest published implementation commit: local `b42757ad27530e2a5937ba46ac4faddbdbeecd6e`, published as `e0337167448b6c0ac70d31d3c5873e141a8dd0f8`; their trees match.
 - Latest published implementation commit: local `3d9c78533126fa679a2f3828b35d3e27b77c94bd`, published as `91ddcbf4804c7cd5a7454a5976e4b91a7dc7f5a7`; their trees match.
 - Latest progress checkpoint: local `e4f4efe3466de7c3cc12bc86a0196afd5c61e08a`, published as `91646dc0f9ec30fb05c0871167855a7c572ede5e`; their trees match.
@@ -21,6 +21,7 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - Local stage-35 implementation commit is preserved under `refs/codex/local/gaming-hub-deduplicate-refresh-stage-35`.
 - Local stage-35 validation checkpoint is preserved under `refs/codex/local/gaming-hub-deduplicate-refresh-stage-35-checkpoint`.
 - Local stage-37 implementation commit is preserved under `refs/codex/local/dialog-navigation-skip-aria-hidden-stage-37`.
+- Local stage-39 implementation commit is preserved under `refs/codex/local/dialog-navigation-skip-css-hidden-stage-39`.
 - Local stage-38 implementation commit is preserved under `refs/codex/local/gaming-hub-fallback-recovery-focus-stage-38`.
 - Local stage-36 implementation commit is preserved under `refs/codex/local/gaming-hub-fallback-retry-deduplicate-stage-36`.
 - Local stage-32 implementation commit is preserved under `refs/codex/local/gaming-hub-retry-focus-stage-32`.
@@ -102,6 +103,7 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - Stage 36 local validation passed: 25 React test files, 141 tests; the Gaming Hub file passed all 14 tests; TypeScript and Vite production build passed. GitHub Actions run [43069783881](https://github.com/Milklosz/nexus-aurea/actions/runs/43069783881) passed on Windows and macOS. The Stage 36 recovery-document run [43070000362](https://github.com/Milklosz/nexus-aurea/actions/runs/43070000362) also passed.
 - Stage 37 local validation passed: the navigation file has 5 passing tests; the full suite has 25 files and 142 tests; TypeScript/Vite production build passed. GitHub Actions run [43072191134](https://github.com/Milklosz/nexus-aurea/actions/runs/43072191134) passed on Windows and macOS; Release was skipped.
 - Stage 38 local validation passed: 25 React test files, 143 tests; the Gaming Hub file has 15 passing tests; TypeScript/Vite build passed. GitHub Actions run [43073689068](https://github.com/Milklosz/nexus-aurea/actions/runs/43073689068) passed on Windows and macOS; Release was skipped.
+- Stage 39 local validation passed: 25 React test files, 144 tests; the navigation file has 6 passing tests; TypeScript/Vite build passed. GitHub Actions is pending.
 - Stage 29 GitHub Actions runs [43054839359](https://github.com/Milklosz/nexus-aurea/actions/runs/43054839359) (PR) and [43054826843](https://github.com/Milklosz/nexus-aurea/actions/runs/43054826843) (push) passed on Windows and macOS.
 - The currently installed MSI copy was only opened for visual inspection. Its Control Center is the older long-list layout; it was closed afterward. No installed files or settings were changed.
 
@@ -141,6 +143,7 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - Stage 36 test source and before-copy are stored under `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-36`; patch: `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-36.patch` (SHA-256 `EA189DF6646834E4E5ED9C058E38D6094807F1937492C19762AD40A458B926E`).
 - Stage 37 changed sources, before-copies, and patch are stored under `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-37` and `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-37.patch`; patch SHA-256 `4B300DF725A38F963A59CDF030D5753F1F43AA02A55C9E3E27A3C1731C7AA3DE`.
 - Stage 38 test source, before-copy, and patch are stored under `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-38` and `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-38.patch`; patch SHA-256 `51060A60A4889C5EFD934A3AB97F5383CD7E6C8406B65837FC758B752DBC6F07`.
+- Stage 39 changed sources, before-copies, and patch are stored under `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-39` and `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111\continuation-39.patch`; patch SHA-256 `A2E36ED44B8523C445F761BF7836FAC3BD5DFAE220390778C81A059CB2E9569C`.
 - Stage 38 final standalone archive: `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111-stage38-final.zip`; its checksum sidecar is stored beside it.
 - Full recovery snapshot through Stage 38: `C:\Users\milos\Documents\Codex\nexus-velora-night-build-2-recovery-20261111-full-through-stage38-final.zip`; its checksum sidecar is stored beside it. All 331 manifest entries are verified.
 - Stage 38 Windows CI artifact from run [43073689068](https://github.com/Milklosz/nexus-aurea/actions/runs/43073689068), artifact ID `13880197018`, digest `sha256:f7b24bce3bba1fc656a25b8d6e04b76c5642b9c4b76c0f2a8faf2df11f952684`.
@@ -188,4 +191,4 @@ Updated: 2026-11-11 (Europe/Warsaw)
 
 ## Next step
 
-Stages 32–38 are locally tested, committed, published, and passed CI on Windows and macOS. Stages 35–38 have 308, 315, 324, and 331 verified recovery-manifest entries. Stage 38 passes 143 React tests and TypeScript/Vite build; its Windows artifact digest is verified and the unsigned installer remains unexecuted. At the last published Stage 38 checkpoint the branch was 100 commits ahead and 0 behind, with exact merge base `6dbcc36abeded18b753a134bc8ede10fb37df391`. Next, Stage 39 will exclude controls hidden by CSS from dialog navigation, then test, commit, and verify CI. GUI review remains `NOT TESTED`; iPhone Remote remains safely disabled by default.
+Stages 32–38 are locally tested, committed, published, passed CI, and backed up. Stages 35–38 have 308, 315, 324, and 331 verified recovery-manifest entries. Stage 39 is locally tested, committed, and published: 25 React files, 144 tests, and TypeScript/Vite build pass. CI is pending. The published Stage 39 implementation checkpoint compares 102 commits ahead and 0 behind, with exact merge base `6dbcc36abeded18b753a134bc8ede10fb37df391`. Next, verify Stage 39 CI and finalize its recovery snapshot. GUI review remains `NOT TESTED`; iPhone Remote remains safely disabled by default.
