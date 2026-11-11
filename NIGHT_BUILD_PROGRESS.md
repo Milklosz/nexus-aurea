@@ -5,7 +5,8 @@ Updated: 2026-11-11 (Europe/Warsaw)
 ## Current branch and commits
 
 - Active branch: `feat/velora-night-build-2`.
-- Latest tested implementation commit: `65dd4790e40519d707a75f633c8923af6c6a9708`.
+- Latest tested implementation commit: `b51fa0e227c1a280dcc232cfc66457f311f8a8de`.
+- Local stage-15 implementation commit `2445c8dfd7ea8c84128ef75b27383f9808658f26` is preserved under `refs/codex/local/remote-offline-race-stage-15`; its tree matches the published implementation.
 - Local stage-14 implementation commit `689ab0dff82ea0cc6712da4999e55121f67e8812` is preserved under `refs/codex/local/remote-resume-status-stage-14`; its tree matches the published implementation.
 - Local stage-13 source commit `119db2a7138f4c6cad2912ce8e3ed0944532366a` is preserved under `refs/codex/local/modal-focus-handoff-stage-13`; its tree matches the published commit.
 - Local stage-08 commit `8390a6555aa573063ff2d92bd0f9c6077082abc2` is preserved under `refs/codex/local/feat-velora-remote-storage-stage-08`; its tree matches the published commit.
@@ -30,9 +31,10 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - Focus returns to the selected dock item when Control Center closes, including the gamepad/options toggle. Switching directly to Diagnostics preserves focus in the new dialog.
 - Made modal focus restoration conditional so switching between Control Center and Diagnostics does not steal focus. Added a regression test for the handoff.
 - iPhone Remote rechecks its read-only server and pairing status when the PWA becomes visible again; hidden-page transitions do not trigger a request. The service-worker cache key was bumped.
-- React tests: 24 files, 117 tests passed. TypeScript and Vite production build passed.
+- iPhone Remote invalidates pending status reads when the browser goes offline, so a late response cannot replace the offline message or revive stale pairing UI. Added a regression test and bumped the service-worker cache key.
+- React tests: 24 files, 118 tests passed. TypeScript and Vite production build passed.
 - GitHub Actions run [43026294733](https://github.com/Milklosz/nexus-aurea/actions/runs/43026294733) passed on Windows and macOS, including React, Rust, TypeScript/Vite, and platform builds. The Release job was skipped.
-- GitHub Actions runs [43029135952](https://github.com/Milklosz/nexus-aurea/actions/runs/43029135952) (stage 09), [43029773813](https://github.com/Milklosz/nexus-aurea/actions/runs/43029773813) (stage 10), [43030395848](https://github.com/Milklosz/nexus-aurea/actions/runs/43030395848) (stage 11), [43031259001](https://github.com/Milklosz/nexus-aurea/actions/runs/43031259001) (stage 12), [43032589406](https://github.com/Milklosz/nexus-aurea/actions/runs/43032589406) (stage 13), and stage-14 run [43033436829](https://github.com/Milklosz/nexus-aurea/actions/runs/43033436829) passed on Windows and macOS.
+- GitHub Actions runs [43029135952](https://github.com/Milklosz/nexus-aurea/actions/runs/43029135952) (stage 09), [43029773813](https://github.com/Milklosz/nexus-aurea/actions/runs/43029773813) (stage 10), [43030395848](https://github.com/Milklosz/nexus-aurea/actions/runs/43030395848) (stage 11), [43031259001](https://github.com/Milklosz/nexus-aurea/actions/runs/43031259001) (stage 12), [43032589406](https://github.com/Milklosz/nexus-aurea/actions/runs/43032589406) (stage 13), and stage-14 run [43033436829](https://github.com/Milklosz/nexus-aurea/actions/runs/43033436829) passed on Windows and macOS. Stage-15 run [43035329173](https://github.com/Milklosz/nexus-aurea/actions/runs/43035329173) is running.
 - The artifact below is from the earlier, fully passing stage-08 checkpoint.
 - The currently installed MSI copy was only opened for visual inspection. Its Control Center is the older long-list layout; it was closed afterward. No installed files or settings were changed.
 
@@ -55,4 +57,4 @@ Updated: 2026-11-11 (Europe/Warsaw)
 
 ## Next step
 
-Continue with a small iPhone Remote offline-state improvement and regression test. Keep GUI review marked `NOT TESTED` unless a supported, policy-compliant path becomes available; keep iPhone Remote safely disabled by default.
+Review stage-15 CI, then continue with another small VELORA navigation or Remote improvement and regression test. Keep GUI review marked `NOT TESTED` unless a supported, policy-compliant path becomes available; keep iPhone Remote safely disabled by default.
