@@ -5,9 +5,9 @@ Updated: 2026-11-11 (Europe/Warsaw)
 ## Current branch and commits
 
 - Active branch: `feat/velora-night-build-2`.
-- Latest tested implementation commit: local `b42757ad27530e2a5937ba46ac4faddbdbeecd6e`; Stage 33 is locally tested and committed, with GitHub publication pending.
+- Latest tested implementation commit: local `b42757ad27530e2a5937ba46ac4faddbdbeecd6e`, published as `e0337167448b6c0ac70d31d3c5873e141a8dd0f8`; their trees match.
 - Latest published implementation commit: local `3d9c78533126fa679a2f3828b35d3e27b77c94bd`, published as `91ddcbf4804c7cd5a7454a5976e4b91a7dc7f5a7`; their trees match.
-- Latest progress checkpoint: local `1797fce1177592688c6829f609a71e17aed412dd`, published as `cfe8a351f66c4a022b4dfbe3dee8875810d1519b`; their trees match.
+- Latest progress checkpoint: local `e4f4efe3466de7c3cc12bc86a0196afd5c61e08a`, published as `91646dc0f9ec30fb05c0871167855a7c572ede5e`; their trees match.
 - Local stage-33 implementation commit is preserved under `refs/codex/local/gaming-hub-refresh-focus-stage-33`.
 - Local stage-32 implementation commit is preserved under `refs/codex/local/gaming-hub-retry-focus-stage-32`.
 - Local stage-31 implementation commit is preserved under `refs/codex/local/gaming-hub-refresh-feedback-stage-31`.
@@ -81,6 +81,7 @@ Updated: 2026-11-11 (Europe/Warsaw)
 - Stage 30 Actions runs [43055651446](https://github.com/Milklosz/nexus-aurea/actions/runs/43055651446) (PR) and [43055634481](https://github.com/Milklosz/nexus-aurea/actions/runs/43055634481) (push) passed on Windows and macOS.
 - Stage 31 GitHub Actions runs [43057193890](https://github.com/Milklosz/nexus-aurea/actions/runs/43057193890) (PR) and [43057181243](https://github.com/Milklosz/nexus-aurea/actions/runs/43057181243) (push) passed on Windows and macOS.
 - Stage 32 GitHub Actions runs [43059553007](https://github.com/Milklosz/nexus-aurea/actions/runs/43059553007) (PR) and [43059538714](https://github.com/Milklosz/nexus-aurea/actions/runs/43059538714) (push) passed on Windows and macOS; Release jobs were skipped.
+- Stage 33 GitHub Actions runs [43060949198](https://github.com/Milklosz/nexus-aurea/actions/runs/43060949198) (PR) and [43060938530](https://github.com/Milklosz/nexus-aurea/actions/runs/43060938530) (push) are running on Windows and macOS.
 - Stage 29 GitHub Actions runs [43054839359](https://github.com/Milklosz/nexus-aurea/actions/runs/43054839359) (PR) and [43054826843](https://github.com/Milklosz/nexus-aurea/actions/runs/43054826843) (push) passed on Windows and macOS.
 - The currently installed MSI copy was only opened for visual inspection. Its Control Center is the older long-list layout; it was closed afterward. No installed files or settings were changed.
 
@@ -140,4 +141,4 @@ Updated: 2026-11-11 (Europe/Warsaw)
 
 ## Next step
 
-Stage 32 is locally tested, committed, published, and passed CI on Windows and macOS. Stage 33 is locally tested and committed; publish it, verify CI, update the Draft PR, and refresh the recovery archive. The latest published comparison is 77 commits ahead and 0 behind, with exact merge base `6dbcc36abeded18b753a134bc8ede10fb37df391`. Keep GUI review marked `NOT TESTED`; keep iPhone Remote safely disabled by default.
+Stage 32 is locally tested, committed, published, and passed CI on Windows and macOS. Stage 33 is locally tested, committed, and published; its CI is running. Branch comparison is 80 commits ahead and 0 behind, with exact merge base `6dbcc36abeded18b753a134bc8ede10fb37df391`. Next, verify Stage 33 CI and refresh the recovery archive. Keep GUI review marked `NOT TESTED`; keep iPhone Remote safely disabled by default.
