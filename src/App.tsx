@@ -69,10 +69,6 @@ export default function App() {
   const { launchingIds, run: runServiceLaunch } = useLaunchGuard();
   const activeServiceRef = useRef(0);
   const showMenu = useCallback(() => { setControlCenterOpen(false); setDiagnostics(true); }, []);
-  const toggleControlCenter = useCallback(() => {
-    setDiagnostics(false);
-    setControlCenterOpen((open) => !open);
-  }, []);
   const openService = useCallback(
     async (index: number) => {
       const service = streamingServices[index];
@@ -98,15 +94,19 @@ export default function App() {
   );
   const activateSelected = useCallback(() => void openService(activeServiceRef.current), [openService]);
   const navigation = useNavigation(streamingServices.length, activateSelected, showMenu);
-  const closeControlCenter = useCallback(() => {
-    setControlCenterOpen(false);
-    window.requestAnimationFrame(() => navigation.focusApp(activeServiceRef.current));
-  }, [navigation.focusApp]);
+  const closeControlCenter = useCallback(() => setControlCenterOpen(false), []);
+  const toggleControlCenter = useCallback(() => {
+    if (controlCenterOpen) {
+      closeControlCenter();
+      return;
+    }
+    setDiagnostics(false);
+    setControlCenterOpen(true);
+  }, [closeControlCenter, controlCenterOpen]);
   const returnToNexus = useCallback(() => {
     setControlCenterOpen(false);
     setDiagnostics(false);
-    window.requestAnimationFrame(() => navigation.focusApp(activeServiceRef.current));
-  }, [navigation.focusApp]);
+  }, []);
   const openDiagnosticsFromCenter = useCallback(() => {
     setControlCenterOpen(false);
     setDiagnostics(true);
@@ -115,7 +115,14 @@ export default function App() {
     () => navigation.focusApp(activeServiceRef.current),
     [navigation.focusApp],
   );
-  useFocusRestoreOnClose(diagnostics, restoreSelectedFocus);
+  const restoreAfterControlCenterClose = useCallback(() => {
+    if (!diagnostics) restoreSelectedFocus();
+  }, [diagnostics, restoreSelectedFocus]);
+  const restoreAfterDiagnosticsClose = useCallback(() => {
+    if (!controlCenterOpen) restoreSelectedFocus();
+  }, [controlCenterOpen, restoreSelectedFocus]);
+  useFocusRestoreOnClose(diagnostics, restoreAfterDiagnosticsClose);
+  useFocusRestoreOnClose(controlCenterOpen, restoreAfterControlCenterClose);
   const closeDiagnostics = useCallback(() => setDiagnostics(false), []);
   const moveControllerFocus = useCallback((delta: -1 | 1) => {
     const dialog = document.querySelector("dialog[open]");
