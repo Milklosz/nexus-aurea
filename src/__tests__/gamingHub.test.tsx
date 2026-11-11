@@ -159,6 +159,28 @@ describe("Gaming Hub and App Manager integration", () => {
     expect(refreshButton.getAttribute("aria-busy")).toBe("false");
   });
 
+  it("keeps the retry control focused when a Windows status refresh fails", async () => {
+    mocks.snapshot = windowsSnapshot();
+    render(<GamingHub onActivateGaming={vi.fn(async () => true)} />);
+    const refreshButton = await screen.findByRole("button", { name: "Odśwież biblioteki" });
+
+    refreshButton.focus();
+    let rejectStatus!: (cause: Error) => void;
+    mocks.getStatus.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectStatus = reject; }));
+    fireEvent.click(refreshButton);
+
+    expect(await screen.findByRole("button", { name: "Odświeżanie…" })).toBe(refreshButton);
+    expect(document.activeElement).toBe(refreshButton);
+
+    rejectStatus(new Error("App Manager jest chwilowo niedostępny."));
+
+    const retryButton = await screen.findByRole("button", { name: "Spróbuj ponownie" });
+    expect(screen.getByRole("alert").textContent).toContain("App Manager jest chwilowo niedostępny.");
+    expect(retryButton).toBe(refreshButton);
+    expect(document.activeElement).toBe(refreshButton);
+    expect(refreshButton.getAttribute("aria-busy")).toBe("false");
+  });
+
   it("reports missing launchers and an unavailable Steam library without inventing games", async () => {
     mocks.snapshot = {
       ...windowsSnapshot([]),

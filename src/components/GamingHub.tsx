@@ -93,7 +93,7 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
     {loading && <p role="status">Odczytuję stan App Managera…</p>}
     {error && <p role="alert">{error}</p>}
     {notice && <p role="status" aria-live="polite">{notice}</p>}
-    <button key="app-manager-retry" type="button" aria-busy={loading} onClick={retryLibraries}>
+    <button key="app-manager-refresh" type="button" aria-busy={loading} onClick={retryLibraries}>
       {loading ? "Odczytuję…" : "Spróbuj ponownie"}
     </button>
   </section>;
