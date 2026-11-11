@@ -45,7 +45,7 @@ describe("VELORA iPhone Remote", () => {
     expect(manifest.scope).toBe("./");
     expect(html).toContain('name="apple-mobile-web-app-capable"');
     const serviceWorker = readFileSync("public/remote/sw.js", "utf8");
-    expect(serviceWorker).toContain("nexus-aurea-remote-v0.9.2-velora-resume-status-1");
+    expect(serviceWorker).toContain("nexus-aurea-remote-v0.9.2-velora-offline-status-1");
     expect(serviceWorker).toContain('key.startsWith("nexus-aurea-remote-")');
     expect(serviceWorker).toContain("self.skipWaiting()");
   });
@@ -136,5 +136,81 @@ describe("VELORA iPhone Remote", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(elements.get("pairing-form")?.hidden).toBe(true);
     expect(commandButtons[0].disabled).toBe(true);
+  });
+
+  it("does not let a pending status check overwrite the offline state", async () => {
+    const listeners = new Map<string, () => void>();
+    const element = (initial: Partial<{ hidden: boolean; disabled: boolean; textContent: string }> = {}) => ({
+      hidden: initial.hidden ?? false,
+      disabled: initial.disabled ?? false,
+      textContent: initial.textContent ?? "",
+      dataset: {} as Record<string, string>,
+      addEventListener: vi.fn(),
+    });
+    const elements = new Map([
+      ["connection-state", element()],
+      ["server-state", element()],
+      ["origin-state", element()],
+      ["pairing-state", element()],
+      ["paired-count", element()],
+      ["remote-message", element()],
+      ["pairing-form", element({ hidden: true })],
+      ["pair-button", element({ disabled: true })],
+    ]);
+    const commandButtons = [element({ disabled: true })];
+    const navigatorState = { onLine: true, serviceWorker: { register: async () => {} } };
+    let resolveStatus!: (response: { ok: boolean; json: () => Promise<{ enabled: boolean; pairedDeviceCount: number }> }) => void;
+    const pendingStatus = new Promise<{ ok: boolean; json: () => Promise<{ enabled: boolean; pairedDeviceCount: number }> }>((resolve) => {
+      resolveStatus = resolve;
+    });
+    const window = {
+      isSecureContext: true,
+      location: { protocol: "https:" },
+      crypto: { subtle: {} },
+      indexedDB: { open: vi.fn() },
+      addEventListener: vi.fn((type: string, listener: () => void) => listeners.set(type, listener)),
+    };
+
+    const fetch = vi.fn(() => pendingStatus);
+    runInNewContext(script, {
+      window,
+      document: {
+        visibilityState: "visible",
+        getElementById: (id: string) => elements.get(id),
+        querySelectorAll: () => commandButtons,
+        addEventListener: vi.fn(),
+      },
+      navigator: navigatorState,
+      indexedDB: window.indexedDB,
+      fetch,
+      crypto: { getRandomValues: vi.fn() },
+      Uint8Array,
+      Promise,
+      Error,
+      String,
+      Number,
+      Boolean,
+      JSON,
+      Math,
+      btoa: (value: string) => value,
+      queueMicrotask,
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    navigatorState.onLine = false;
+    listeners.get("offline")?.();
+    expect(elements.get("connection-state")?.textContent).toBe("offline");
+    expect(elements.get("pair-button")?.disabled).toBe(true);
+    expect(commandButtons[0].disabled).toBe(true);
+
+    resolveStatus({ ok: true, json: async () => ({ enabled: true, pairedDeviceCount: 1 }) });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(elements.get("connection-state")?.textContent).toBe("offline");
+    expect(elements.get("remote-message")?.textContent).toContain("iPhone jest offline");
+    expect(elements.get("pairing-form")?.hidden).toBe(true);
+    expect(elements.get("pair-button")?.disabled).toBe(true);
+    expect(commandButtons[0].disabled).toBe(true);
+    expect(window.indexedDB.open).not.toHaveBeenCalled();
   });
 });

@@ -9,6 +9,7 @@
     inFlight: false,
     record: null,
   };
+  let statusRequestId = 0;
   const connection = document.getElementById("connection-state");
   const server = document.getElementById("server-state");
   const origin = document.getElementById("origin-state");
@@ -95,6 +96,7 @@
   }
 
   async function refreshStatus() {
+    const requestId = ++statusRequestId;
     if (!state.secure) {
       connection.textContent = "wymaga zaufanego HTTPS";
       server.textContent = "wyłączony";
@@ -105,6 +107,11 @@
       return;
     }
 
+    if (!navigator.onLine) {
+      showOfflineStatus();
+      return;
+    }
+
     try {
       const response = await fetch("./api/status", {
         method: "GET",
@@ -112,8 +119,10 @@
         credentials: "omit",
         referrerPolicy: "no-referrer",
       });
+      if (requestId !== statusRequestId) return;
       if (!response.ok) throw new Error("Serwer pilota jest niedostępny.");
       const remote = await response.json();
+      if (requestId !== statusRequestId) return;
       state.serverReady = remote.enabled === true;
       server.textContent = state.serverReady ? "włączony" : "wyłączony";
       origin.textContent = "HTTPS";
@@ -129,8 +138,10 @@
       } else {
         try {
           state.record = await readRecord();
+          if (requestId !== statusRequestId) return;
           state.storageReady = true;
         } catch {
+          if (requestId !== statusRequestId) return;
           state.record = null;
           state.storageReady = false;
           state.paired = false;
@@ -147,6 +158,7 @@
         else showMessage("Wpisz jednorazowy kod wygenerowany w Control Center.");
       }
     } catch {
+      if (requestId !== statusRequestId) return;
       state.serverReady = false;
       state.paired = false;
       state.record = null;
@@ -157,6 +169,12 @@
       connection.textContent = "brak połączenia";
       showMessage("Nie można połączyć z VELORA. Sprawdź tę samą sieć Wi‑Fi i czy serwer LAN działa.", true);
     }
+    updateControls();
+  }
+
+  function showOfflineStatus() {
+    connection.textContent = "offline";
+    showMessage("iPhone jest offline. Polecenia są wstrzymane.", true);
     updateControls();
   }
 
@@ -298,9 +316,8 @@
   }
 
   window.addEventListener("offline", () => {
-    connection.textContent = "offline";
-    showMessage("iPhone jest offline. Polecenia są wstrzymane.", true);
-    updateControls();
+    statusRequestId += 1;
+    showOfflineStatus();
   });
   window.addEventListener("online", () => void refreshStatus());
   document.addEventListener("visibilitychange", () => {
