@@ -148,3 +148,13 @@ MusicKit / Apple Music API is a future option for catalog and personal-library f
 - C. Biblioteka Playnite — adapter + jawny fallback, metadane tylko do odczytu: [docs/playnite-library-v1.md](docs/playnite-library-v1.md).
 - D. AUREA Navigation — nawigacja 2D i stany fokusu wyłącznie wewnątrz UI VELORA: [docs/aurea-navigation-v1.md](docs/aurea-navigation-v1.md).
 - Gałąź **Draft** oparta na Night Build (PR #13): bez merge/release i bez integracji zmian DeepSeek (fix/velora-deepseek-p1, feat/velora-v1-core).
+
+## VELORA 1.0 — Ecosystem (Draft)
+
+- Dokument zbiorczy: [docs/velora-v1-ecosystem.md](docs/velora-v1-ecosystem.md); kontrakty: [docs/velora-v1-ecosystem-contracts.md](docs/velora-v1-ecosystem-contracts.md), IPC: [docs/ipc-contract.md](docs/ipc-contract.md).
+- A. Playnite Library — jawny, tylko do odczytu manifest + kompletne źródło rozszerzenia Playnite: [docs/playnite-manifest-contract.md](docs/playnite-manifest-contract.md), [docs/playnite-extension-install.md](docs/playnite-extension-install.md). **Integracja nie została uruchomiona** (wymaga Windows + Playnite).
+- B. Edge Cinema Lifecycle 2.0 — adapter + typowane zdarzenia (bez WindowBroker/SessionOrchestrator): [docs/edge-cinema-lifecycle-v2.md](docs/edge-cinema-lifecycle-v2.md).
+- C. iPhone Remote 2.0 — przetestowane prymitywy niezawodności + niezależny audyt certyfikatów + plan: [docs/iphone-remote-cert-audit.md](docs/iphone-remote-cert-audit.md). HMAC / replay / walidacja certyfikatów pozostają nienaruszone.
+- D. Autostart & Recovery — diagnostyka i wykrywanie błędnego wpisu (tylko odczyt): [docs/autostart-recovery-v1.md](docs/autostart-recovery-v1.md).
+- E. Couch-only Application Control — analiza przepływu + typowane akcje i prototyp adaptera: [docs/couch-control-flow.md](docs/couch-control-flow.md).
+- Stabilne kontrakty w `src/contracts/` umożliwiają przebudowę frontendu bez przepisywania backendu. **Bez redesignu**, bez zmian w stylistyce/animacjach/docku. Gałąź **Draft** oparta na `feat/velora-v1-experience` (PR #15); bez merge/release i bez integracji zmian DeepSeek.
