@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::process_table::{self, ProcessIdentity, ProcessTable};
 use crate::session_orchestrator::{self, SessionContext, SessionId, TransitionCause};
 use crate::window_broker::{self, ForegroundWindow, RestoreReason, RestoreResult, TrackedWindow};
 
@@ -15,6 +16,8 @@ pub(crate) const PLAYNITE_LEGACY_EVENT: &str = "managed-app-exited";
 const EXIT_GRACE_MS: u64 = 5_000;
 const START_TIMEOUT_MS: u64 = 60_000;
 const MAX_RETAINED_SESSIONS: usize = 20;
+pub(crate) const ACTIVE_POLL_MS: u64 = 600;
+pub(crate) const IDLE_POLL_MS: u64 = 1_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,11 +38,12 @@ pub enum LaunchPhase {
     ExitPending,
     Ended,
     Failed,
+    Cancelled,
 }
 
 impl LaunchPhase {
     fn is_terminal(self) -> bool {
-        matches!(self, Self::Ended | Self::Failed)
+        matches!(self, Self::Ended | Self::Failed | Self::Cancelled)
     }
 
     fn is_active(self) -> bool {
@@ -62,6 +66,13 @@ pub struct LaunchSession {
     pub updated_at_ms: u64,
     pub error: Option<String>,
     pub restore: Option<RestoreResult>,
+    /// Session revision at the launch transition, paired with `id` (the
+    /// `launchId`) for cross-event correlation.
+    pub session_revision: Option<u64>,
+    /// A PID was reused by a different process while this launch was tracked.
+    pub pid_reuse_detected: bool,
+    /// Non-fatal condition that MSI diagnostics should show.
+    pub attention: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,6 +81,8 @@ pub struct LaunchRegistrySnapshot {
     pub windows: bool,
     pub sessions: Vec<LaunchSession>,
     pub last_error: Option<String>,
+    pub active_sessions: usize,
+    pub poll_interval_ms: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,107 +91,6 @@ pub struct LaunchEvent {
     pub previous_phase: LaunchPhase,
     pub at_ms: u64,
     pub session: LaunchSession,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ProcessEntry {
-    process_id: u32,
-    parent_process_id: u32,
-    image_name: String,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ProcessTable {
-    entries: Vec<ProcessEntry>,
-}
-
-impl ProcessTable {
-    #[cfg(test)]
-    fn from_entries(entries: Vec<(u32, u32, &str)>) -> Self {
-        Self {
-            entries: entries
-                .into_iter()
-                .map(|(process_id, parent_process_id, image_name)| ProcessEntry {
-                    process_id,
-                    parent_process_id,
-                    image_name: image_name.to_string(),
-                })
-                .collect(),
-        }
-    }
-
-    fn contains(&self, process_id: u32) -> bool {
-        self.entries
-            .iter()
-            .any(|entry| entry.process_id == process_id)
-    }
-
-    fn descendants_of(&self, root_process_id: u32) -> HashSet<u32> {
-        let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
-        for entry in &self.entries {
-            children
-                .entry(entry.parent_process_id)
-                .or_default()
-                .push(entry.process_id);
-        }
-        let mut descendants = HashSet::new();
-        let mut pending = vec![root_process_id];
-        while let Some(parent) = pending.pop() {
-            for child in children.get(&parent).into_iter().flatten() {
-                if *child != root_process_id && descendants.insert(*child) {
-                    pending.push(*child);
-                }
-            }
-        }
-        descendants
-    }
-
-    fn image_name(&self, process_id: u32) -> Option<&str> {
-        self.entries
-            .iter()
-            .find(|entry| entry.process_id == process_id)
-            .map(|entry| entry.image_name.as_str())
-    }
-
-    fn matching_pids(&self, watch: &LaunchWatch) -> HashSet<u32> {
-        let candidates: HashSet<u32> = if watch.descendants_only {
-            watch
-                .root_process_id
-                .map(|root| self.descendants_of(root))
-                .unwrap_or_default()
-        } else {
-            self.entries.iter().map(|entry| entry.process_id).collect()
-        };
-        candidates
-            .into_iter()
-            .filter(|process_id| {
-                watch.baseline_active || !watch.baseline_process_ids.contains(process_id)
-            })
-            .filter(|process_id| {
-                let Some(name) = self.image_name(*process_id) else {
-                    return false;
-                };
-                if watch
-                    .excluded_image_names
-                    .iter()
-                    .any(|excluded| name.eq_ignore_ascii_case(excluded))
-                {
-                    return false;
-                }
-                watch.descendants_only
-                    || watch
-                        .image_names
-                        .iter()
-                        .any(|image| name.eq_ignore_ascii_case(image))
-            })
-            .collect()
-    }
-
-    fn is_running(&self, watch: &LaunchWatch, matching: &HashSet<u32>) -> bool {
-        (watch.root_counts_as_running
-            && watch.root_process_id.is_some_and(|root| self.contains(root)))
-            || !matching.is_empty()
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -197,6 +109,8 @@ pub(crate) struct LaunchWatch {
     baseline_window_ids: HashSet<u64>,
     baseline_captured: bool,
     baseline_active: bool,
+    root_identity: Option<ProcessIdentity>,
+    root_reused: bool,
 }
 
 impl LaunchWatch {
@@ -227,15 +141,71 @@ impl LaunchWatch {
             baseline_window_ids: HashSet::new(),
             baseline_captured: false,
             baseline_active: false,
+            root_identity: None,
+            root_reused: false,
         }
     }
 }
 
+fn matching_pids(table: &ProcessTable, watch: &LaunchWatch) -> HashSet<u32> {
+    let candidates: HashSet<u32> = if watch.descendants_only {
+        if watch.root_reused {
+            HashSet::new()
+        } else {
+            watch
+                .root_process_id
+                .map(|root| table.descendants_of(root))
+                .unwrap_or_default()
+        }
+    } else {
+        table
+            .entries()
+            .iter()
+            .map(|entry| entry.process_id)
+            .collect()
+    };
+    candidates
+        .into_iter()
+        .filter(|process_id| {
+            watch.baseline_active || !watch.baseline_process_ids.contains(process_id)
+        })
+        .filter(|process_id| {
+            let Some(name) = table.image_name(*process_id) else {
+                return false;
+            };
+            if watch
+                .excluded_image_names
+                .iter()
+                .any(|excluded| name.eq_ignore_ascii_case(excluded))
+            {
+                return false;
+            }
+            watch.descendants_only
+                || watch
+                    .image_names
+                    .iter()
+                    .any(|image| name.eq_ignore_ascii_case(image))
+        })
+        .collect()
+}
+
+fn process_is_running(
+    table: &ProcessTable,
+    watch: &LaunchWatch,
+    matching: &HashSet<u32>,
+) -> bool {
+    (watch.root_counts_as_running
+        && !watch.root_reused
+        && watch.root_process_id.is_some_and(|root| table.contains(root)))
+        || !matching.is_empty()
+}
+
 #[derive(Clone, Debug, Default)]
 struct Observation {
-    table: ProcessTable,
+    table: Arc<ProcessTable>,
     windows: Vec<TrackedWindow>,
     foreground: ForegroundWindow,
+    identities: HashMap<u32, ProcessIdentity>,
     at_ms: u64,
 }
 
@@ -264,6 +234,8 @@ impl RegistryState {
             windows: cfg!(target_os = "windows"),
             sessions,
             last_error: self.last_error.clone(),
+            active_sessions: self.active_count(),
+            poll_interval_ms: ACTIVE_POLL_MS,
         }
     }
 
@@ -356,7 +328,7 @@ fn apply_baseline(
     windows: &[TrackedWindow],
 ) {
     if watch.descendants_only && !watch.ignore_baseline_windows {
-        watch.baseline_process_ids = table.matching_pids(watch);
+        watch.baseline_process_ids = matching_pids(table, watch);
     }
     if !watch.ignore_baseline_windows {
         watch.baseline_window_ids = windows.iter().map(|window| window.hwnd).collect();
@@ -372,9 +344,9 @@ pub(crate) fn capture_baseline(
     app: &AppHandle,
     watch: &mut LaunchWatch,
 ) -> Result<(), String> {
-    let table = native::process_table()?;
+    let table = process_table::snapshot(true)?;
     let process_ids = if watch.descendants_only && !watch.ignore_baseline_windows {
-        table.matching_pids(watch)
+        matching_pids(&table, watch)
     } else {
         HashSet::new()
     };
@@ -418,12 +390,43 @@ fn advance(
     if tracked.session.phase.is_terminal() {
         return None;
     }
-    let matching = observation.table.matching_pids(&tracked.watch);
-    let process_running = observation.table.is_running(&tracked.watch, &matching);
+    // A recycled PID is a different process. Detect it before matching
+    // descendants or windows so an unrelated process cannot keep a dead
+    // session alive.
+    if let Some(root) = tracked.watch.root_process_id {
+        if let Some(observed) = observation.identities.get(&root) {
+            match tracked.watch.root_identity {
+                Some(expected) if !expected.matches(*observed) => {
+                    tracked.watch.root_reused = true;
+                    tracked.session.pid_reuse_detected = true;
+                    tracked.session.attention = Some(
+                        "PID procesu głównego został ponownie użyty przez inny proces; sesja kończy się bezpiecznie."
+                            .into(),
+                    );
+                }
+                None => tracked.watch.root_identity = Some(*observed),
+                _ => {}
+            }
+        }
+    }
+    let matching = matching_pids(&observation.table, &tracked.watch);
+    let process_running = process_is_running(&observation.table, &tracked.watch, &matching);
     let windows = observation
         .windows
         .iter()
         .filter(|window| matching.contains(&window.process_id))
+        .filter(|window| {
+            // Ignore a window whose PID now belongs to a newer process instance.
+            match (
+                observation.identities.get(&window.process_id),
+                window.process_created_at_100ns,
+            ) {
+                (Some(identity), Some(created_at)) => {
+                    identity.created_at_100ns == created_at
+                }
+                _ => true,
+            }
+        })
         .filter(|window| {
             tracked.watch.ignore_baseline_windows
                 || !tracked.watch.baseline_window_ids.contains(&window.hwnd)
@@ -511,7 +514,7 @@ fn advance(
                 }
             }
         }
-        LaunchPhase::Ended | LaunchPhase::Failed => None,
+        LaunchPhase::Ended | LaunchPhase::Failed | LaunchPhase::Cancelled => None,
     };
 
     if next == Some(LaunchPhase::ExitPending) && tracked.absent_since_ms.is_none() {
@@ -524,6 +527,13 @@ fn advance(
 }
 
 impl LaunchRegistry {
+    pub(crate) fn snapshot(&self) -> LaunchRegistrySnapshot {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .snapshot()
+    }
+
     fn register(
         &self,
         app: &AppHandle,
@@ -535,6 +545,9 @@ impl LaunchRegistry {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !watch.baseline_captured {
             capture_baseline(app, &mut watch)?;
+        }
+        if watch.root_identity.is_none() {
+            watch.root_identity = watch.root_process_id.and_then(process_table::identity);
         }
 
         let at_ms = now_ms();
@@ -561,6 +574,9 @@ impl LaunchRegistry {
             updated_at_ms: at_ms,
             error: None,
             restore: None,
+            session_revision: None,
+            pid_reuse_detected: false,
+            attention: None,
         };
         let target = session_target_for(watch.kind, watch.session_target);
         let context = SessionContext::for_launch(&session.id, session.app_id.as_deref(), None);
@@ -610,6 +626,7 @@ impl LaunchRegistry {
         for event in &superseded {
             let _ = app.emit(LAUNCH_EVENT, event);
         }
+        let mut session = session;
         if let Some(target) = target {
             if session_orchestrator::apply_transition(
                 app,
@@ -634,6 +651,18 @@ impl LaunchRegistry {
                     TransitionCause::Launch,
                     Some(context),
                 );
+            }
+            session.session_revision = Some(session_orchestrator::current_snapshot(app).revision);
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(tracked) = state
+                .launches
+                .iter_mut()
+                .find(|tracked| tracked.session.id == session.id)
+            {
+                tracked.session.session_revision = session.session_revision;
             }
         }
         ensure_watcher(app.clone());
@@ -820,27 +849,42 @@ struct PlayniteExitEvent {
 }
 
 static WATCHER_STARTED: AtomicBool = AtomicBool::new(false);
+static WATCHER_STOP: AtomicBool = AtomicBool::new(false);
 
 fn ensure_watcher(app: AppHandle) {
     if WATCHER_STARTED.swap(true, Ordering::AcqRel) {
         return;
     }
+    WATCHER_STOP.store(false, Ordering::Release);
     let spawned = std::thread::Builder::new()
         .name("velora-launch-registry".into())
-        .spawn(move || loop {
-            if app.state::<LaunchRegistry>().active_count() == 0 {
-                std::thread::sleep(std::time::Duration::from_millis(1_000));
-                continue;
+        .spawn(move || {
+            loop {
+                if WATCHER_STOP.load(Ordering::Acquire) {
+                    break;
+                }
+                let active = app.state::<LaunchRegistry>().active_count();
+                if active > 0 {
+                    match watcher_tick(&app) {
+                        Ok(()) => {}
+                        Err(error) => app.state::<LaunchRegistry>().observation_error(&app, error),
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(if active > 0 {
+                    ACTIVE_POLL_MS
+                } else {
+                    IDLE_POLL_MS
+                }));
             }
-            match watcher_tick(&app) {
-                Ok(()) => {}
-                Err(error) => app.state::<LaunchRegistry>().observation_error(&app, error),
-            }
-            std::thread::sleep(std::time::Duration::from_millis(350));
+            WATCHER_STARTED.store(false, Ordering::Release);
         });
     if spawned.is_err() {
         WATCHER_STARTED.store(false, Ordering::Release);
     }
+}
+
+pub(crate) fn stop_watcher() {
+    WATCHER_STOP.store(true, Ordering::Release);
 }
 
 fn watcher_tick(app: &AppHandle) -> Result<(), String> {
@@ -849,24 +893,109 @@ fn watcher_tick(app: &AppHandle) -> Result<(), String> {
     if watches.is_empty() {
         return Ok(());
     }
-    let table = native::process_table()?;
+    let table = process_table::snapshot(false)?;
     let mut process_ids = HashSet::new();
     for (_, watch) in &watches {
-        process_ids.extend(table.matching_pids(watch));
+        process_ids.extend(matching_pids(&table, watch));
         if let Some(root) = watch.root_process_id {
             process_ids.insert(root);
         }
     }
+    // Creation times are read only for the handful of PIDs a launch owns, not
+    // for every process in the snapshot.
+    let identities = process_ids
+        .iter()
+        .filter_map(|process_id| process_table::identity(*process_id))
+        .map(|identity| (identity.process_id, identity))
+        .collect::<HashMap<_, _>>();
     let windows = window_broker::windows_for_processes(app, &process_ids);
     let foreground = window_broker::foreground(app);
     let observation = Observation {
         table,
         windows,
         foreground,
+        identities,
         at_ms: now_ms(),
     };
     registry.apply_observation(app, observation);
     Ok(())
+}
+
+/// Resets the exit grace window after sleep/wake. A process that disappeared
+/// during sleep gets a fresh five-second window instead of an immediate end,
+/// and a process that survived keeps its session. Returns the active count.
+fn reset_resume_state(launches: &mut [TrackedLaunch], at_ms: u64) -> usize {
+    let mut active = 0;
+    for tracked in launches {
+        if tracked.session.phase.is_active() {
+            tracked.absent_since_ms = None;
+            tracked.session.updated_at_ms = at_ms;
+            active += 1;
+        }
+    }
+    active
+}
+
+pub(crate) fn handle_system_resume(app: &AppHandle, at_ms: u64) -> usize {
+    let registry = app.state::<LaunchRegistry>();
+    let active = {
+        let mut state = registry
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset_resume_state(&mut state.launches, at_ms)
+    };
+    if active > 0 {
+        if let Err(error) = watcher_tick(app) {
+            registry.observation_error(app, error);
+        }
+    }
+    active
+}
+
+pub(crate) fn is_launch_active(app: &AppHandle, launch_id: &str) -> bool {
+    app.state::<LaunchRegistry>()
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .launches
+        .iter()
+        .any(|tracked| tracked.session.id == launch_id && tracked.session.phase.is_active())
+}
+
+/// Explicit cancellation. It is idempotent for terminal launches: a repeated
+/// request returns the already-finished session instead of emitting again.
+pub(crate) fn cancel_launch(app: &AppHandle, launch_id: &str) -> Result<LaunchSession, String> {
+    let registry = app.state::<LaunchRegistry>();
+    let (session, event) = {
+        let mut state = registry
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tracked = state
+            .launches
+            .iter_mut()
+            .find(|tracked| tracked.session.id == launch_id)
+            .ok_or_else(|| "Nie znaleziono sesji uruchomienia o podanym identyfikatorze.".to_string())?;
+        if tracked.session.phase.is_terminal() {
+            return Ok(tracked.session.clone());
+        }
+        let event = set_phase(
+            tracked,
+            LaunchPhase::Cancelled,
+            now_ms(),
+            Some("Uruchomienie zostało anulowane przez użytkownika.".into()),
+        );
+        (tracked.session.clone(), event)
+    };
+    for process_id in &session.process_ids {
+        window_broker::release_process(app, *process_id);
+    }
+    if let Some(event) = event {
+        let _ = app.emit(LAUNCH_EVENT, event);
+    }
+    session_orchestrator::finish_launch_session(app, launch_id);
+    Ok(session)
 }
 
 pub(crate) fn track_launch(app: &AppHandle, watch: LaunchWatch) -> Result<LaunchSession, String> {
@@ -874,12 +1003,14 @@ pub(crate) fn track_launch(app: &AppHandle, watch: LaunchWatch) -> Result<Launch
 }
 
 pub(crate) fn find_process_id(image_name: &str) -> Option<u32> {
-    native::process_table()
+    process_table::snapshot(true)
         .ok()?
-        .entries
-        .iter()
-        .find(|entry| entry.image_name.eq_ignore_ascii_case(image_name))
-        .map(|entry| entry.process_id)
+        .find_process_id(image_name)
+}
+
+#[tauri::command]
+pub fn cancel_launch_session(app: AppHandle, launch_id: String) -> Result<LaunchSession, String> {
+    cancel_launch(&app, &launch_id)
 }
 
 #[tauri::command]
@@ -891,73 +1022,17 @@ pub fn get_launch_registry_status(app: AppHandle) -> LaunchRegistrySnapshot {
         .snapshot()
 }
 
-#[cfg(target_os = "windows")]
-mod native {
-    use super::{ProcessEntry, ProcessTable};
-
-    pub(super) fn process_table() -> Result<ProcessTable, String> {
-        use windows::core::HRESULT;
-        use windows::Win32::Foundation::{CloseHandle, ERROR_NO_MORE_FILES};
-        use windows::Win32::System::Diagnostics::ToolHelp::{
-            CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
-            TH32CS_SNAPPROCESS,
-        };
-
-        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }
-            .map_err(|_| "Nie można odczytać stanu procesów Windows.".to_string())?;
-        let no_more_files = HRESULT::from_win32(ERROR_NO_MORE_FILES.0);
-        let mut entry = PROCESSENTRY32W {
-            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
-            ..Default::default()
-        };
-        let first = unsafe { Process32FirstW(snapshot, &mut entry) };
-        let mut entries = Vec::new();
-        let result = match first {
-            Ok(()) => loop {
-                let length = entry
-                    .szExeFile
-                    .iter()
-                    .position(|character| *character == 0)
-                    .unwrap_or(entry.szExeFile.len());
-                entries.push(ProcessEntry {
-                    process_id: entry.th32ProcessID,
-                    parent_process_id: entry.th32ParentProcessID,
-                    image_name: String::from_utf16_lossy(&entry.szExeFile[..length]),
-                });
-                match unsafe { Process32NextW(snapshot, &mut entry) } {
-                    Ok(()) => {}
-                    Err(error) if error.code() == no_more_files => break Ok(()),
-                    Err(_) => break Err("Nie udało się odczytać stanu procesów Windows.".into()),
-                }
-            },
-            Err(error) if error.code() == no_more_files => Ok(()),
-            Err(_) => Err("Nie udało się odczytać stanu procesów Windows.".into()),
-        };
-        let close_result = unsafe { CloseHandle(snapshot) };
-        if result.is_ok() && close_result.is_err() {
-            return Err("Nie udało się zamknąć migawki procesów Windows.".into());
-        }
-        result.map(|_| ProcessTable { entries })
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-mod native {
-    use super::ProcessTable;
-
-    pub(super) fn process_table() -> Result<ProcessTable, String> {
-        Err("Rejestr uruchomień jest dostępny tylko w natywnej aplikacji Windows.".into())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        advance, apply_baseline, same_launch_group, ProcessTable, LaunchKind, LaunchPhase,
-        LaunchSession, LaunchWatch, Observation, TrackedLaunch, EXIT_GRACE_MS, START_TIMEOUT_MS,
+        advance, apply_baseline, matching_pids, reset_resume_state, same_launch_group, set_phase,
+        ProcessTable, LaunchKind, LaunchPhase, LaunchSession, LaunchWatch, Observation,
+        TrackedLaunch, EXIT_GRACE_MS, START_TIMEOUT_MS,
     };
+    use crate::process_table::ProcessIdentity;
     use crate::window_broker::{ForegroundWindow, TrackedWindow};
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
+    use std::sync::Arc;
 
     fn watch() -> LaunchWatch {
         LaunchWatch::new(
@@ -992,6 +1067,9 @@ mod tests {
                 updated_at_ms: 1_000,
                 error: None,
                 restore: None,
+                session_revision: None,
+                pid_reuse_detected: false,
+                attention: None,
             },
             watch: watch(),
             absent_since_ms: None,
@@ -1005,7 +1083,7 @@ mod tests {
         at_ms: u64,
     ) -> Observation {
         Observation {
-            table: ProcessTable::from_entries(processes),
+            table: Arc::new(ProcessTable::from_entries(processes)),
             windows: windows
                 .into_iter()
                 .map(|(hwnd, process_id, class_name)| TrackedWindow {
@@ -1013,6 +1091,9 @@ mod tests {
                     process_id,
                     process_name: None,
                     class_name: Some(class_name.into()),
+                    process_created_at_100ns: None,
+                    score: 0,
+                    is_main: false,
                 })
                 .collect(),
             foreground: ForegroundWindow {
@@ -1022,6 +1103,7 @@ mod tests {
                 class_name: None,
                 window_present: foreground.is_some(),
             },
+            identities: HashMap::new(),
             at_ms,
         }
     }
@@ -1183,12 +1265,18 @@ mod tests {
                 process_id: 101,
                 process_name: Some("steam.exe".into()),
                 class_name: None,
+                process_created_at_100ns: None,
+                score: 0,
+                is_main: false,
             },
             TrackedWindow {
                 hwnd: 11,
                 process_id: 102,
                 process_name: Some("Cyberpunk2077.exe".into()),
                 class_name: None,
+                process_created_at_100ns: None,
+                score: 0,
+                is_main: false,
             },
         ];
         apply_baseline(&mut watch, &table, &windows);
@@ -1196,7 +1284,7 @@ mod tests {
         assert_eq!(watch.baseline_window_ids, HashSet::from([10, 11]));
         assert!(watch.baseline_active);
         assert!(watch.baseline_captured);
-        assert!(table.matching_pids(&watch).contains(&102));
+        assert!(matching_pids(&table, &watch).contains(&102));
 
         let mut session = TrackedLaunch {
             session: LaunchSession {
@@ -1212,6 +1300,9 @@ mod tests {
                 updated_at_ms: 1_000,
                 error: None,
                 restore: None,
+                session_revision: None,
+                pid_reuse_detected: false,
+                attention: None,
             },
             watch,
             absent_since_ms: None,
@@ -1219,26 +1310,33 @@ mod tests {
         let event = advance(
             &mut session,
             &Observation {
-                table: ProcessTable::from_entries(vec![
+                table: Arc::new(ProcessTable::from_entries(vec![
                     (100, 0, "steam.exe"),
                     (101, 100, "steamwebhelper.exe"),
                     (103, 100, "Cyberpunk2077.exe"),
-                ]),
+                ])),
                 windows: vec![
                     TrackedWindow {
                         hwnd: 10,
                         process_id: 101,
                         process_name: Some("steam.exe".into()),
                         class_name: None,
+                        process_created_at_100ns: None,
+                        score: 0,
+                        is_main: false,
                     },
                     TrackedWindow {
                         hwnd: 12,
                         process_id: 103,
                         process_name: Some("Cyberpunk2077.exe".into()),
                         class_name: None,
+                        process_created_at_100ns: None,
+                        score: 0,
+                        is_main: false,
                     },
                 ],
                 foreground: ForegroundWindow::default(),
+                identities: HashMap::new(),
                 at_ms: 5_000,
             },
         )
@@ -1302,7 +1400,173 @@ mod tests {
             (102, 100, "Game.exe"),
             (200, 0, "chrome.exe"),
         ]);
-        assert_eq!(table.matching_pids(&watch), HashSet::from([102]));
+        assert_eq!(matching_pids(&table, &watch), HashSet::from([102]));
+    }
+
+    #[test]
+    fn resume_resets_the_exit_grace_without_ending_a_session() {
+        let mut session = tracked();
+        session.session.phase = LaunchPhase::ExitPending;
+        session.absent_since_ms = Some(1_000);
+        let active = reset_resume_state(std::slice::from_mut(&mut session), 20_000);
+        assert_eq!(active, 1);
+        assert!(session.absent_since_ms.is_none());
+        assert_eq!(session.session.updated_at_ms, 20_000);
+    }
+
+    #[test]
+    fn a_recycled_root_pid_ends_the_old_session_after_grace() {
+        let watch = LaunchWatch::new(
+            LaunchKind::Game,
+            "Game",
+            None,
+            Vec::new(),
+            Some(100),
+            true,
+            true,
+            Vec::new(),
+            true,
+            None,
+        );
+        let mut session = TrackedLaunch {
+            session: LaunchSession {
+                id: "game-reuse".into(),
+                kind: LaunchKind::Game,
+                display_name: "Game".into(),
+                app_id: None,
+                phase: LaunchPhase::Requested,
+                process_ids: Vec::new(),
+                foreground: false,
+                window_id: None,
+                started_at_ms: 1_000,
+                updated_at_ms: 1_000,
+                error: None,
+                restore: None,
+                session_revision: None,
+                pid_reuse_detected: false,
+                attention: None,
+            },
+            watch,
+            absent_since_ms: None,
+        };
+        let first_identity = ProcessIdentity {
+            process_id: 100,
+            created_at_100ns: 5_000,
+        };
+        let first = Observation {
+            table: Arc::new(ProcessTable::from_entries(vec![
+                (100, 0, "steam.exe"),
+                (101, 100, "Game.exe"),
+            ])),
+            windows: Vec::new(),
+            foreground: ForegroundWindow::default(),
+            identities: HashMap::from([
+                (100, first_identity),
+                (
+                    101,
+                    ProcessIdentity {
+                        process_id: 101,
+                        created_at_100ns: 5_001,
+                    },
+                ),
+            ]),
+            at_ms: 2_000,
+        };
+        advance(&mut session, &first);
+        assert_eq!(session.session.phase, LaunchPhase::ProcessStarted);
+        assert_eq!(session.watch.root_identity, Some(first_identity));
+
+        let reused = Observation {
+            table: Arc::new(ProcessTable::from_entries(vec![(100, 0, "other.exe")])),
+            windows: Vec::new(),
+            foreground: ForegroundWindow::default(),
+            identities: HashMap::from([(
+                100,
+                ProcessIdentity {
+                    process_id: 100,
+                    created_at_100ns: 9_000,
+                },
+            )]),
+            at_ms: 3_000,
+        };
+        advance(&mut session, &reused);
+        assert!(session.watch.root_reused);
+        assert!(session.session.pid_reuse_detected);
+        assert!(session.session.attention.is_some());
+        assert_eq!(session.session.phase, LaunchPhase::ExitPending);
+        advance(&mut session, &reused_at(3_000 + EXIT_GRACE_MS));
+        assert_eq!(session.session.phase, LaunchPhase::Ended);
+    }
+
+    fn reused_at(at_ms: u64) -> Observation {
+        Observation {
+            table: Arc::new(ProcessTable::from_entries(vec![(100, 0, "other.exe")])),
+            windows: Vec::new(),
+            foreground: ForegroundWindow::default(),
+            identities: HashMap::from([(
+                100,
+                ProcessIdentity {
+                    process_id: 100,
+                    created_at_100ns: 9_000,
+                },
+            )]),
+            at_ms,
+        }
+    }
+
+    #[test]
+    fn a_window_from_a_reused_process_instance_is_ignored() {
+        let mut session = tracked();
+        let observation = Observation {
+            table: Arc::new(ProcessTable::from_entries(vec![(
+                200,
+                1,
+                "Playnite.FullscreenApp.exe",
+            )])),
+            windows: vec![TrackedWindow {
+                hwnd: 700,
+                process_id: 200,
+                process_name: Some("Playnite.FullscreenApp.exe".into()),
+                class_name: Some("SDL_app".into()),
+                process_created_at_100ns: Some(111),
+                score: 80,
+                is_main: true,
+            }],
+            foreground: ForegroundWindow {
+                hwnd: None,
+                process_id: None,
+                process_name: None,
+                class_name: None,
+                window_present: false,
+            },
+            identities: HashMap::from([(
+                200,
+                ProcessIdentity {
+                    process_id: 200,
+                    created_at_100ns: 222,
+                },
+            )]),
+            at_ms: 2_000,
+        };
+        let event = advance(&mut session, &observation).unwrap();
+        assert_eq!(event.session.phase, LaunchPhase::ProcessStarted);
+        assert_eq!(event.session.window_id, None);
+    }
+
+    #[test]
+    fn explicit_cancellation_is_terminal_and_idempotent() {
+        let mut session = tracked();
+        let event = set_phase(
+            &mut session,
+            LaunchPhase::Cancelled,
+            2_000,
+            Some("anulowane".into()),
+        )
+        .unwrap();
+        assert_eq!(event.session.phase, LaunchPhase::Cancelled);
+        assert!(session.session.phase.is_terminal());
+        assert!(set_phase(&mut session, LaunchPhase::Cancelled, 2_100, None).is_none());
+        assert!(set_phase(&mut session, LaunchPhase::Ended, 2_200, None).is_none());
     }
 
     #[test]

@@ -1,6 +1,78 @@
 use serde::Serialize;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, RwLock};
 use tauri::{AppHandle, Manager};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FallbackHotkey {
+    pub id: String,
+    pub label: String,
+    pub modifiers: u32,
+    pub virtual_key: u32,
+}
+
+const MOD_ALT: u32 = 0x0001;
+const MOD_CONTROL: u32 = 0x0002;
+const MOD_SHIFT: u32 = 0x0004;
+const MOD_NOREPEAT: u32 = 0x4000;
+const VK_N: u32 = 0x4e;
+
+pub(crate) const FALLBACK_HOTKEY_PRESETS: &[(&str, &str, u32, u32)] = &[
+    ("ctrlAltN", "Ctrl+Alt+N", MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_N),
+    (
+        "ctrlShiftN",
+        "Ctrl+Shift+N",
+        MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT,
+        VK_N,
+    ),
+    (
+        "altShiftN",
+        "Alt+Shift+N",
+        MOD_ALT | MOD_SHIFT | MOD_NOREPEAT,
+        VK_N,
+    ),
+];
+
+pub(crate) fn fallback_hotkey_preset(id: &str) -> Option<FallbackHotkey> {
+    FALLBACK_HOTKEY_PRESETS
+        .iter()
+        .find(|(preset, ..)| *preset == id)
+        .map(|(preset, label, modifiers, virtual_key)| FallbackHotkey {
+            id: (*preset).into(),
+            label: (*label).into(),
+            modifiers: *modifiers,
+            virtual_key: *virtual_key,
+        })
+}
+
+pub(crate) fn available_fallback_hotkeys() -> Vec<FallbackHotkey> {
+    FALLBACK_HOTKEY_PRESETS
+        .iter()
+        .filter_map(|(id, ..)| fallback_hotkey_preset(id))
+        .collect()
+}
+
+pub(crate) const INPUT_ISOLATION_AFTER_MS: u64 = 8_000;
+
+/// A Sony controller visible to HID enumeration but absent from Raw Input for
+/// several seconds is a strong hint that Steam Input or another layer consumed
+/// the device. It is only a warning: VELORA never claims the reason with
+/// certainty and never blocks the game's input.
+pub(crate) fn input_isolation_warning(
+    playstation_count: usize,
+    raw_devices: usize,
+    elapsed_ms: u64,
+) -> Option<String> {
+    (playstation_count > 0 && raw_devices == 0 && elapsed_ms >= INPUT_ISOLATION_AFTER_MS).then(|| {
+        "Windows widzi kontroler Sony, ale DualSense Home nie odebrał raportów Raw Input. Sprawdź Steam Input lub inny program przechwytujący pada. Skrót klawiaturowy pozostaje dostępny."
+            .to_string()
+    })
+}
+
+pub(crate) fn default_fallback_hotkey() -> FallbackHotkey {
+    fallback_hotkey_preset("ctrlAltN").expect("default shortcut preset")
+}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -12,10 +84,17 @@ pub struct ControlServiceStatus {
     pub playstation_controller_count: usize,
     pub foreground_process: Option<String>,
     pub return_hotkey_registered: bool,
+    pub fallback_hotkey: String,
     pub gamepad_home_running: bool,
     pub gamepad_home_device_count: usize,
     pub gamepad_home_last_combo_at_ms: Option<u64>,
     pub gamepad_home_last_error: Option<String>,
+    pub gamepad_home_warning: Option<String>,
+    pub gamepad_home_devices: Vec<crate::gamepad_home::GamepadDeviceInfo>,
+    pub gamepad_home_duplicate_reports: u64,
+    pub gamepad_home_reconnects: u64,
+    pub gamepad_home_last_report_at_ms: Option<u64>,
+    pub gamepad_home_last_chord: Option<crate::gamepad_home::ChordDiagnostic>,
     pub last_error: Option<String>,
 }
 
@@ -29,10 +108,17 @@ impl ControlServiceStatus {
             playstation_controller_count: 0,
             foreground_process: None,
             return_hotkey_registered: false,
+            fallback_hotkey: default_fallback_hotkey().label,
             gamepad_home_running: false,
             gamepad_home_device_count: 0,
             gamepad_home_last_combo_at_ms: None,
             gamepad_home_last_error: None,
+            gamepad_home_warning: None,
+            gamepad_home_devices: Vec::new(),
+            gamepad_home_duplicate_reports: 0,
+            gamepad_home_reconnects: 0,
+            gamepad_home_last_report_at_ms: None,
+            gamepad_home_last_chord: None,
             last_error: None,
         }
     }
@@ -62,6 +148,8 @@ struct Worker {
 pub struct ControlService {
     worker: Mutex<Option<Worker>>,
     latest: Arc<RwLock<ControlServiceStatus>>,
+    fallback_hotkey: Arc<RwLock<FallbackHotkey>>,
+    hotkey_generation: Arc<AtomicU64>,
 }
 
 impl Default for ControlService {
@@ -69,6 +157,8 @@ impl Default for ControlService {
         Self {
             worker: Mutex::new(None),
             latest: Arc::new(RwLock::new(ControlServiceStatus::disabled())),
+            fallback_hotkey: Arc::new(RwLock::new(default_fallback_hotkey())),
+            hotkey_generation: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -79,6 +169,12 @@ impl ControlService {
             .latest
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        status.fallback_hotkey = self
+            .fallback_hotkey
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .label
             .clone();
         status.running = worker.is_some_and(|worker| {
             worker
@@ -91,6 +187,22 @@ impl ControlService {
                 .load(std::sync::atomic::Ordering::Acquire)
         });
         status
+    }
+
+    pub fn set_fallback_hotkey(&self, id: &str) -> Result<ControlServiceStatus, String> {
+        let hotkey = fallback_hotkey_preset(id)
+            .ok_or_else(|| "Nieznany zestaw skrótu powrotu VELORA.".to_string())?;
+        *self
+            .fallback_hotkey
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = hotkey;
+        self.hotkey_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        let worker = self
+            .worker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Ok(self.status_with_worker(worker.as_ref()))
     }
 
     pub fn status(&self) -> ControlServiceStatus {
@@ -136,6 +248,8 @@ impl ControlService {
             let enabled_for_thread = Arc::clone(&enabled);
             let game_mode_for_thread = Arc::clone(&game_mode);
             let latest_for_thread = Arc::clone(&self.latest);
+            let hotkey_for_thread = Arc::clone(&self.fallback_hotkey);
+            let generation_for_thread = Arc::clone(&self.hotkey_generation);
             let join = std::thread::Builder::new()
                 .name("nexus-control-session".into())
                 .spawn(move || {
@@ -144,6 +258,8 @@ impl ControlService {
                         enabled_for_thread,
                         game_mode_for_thread,
                         latest_for_thread,
+                        hotkey_for_thread,
+                        generation_for_thread,
                         started_tx,
                     );
                 })
@@ -225,6 +341,12 @@ impl ControlService {
             latest.gamepad_home_device_count = 0;
             latest.gamepad_home_last_combo_at_ms = None;
             latest.gamepad_home_last_error = None;
+            latest.gamepad_home_warning = None;
+            latest.gamepad_home_devices.clear();
+            latest.gamepad_home_duplicate_reports = 0;
+            latest.gamepad_home_reconnects = 0;
+            latest.gamepad_home_last_report_at_ms = None;
+            latest.gamepad_home_last_chord = None;
         }
         self.status()
     }
@@ -273,14 +395,34 @@ pub async fn stop_control_service(app: AppHandle) -> Result<ControlServiceStatus
     .map_err(|_| "Wątek Control Service został przerwany.".to_string())
 }
 
+#[tauri::command]
+pub fn get_fallback_hotkey_options() -> Vec<FallbackHotkey> {
+    available_fallback_hotkeys()
+}
+
+#[tauri::command]
+pub async fn set_fallback_hotkey(
+    id: String,
+    app: AppHandle,
+) -> Result<ControlServiceStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let service = app.state::<ControlService>();
+        service.set_fallback_hotkey(&id)
+    })
+    .await
+    .map_err(|_| "Wątek Control Service został przerwany.".to_string())?
+}
+
 #[cfg(target_os = "windows")]
 mod windows {
-    use super::{is_controller_collection, is_playstation_controller, ControlServiceStatus};
+    use super::{
+        is_controller_collection, is_playstation_controller, ControlServiceStatus, FallbackHotkey,
+    };
     use std::ffi::c_void;
     use std::mem::{size_of, MaybeUninit};
     use std::path::Path;
     use std::ptr::null_mut;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::mpsc::SyncSender;
     use std::sync::{Arc, RwLock};
     use std::thread;
@@ -296,7 +438,6 @@ mod windows {
     const MOD_ALT: u32 = 0x0001;
     const MOD_CONTROL: u32 = 0x0002;
     const MOD_NOREPEAT: u32 = 0x4000;
-    const VK_N: u32 = 0x4e;
     const VK_F12: u32 = 0x7b;
     const RETURN_HOTKEY_ID: i32 = 0x4e58;
     const EMERGENCY_HOTKEY_ID: i32 = 0x4e59;
@@ -397,9 +538,16 @@ mod windows {
         enabled: Arc<AtomicBool>,
         game_mode: Arc<AtomicBool>,
         latest: Arc<RwLock<ControlServiceStatus>>,
+        fallback_hotkey: Arc<RwLock<FallbackHotkey>>,
+        hotkey_generation: Arc<AtomicU64>,
         started: SyncSender<Result<(), String>>,
     ) {
-        let modifiers = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
+        let mut current_hotkey = fallback_hotkey
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let mut observed_hotkey_generation = hotkey_generation.load(Ordering::Acquire);
+        let emergency_modifiers = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
         let message_queue_ready = unsafe {
             let mut message = MaybeUninit::<Message>::zeroed();
             PeekMessageW(message.as_mut_ptr(), null_mut(), 0, 0, PM_REMOVE)
@@ -407,19 +555,27 @@ mod windows {
         let _ = message_queue_ready;
 
         let return_registered = unsafe {
-            RegisterHotKey(null_mut(), RETURN_HOTKEY_ID, modifiers, VK_N) != 0
+            RegisterHotKey(
+                null_mut(),
+                RETURN_HOTKEY_ID,
+                current_hotkey.modifiers,
+                current_hotkey.virtual_key,
+            ) != 0
         };
         if !return_registered {
             fail_startup(
                 &latest,
                 &started,
-                "Skrót Ctrl+Alt+N jest już zajęty. Usługa pozostała wyłączona.",
+                &format!(
+                    "Skrót {} jest już zajęty. Usługa pozostała wyłączona.",
+                    current_hotkey.label
+                ),
             );
             return;
         }
 
         let emergency_registered = unsafe {
-            RegisterHotKey(null_mut(), EMERGENCY_HOTKEY_ID, modifiers, VK_F12) != 0
+            RegisterHotKey(null_mut(), EMERGENCY_HOTKEY_ID, emergency_modifiers, VK_F12) != 0
         };
         if !emergency_registered {
             unsafe { UnregisterHotKey(null_mut(), RETURN_HOTKEY_ID) };
@@ -453,6 +609,7 @@ mod windows {
                     (None, Some(error))
                 }
             };
+        let gamepad_started_at = gamepad_home.as_ref().map(|_| Instant::now());
         let mut status = ControlServiceStatus {
             windows: true,
             running: true,
@@ -461,14 +618,21 @@ mod windows {
             playstation_controller_count: playstation_count,
             foreground_process: foreground_process_name(),
             return_hotkey_registered: true,
+            fallback_hotkey: current_hotkey.label.clone(),
             gamepad_home_running: gamepad_home.is_some(),
             gamepad_home_device_count: 0,
             gamepad_home_last_combo_at_ms: None,
             gamepad_home_last_error: None,
+            gamepad_home_warning: None,
+            gamepad_home_devices: Vec::new(),
+            gamepad_home_duplicate_reports: 0,
+            gamepad_home_reconnects: 0,
+            gamepad_home_last_report_at_ms: None,
+            gamepad_home_last_chord: None,
             last_error: None,
         };
         status.gamepad_home_last_error = gamepad_start_error
-            .map(|error| format!("{error} Działa powrót Ctrl+Alt+N."));
+            .map(|error| format!("{error} Działa powrót {}.", current_hotkey.label));
         write_status(&latest, status.clone());
         publish_status(&app, &status);
         let _ = started.send(Ok(()));
@@ -478,6 +642,71 @@ mod windows {
         let mut last_refresh = Instant::now();
 
         while enabled.load(Ordering::Acquire) {
+            let requested_generation = hotkey_generation.load(Ordering::Acquire);
+            if requested_generation != observed_hotkey_generation {
+                observed_hotkey_generation = requested_generation;
+                let requested = fallback_hotkey
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone();
+                if observed_game_mode {
+                    // The key is released in game mode; the new preset is
+                    // registered when gaming ends.
+                    current_hotkey = requested;
+                } else {
+                    if return_key_registered {
+                        unsafe { UnregisterHotKey(null_mut(), RETURN_HOTKEY_ID) };
+                    }
+                    let registered = unsafe {
+                        RegisterHotKey(
+                            null_mut(),
+                            RETURN_HOTKEY_ID,
+                            requested.modifiers,
+                            requested.virtual_key,
+                        ) != 0
+                    };
+                    if registered {
+                        current_hotkey = requested;
+                        return_key_registered = true;
+                        status.last_error = None;
+                    } else {
+                        let restored = unsafe {
+                            RegisterHotKey(
+                                null_mut(),
+                                RETURN_HOTKEY_ID,
+                                current_hotkey.modifiers,
+                                current_hotkey.virtual_key,
+                            ) != 0
+                        };
+                        if restored {
+                            return_key_registered = true;
+                            *fallback_hotkey
+                                .write()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                                current_hotkey.clone();
+                            status.last_error = Some(format!(
+                                "Nie udało się zarejestrować skrótu {}. Przywrócono {}.",
+                                requested.label, current_hotkey.label
+                            ));
+                        } else {
+                            return_key_registered = false;
+                            status.last_error = Some(format!(
+                                "Nie udało się zarejestrować skrótu {} ani przywrócić poprzedniego. Control Service wyłączono.",
+                                requested.label
+                            ));
+                            write_status(&latest, status.clone());
+                            publish_status(&app, &status);
+                            enabled.store(false, Ordering::Release);
+                            break;
+                        }
+                    }
+                }
+                status.fallback_hotkey = current_hotkey.label.clone();
+                status.return_hotkey_registered = return_key_registered;
+                write_status(&latest, status.clone());
+                publish_status(&app, &status);
+            }
+
             let current_game_mode = game_mode.load(Ordering::Acquire);
             if current_game_mode != observed_game_mode {
                 if current_game_mode {
@@ -493,13 +722,23 @@ mod windows {
                     }
                     return_key_registered = false;
                 } else {
+                    current_hotkey = fallback_hotkey
+                        .read()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone();
                     let registered = unsafe {
-                        RegisterHotKey(null_mut(), RETURN_HOTKEY_ID, modifiers, VK_N) != 0
+                        RegisterHotKey(
+                            null_mut(),
+                            RETURN_HOTKEY_ID,
+                            current_hotkey.modifiers,
+                            current_hotkey.virtual_key,
+                        ) != 0
                     };
                     if !registered {
-                        status.last_error = Some(
-                            "Skrót Ctrl+Alt+N został zajęty; Control Service wyłączono.".into(),
-                        );
+                        status.last_error = Some(format!(
+                            "Skrót {} został zajęty; Control Service wyłączono.",
+                            current_hotkey.label
+                        ));
                         write_status(&latest, status.clone());
                         publish_status(&app, &status);
                         enabled.store(false, Ordering::Release);
@@ -510,6 +749,7 @@ mod windows {
                 observed_game_mode = current_game_mode;
                 status.game_mode = current_game_mode;
                 status.return_hotkey_registered = return_key_registered;
+                status.fallback_hotkey = current_hotkey.label.clone();
                 write_status(&latest, status.clone());
                 publish_status(&app, &status);
             }
@@ -566,6 +806,8 @@ mod windows {
                         status.foreground_process = foreground_process_name();
                         status.game_mode = observed_game_mode;
                         status.return_hotkey_registered = return_key_registered;
+                        status.fallback_hotkey = current_hotkey.label.clone();
+                        status.gamepad_home_warning = None;
                         if let Some(runtime) = gamepad_home.as_mut() {
                             runtime.refresh_devices();
                             let gamepad = runtime.status(true);
@@ -573,6 +815,18 @@ mod windows {
                             status.gamepad_home_device_count = gamepad.device_count;
                             status.gamepad_home_last_combo_at_ms = gamepad.last_combo_at_ms;
                             status.gamepad_home_last_error = gamepad.last_error;
+                            status.gamepad_home_devices = gamepad.devices;
+                            status.gamepad_home_duplicate_reports = gamepad.duplicate_reports;
+                            status.gamepad_home_reconnects = gamepad.reconnects;
+                            status.gamepad_home_last_report_at_ms = gamepad.last_report_at_ms;
+                            status.gamepad_home_last_chord = gamepad.last_chord;
+                            status.gamepad_home_warning = super::input_isolation_warning(
+                                status.playstation_controller_count,
+                                gamepad.device_count,
+                                gamepad_started_at
+                                    .map(|started| started.elapsed().as_millis() as u64)
+                                    .unwrap_or(0),
+                            );
                         }
                         status.last_error = None;
                         write_status(&latest, status.clone());
@@ -589,7 +843,7 @@ mod windows {
                 }
                 last_refresh = Instant::now();
             }
-            thread::sleep(Duration::from_millis(25));
+            thread::sleep(Duration::from_millis(40));
         }
 
         unsafe {
@@ -607,6 +861,12 @@ mod windows {
         status.gamepad_home_running = false;
         status.gamepad_home_device_count = 0;
         status.gamepad_home_last_combo_at_ms = None;
+        status.gamepad_home_warning = None;
+        status.gamepad_home_devices.clear();
+        status.gamepad_home_duplicate_reports = 0;
+        status.gamepad_home_reconnects = 0;
+        status.gamepad_home_last_report_at_ms = None;
+        status.gamepad_home_last_chord = None;
         write_status(&latest, status.clone());
         publish_status(&app, &status);
     }
@@ -732,7 +992,10 @@ mod windows {
 
 #[cfg(test)]
 mod tests {
-    use super::{ControlService, ControlServiceStatus};
+    use super::{
+        available_fallback_hotkeys, default_fallback_hotkey, fallback_hotkey_preset,
+        input_isolation_warning, ControlService, ControlServiceStatus, INPUT_ISOLATION_AFTER_MS,
+    };
 
     #[test]
     fn service_is_disabled_by_default() {
@@ -772,6 +1035,34 @@ mod tests {
         assert!(super::is_controller_collection(0x01, 0x05));
         assert!(!super::is_controller_collection(0x01, 0x02));
         assert!(!super::is_controller_collection(0x0c, 0x05));
+    }
+
+    #[test]
+    fn fallback_hotkey_presets_are_allowlisted_and_never_accept_raw_keys() {
+        let defaults = default_fallback_hotkey();
+        assert_eq!(defaults.id, "ctrlAltN");
+        assert!(defaults.modifiers & 0x4000 != 0, "MOD_NOREPEAT must be set");
+        assert_eq!(available_fallback_hotkeys().len(), 3);
+        assert!(fallback_hotkey_preset("ctrlShiftN").is_some());
+        assert!(fallback_hotkey_preset("win+anything").is_none());
+        assert!(fallback_hotkey_preset("").is_none());
+        assert!(super::ControlService::default()
+            .set_fallback_hotkey("not-a-preset")
+            .is_err());
+        let service = ControlService::default();
+        let status = service.set_fallback_hotkey("altShiftN").unwrap();
+        assert_eq!(status.fallback_hotkey, "Alt+Shift+N");
+    }
+
+    #[test]
+    fn input_isolation_warning_is_delayed_and_never_claims_a_root_cause() {
+        assert!(input_isolation_warning(1, 0, INPUT_ISOLATION_AFTER_MS - 1).is_none());
+        assert!(input_isolation_warning(0, 0, INPUT_ISOLATION_AFTER_MS).is_none());
+        assert!(input_isolation_warning(1, 1, INPUT_ISOLATION_AFTER_MS).is_none());
+        let warning = input_isolation_warning(1, 0, INPUT_ISOLATION_AFTER_MS).unwrap();
+        assert!(warning.contains("Steam Input"));
+        assert!(warning.contains("Raw Input"));
+        assert!(warning.contains("Skrót klawiaturowy"));
     }
 
     #[test]

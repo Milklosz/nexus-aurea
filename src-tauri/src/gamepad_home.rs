@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 #[cfg(target_os = "windows")]
-use std::collections::HashSet;
-#[cfg(target_os = "windows")]
 use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(target_os = "windows")]
 use tauri::{AppHandle, Emitter};
@@ -16,12 +14,71 @@ pub(crate) const WM_INPUT_DEVICE_CHANGE_MESSAGE: u32 = 0x00fe;
 pub(crate) const CHORD_WINDOW_MS: u64 = 250;
 pub(crate) const COMBO_COOLDOWN_MS: u64 = 750;
 pub(crate) const DEVICE_STALE_MS: u64 = 5_000;
+pub(crate) const DUPLICATE_REPORT_WINDOW_MS: u64 = 8;
+pub(crate) const MAX_TRACKED_DEVICES: usize = 8;
+
+/// How Windows exposes the device interface. A path that does not say
+/// `usb` or Bluetooth is reported as unknown instead of being guessed from
+/// the Sony VID/PID pair.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DualSenseConnection {
+    Usb,
+    Bluetooth,
+    #[default]
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DualSenseModel {
+    DualSense,
+    DualSenseEdge,
+    #[default]
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChordOutcome {
+    Triggered,
+    Armed,
+    Cooldown,
+    Latched,
+    Released,
+    RejectedWindow,
+    Ignored,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChordDiagnostic {
+    pub outcome: ChordOutcome,
+    pub at_ms: u64,
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DualSenseButtons {
     pub ps: bool,
     pub options: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GamepadDeviceInfo {
+    /// Stable 16-hex FNV-1a label. The raw Windows device path is never
+    /// serialized.
+    pub id: String,
+    pub model: DualSenseModel,
+    pub connection: DualSenseConnection,
+    pub connected_at_ms: u64,
+    pub last_report_at_ms: Option<u64>,
+    pub report_count: u64,
+    pub last_chord_at_ms: Option<u64>,
+    /// Windows arrival notifications observed after this device was seen.
+    /// This is not proof of a physical cable/radio reconnect.
+    pub reconnect_count: u32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,6 +90,19 @@ pub struct GamepadHomeStatus {
     pub last_combo_at_ms: Option<u64>,
     pub last_error: Option<String>,
     pub fallback: Option<String>,
+    #[serde(default)]
+    pub devices: Vec<GamepadDeviceInfo>,
+    #[serde(default)]
+    pub last_report_at_ms: Option<u64>,
+    #[serde(default)]
+    pub duplicate_reports: u64,
+    /// Observed arrival notifications, not verified physical reconnects.
+    #[serde(default)]
+    pub reconnects: u64,
+    /// Most recent non-neutral chord transition. `ignored` reports do not
+    /// overwrite this value.
+    #[serde(default)]
+    pub last_chord: Option<ChordDiagnostic>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,6 +116,72 @@ pub struct GamepadHomeEvent {
 pub(crate) fn is_dualsense_device_path(path: &str) -> bool {
     let path = path.to_ascii_lowercase();
     path.contains("vid_054c") && (path.contains("pid_0ce6") || path.contains("pid_0df2"))
+}
+
+/// Windows exposes Bluetooth HID interfaces through BTHENUM/BTHLEDEVICE
+/// paths. Some paths only carry the HID-over-GATT service UUID instead.
+const BLUETOOTH_PATH_MARKERS: [&str; 5] = [
+    "bthenum",
+    "bthled",
+    "bluetooth",
+    "00001124-0000-1000-8000-00805f9b34fb",
+    "00001812-0000-1000-8000-00805f9b34fb",
+];
+
+fn path_pid(path: &str) -> Option<u16> {
+    let lower = path.to_ascii_lowercase();
+    let start = lower.find("pid_")?.checked_add(4)?;
+    let end = start.checked_add(4)?;
+    let digits = lower.get(start..end)?;
+    if !digits.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || lower
+            .as_bytes()
+            .get(end)
+            .is_some_and(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    u16::from_str_radix(digits, 16).ok()
+}
+
+pub(crate) fn dualsense_connection(path: &str) -> DualSenseConnection {
+    let lower = path.to_ascii_lowercase();
+    if BLUETOOTH_PATH_MARKERS
+        .iter()
+        .any(|marker| lower.contains(marker))
+    {
+        return DualSenseConnection::Bluetooth;
+    }
+    if lower.contains("usb") {
+        return DualSenseConnection::Usb;
+    }
+    DualSenseConnection::Unknown
+}
+
+pub(crate) fn dualsense_model(path: &str) -> DualSenseModel {
+    match path_pid(path) {
+        Some(0x0df2) => DualSenseModel::DualSenseEdge,
+        Some(0x0ce6) => DualSenseModel::DualSense,
+        _ => DualSenseModel::Unknown,
+    }
+}
+
+fn fnv1a_64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+/// The public diagnostics surface must not leak the raw device interface
+/// path. Windows paths are case-insensitive, so the label hashes a normalized
+/// (lowercase, extension-prefix-free) path with FNV-1a 64.
+pub(crate) fn device_label(path: &str) -> String {
+    let trimmed = path.trim().trim_end_matches('\0').to_ascii_lowercase();
+    let normalized = trimmed.strip_prefix(r"\\?\").unwrap_or(&trimmed);
+    format!("{:016x}", fnv1a_64(normalized.as_bytes()))
 }
 
 fn crc32_update(mut crc: u32, bytes: &[u8]) -> u32 {
@@ -93,7 +229,9 @@ pub(crate) fn parse_dualsense_report(report: &[u8]) -> Option<DualSenseButtons> 
         _ => return None,
     };
     Some(DualSenseButtons {
-        options: report.get(options_byte).is_some_and(|byte| byte & 0x20 != 0),
+        options: report
+            .get(options_byte)
+            .is_some_and(|byte| byte & 0x20 != 0),
         ps: report.get(ps_byte).is_some_and(|byte| byte & 0x01 != 0),
     })
 }
@@ -118,13 +256,36 @@ impl ComboTracker {
     /// Returns true exactly once per PS + Options press. Both buttons must be
     /// pressed within `CHORD_WINDOW_MS`, either may be first, and both must be
     /// released before another chord can trigger.
+    #[cfg(test)]
     pub(crate) fn observe(&mut self, device: &str, buttons: DualSenseButtons, at_ms: u64) -> bool {
+        self.observe_diagnostic(device, buttons, at_ms).0
+    }
+
+    /// Same trigger semantics as `observe`, with the reason attached so the
+    /// Control Service can explain why a chord did or did not fire.
+    pub(crate) fn observe_diagnostic(
+        &mut self,
+        device: &str,
+        buttons: DualSenseButtons,
+        at_ms: u64,
+    ) -> (bool, ChordOutcome) {
+        if !self.devices.contains_key(device) && self.devices.len() >= MAX_TRACKED_DEVICES {
+            let oldest = self
+                .devices
+                .iter()
+                .min_by_key(|(_, state)| state.last_seen_ms)
+                .map(|(id, _)| id.clone());
+            if let Some(oldest) = oldest {
+                self.devices.remove(&oldest);
+            }
+        }
         let state = self.devices.entry(device.to_string()).or_default();
         if at_ms.saturating_sub(state.last_seen_ms) > DEVICE_STALE_MS {
             *state = DeviceChord::default();
         }
         state.last_seen_ms = at_ms;
 
+        let was_pressed = state.ps || state.options;
         let ps_rising = buttons.ps && !state.ps;
         let options_rising = buttons.options && !state.options;
         state.ps = buttons.ps;
@@ -141,27 +302,48 @@ impl ComboTracker {
         }
         if !buttons.ps && !buttons.options {
             state.latched = false;
+            return (
+                false,
+                if was_pressed {
+                    ChordOutcome::Released
+                } else {
+                    ChordOutcome::Ignored
+                },
+            );
         }
-        if state.latched || !(ps_rising || options_rising) || !(buttons.ps && buttons.options) {
-            return false;
+        if state.latched {
+            return (false, ChordOutcome::Latched);
+        }
+        if !(ps_rising || options_rising) {
+            return (
+                false,
+                if buttons.ps ^ buttons.options {
+                    ChordOutcome::Armed
+                } else {
+                    ChordOutcome::Ignored
+                },
+            );
+        }
+        if !(buttons.ps && buttons.options) {
+            return (false, ChordOutcome::Armed);
         }
         let (Some(ps_at), Some(options_at)) = (state.ps_pressed_at_ms, state.options_pressed_at_ms)
         else {
-            return false;
+            return (false, ChordOutcome::Ignored);
         };
         if ps_at.abs_diff(options_at) > CHORD_WINDOW_MS {
-            return false;
+            return (false, ChordOutcome::RejectedWindow);
         }
         if self
             .last_trigger_ms
             .is_some_and(|last| at_ms.saturating_sub(last) < COMBO_COOLDOWN_MS)
         {
             state.latched = true;
-            return false;
+            return (false, ChordOutcome::Cooldown);
         }
         state.latched = true;
         self.last_trigger_ms = Some(at_ms);
-        true
+        (true, ChordOutcome::Triggered)
     }
 
     pub(crate) fn remove_device(&mut self, device: &str) {
@@ -169,15 +351,338 @@ impl ComboTracker {
     }
 
     pub(crate) fn prune(&mut self, at_ms: u64) -> usize {
-        self.devices.retain(|_, state| {
-            at_ms.saturating_sub(state.last_seen_ms) <= DEVICE_STALE_MS
-        });
+        self.devices
+            .retain(|_, state| at_ms.saturating_sub(state.last_seen_ms) <= DEVICE_STALE_MS);
         self.devices.len()
     }
 
     #[cfg(test)]
     pub(crate) fn device_count(&self) -> usize {
         self.devices.len()
+    }
+}
+
+const MAX_DEVICE_HISTORY: usize = 16;
+/// Suppresses duplicate arrival notifications from Windows without preventing
+/// a real unplug/replug (which produces a removal and is tracked through the
+/// removal history) from incrementing the counter.
+const RECONNECT_ARRIVAL_DEDUP_MS: u64 = 1_000;
+
+#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ReportRecord {
+    Accepted(String),
+    Duplicate,
+}
+
+#[derive(Clone, Debug, Default)]
+struct DeviceHistory {
+    reconnect_count: u32,
+    last_seen_ms: u64,
+}
+
+#[derive(Clone, Debug)]
+struct DeviceRecord {
+    id: Option<String>,
+    model: DualSenseModel,
+    connection: DualSenseConnection,
+    connected_at_ms: u64,
+    last_report_at_ms: Option<u64>,
+    report_count: u64,
+    last_chord_at_ms: Option<u64>,
+    reconnect_count: u32,
+    last_arrival_ms: Option<u64>,
+    last_activity_ms: u64,
+    last_report_bytes: Option<Vec<u8>>,
+}
+
+impl DeviceRecord {
+    fn new(at_ms: u64) -> Self {
+        Self {
+            id: None,
+            model: DualSenseModel::Unknown,
+            connection: DualSenseConnection::Unknown,
+            connected_at_ms: at_ms,
+            last_report_at_ms: None,
+            report_count: 0,
+            last_chord_at_ms: None,
+            reconnect_count: 0,
+            last_arrival_ms: None,
+            last_activity_ms: at_ms,
+            last_report_bytes: None,
+        }
+    }
+}
+
+/// Pure device/connection bookkeeping used by the Windows runtime. Keeping it
+/// free of Win32 calls allows reconnect, pruning and report de-duplication to
+/// be tested on macOS.
+#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+#[derive(Default)]
+pub(crate) struct DeviceBookkeeping {
+    devices: HashMap<usize, DeviceRecord>,
+    history: HashMap<String, DeviceHistory>,
+    duplicate_reports: u64,
+    reconnects: u64,
+    last_report_at_ms: Option<u64>,
+    last_arrival_ms: Option<u64>,
+}
+
+#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+impl DeviceBookkeeping {
+    fn remember(&mut self, id: &str, reconnect_count: u32, at_ms: u64) {
+        if !self.history.contains_key(id) && self.history.len() >= MAX_DEVICE_HISTORY {
+            let oldest = self
+                .history
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_seen_ms)
+                .map(|(id, _)| id.clone());
+            if let Some(oldest) = oldest {
+                self.history.remove(&oldest);
+            }
+        }
+        let entry = self.history.entry(id.to_string()).or_default();
+        entry.reconnect_count = entry.reconnect_count.max(reconnect_count);
+        entry.last_seen_ms = at_ms;
+    }
+
+    fn drop_record(&mut self, record: DeviceRecord, at_ms: u64) {
+        if let Some(id) = record.id {
+            self.remember(&id, record.reconnect_count, at_ms);
+        }
+    }
+
+    fn prune_stale(&mut self, at_ms: u64) -> usize {
+        let stale: Vec<usize> = self
+            .devices
+            .iter()
+            .filter(|(_, record)| at_ms.saturating_sub(record.last_activity_ms) > DEVICE_STALE_MS)
+            .map(|(device, _)| *device)
+            .collect();
+        for device in stale {
+            if let Some(record) = self.devices.remove(&device) {
+                self.drop_record(record, at_ms);
+            }
+        }
+        self.devices.len()
+    }
+
+    fn reserve_slot(&mut self, at_ms: u64) {
+        if self.devices.len() < MAX_TRACKED_DEVICES {
+            return;
+        }
+        self.prune_stale(at_ms);
+        while self.devices.len() >= MAX_TRACKED_DEVICES {
+            let oldest = self
+                .devices
+                .iter()
+                .min_by_key(|(_, record)| record.last_activity_ms)
+                .map(|(device, _)| *device);
+            let Some(oldest) = oldest else {
+                break;
+            };
+            if let Some(record) = self.devices.remove(&oldest) {
+                self.drop_record(record, at_ms);
+            }
+        }
+    }
+
+    /// Windows reported a device arrival. The cached path and report sample
+    /// are discarded so the next report resolves identity again.
+    pub(crate) fn arrival(&mut self, device: usize, at_ms: u64) -> Option<String> {
+        self.last_arrival_ms = Some(at_ms);
+        if !self.devices.contains_key(&device) {
+            self.reserve_slot(at_ms);
+            let mut record = DeviceRecord::new(at_ms);
+            record.last_arrival_ms = Some(at_ms);
+            self.devices.insert(device, record);
+            return None;
+        }
+        let (id, reconnected) = {
+            let record = self.devices.get_mut(&device).expect("device was inserted");
+            let duplicate_arrival = record.last_arrival_ms.is_some_and(|previous| {
+                at_ms.saturating_sub(previous) < RECONNECT_ARRIVAL_DEDUP_MS
+            });
+            let established = record.report_count > 0;
+            let id = record.id.clone();
+            record.last_report_bytes = None;
+            record.last_activity_ms = at_ms;
+            record.last_arrival_ms = Some(at_ms);
+            let reconnected = established && !duplicate_arrival;
+            if reconnected {
+                record.reconnect_count = record.reconnect_count.saturating_add(1);
+                record.connected_at_ms = at_ms;
+            }
+            (id, reconnected)
+        };
+        if reconnected {
+            self.reconnects = self.reconnects.saturating_add(1);
+        }
+        id
+    }
+
+    /// Removes a device and preserves its reconnect count for the next
+    /// arrival. Removal is idempotent.
+    pub(crate) fn remove(&mut self, device: usize, at_ms: u64) -> Option<String> {
+        let record = self.devices.remove(&device)?;
+        let id = record.id.clone();
+        if let Some(id) = &id {
+            self.remember(id, record.reconnect_count, at_ms);
+        }
+        id
+    }
+
+    pub(crate) fn note_report(
+        &mut self,
+        device: usize,
+        path: &str,
+        report: &[u8],
+        at_ms: u64,
+    ) -> ReportRecord {
+        if !self.devices.contains_key(&device) {
+            self.reserve_slot(at_ms);
+            self.devices.insert(device, DeviceRecord::new(at_ms));
+        }
+
+        let id = device_label(path);
+        let needs_resolution = self
+            .devices
+            .get(&device)
+            .map_or(true, |record| record.id.as_deref() != Some(id.as_str()));
+        if needs_resolution {
+            let previous_id = self
+                .devices
+                .get(&device)
+                .and_then(|record| record.id.clone());
+            let had_identity = previous_id.is_some();
+            if let Some(previous_id) = previous_id.as_deref() {
+                let previous_count = self
+                    .devices
+                    .get(&device)
+                    .map_or(0, |record| record.reconnect_count);
+                self.remember(previous_id, previous_count, at_ms);
+            }
+            let history = self.history.remove(&id);
+            let reconnected = {
+                let record = self.devices.get_mut(&device).expect("device was inserted");
+                record.id = Some(id);
+                record.model = dualsense_model(path);
+                record.connection = dualsense_connection(path);
+                if had_identity {
+                    // A new identity on a reused handle starts a new
+                    // connection. A pending arrival already supplied the
+                    // connection timestamp.
+                    record.connected_at_ms = at_ms;
+                }
+                record.last_report_at_ms = None;
+                record.last_report_bytes = None;
+                record.last_chord_at_ms = None;
+                match history {
+                    Some(history) => {
+                        record.reconnect_count = history.reconnect_count.saturating_add(1);
+                        true
+                    }
+                    None => {
+                        record.reconnect_count = 0;
+                        false
+                    }
+                }
+            };
+            if reconnected {
+                self.reconnects = self.reconnects.saturating_add(1);
+            }
+        }
+
+        let (duplicate, id) = {
+            let record = self.devices.get_mut(&device).expect("device was inserted");
+            let duplicate = record.last_report_bytes.as_deref() == Some(report)
+                && record.last_report_at_ms.is_some_and(|previous| {
+                    at_ms.saturating_sub(previous) < DUPLICATE_REPORT_WINDOW_MS
+                });
+            if duplicate {
+                record.last_activity_ms = at_ms;
+            } else {
+                // Reuse the bounded sample buffer instead of allocating for
+                // every 250 Hz report.
+                match record.last_report_bytes.as_mut() {
+                    Some(buffer) => {
+                        buffer.clear();
+                        buffer.extend_from_slice(report);
+                    }
+                    None => record.last_report_bytes = Some(report.to_vec()),
+                }
+                record.last_report_at_ms = Some(at_ms);
+                record.report_count = record.report_count.saturating_add(1);
+                record.last_activity_ms = at_ms;
+            }
+            (duplicate, record.id.clone().expect("identity was resolved"))
+        };
+
+        if duplicate {
+            self.duplicate_reports = self.duplicate_reports.saturating_add(1);
+            return ReportRecord::Duplicate;
+        }
+        self.last_report_at_ms = Some(
+            self.last_report_at_ms
+                .map_or(at_ms, |previous| previous.max(at_ms)),
+        );
+        ReportRecord::Accepted(id)
+    }
+
+    pub(crate) fn note_chord(&mut self, device: usize, at_ms: u64) {
+        if let Some(record) = self.devices.get_mut(&device) {
+            record.last_chord_at_ms = Some(at_ms);
+        }
+    }
+
+    pub(crate) fn prune(&mut self, at_ms: u64) -> usize {
+        self.prune_stale(at_ms)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn device_count(&self) -> usize {
+        self.devices
+            .values()
+            .filter(|record| record.id.is_some())
+            .count()
+    }
+
+    pub(crate) fn devices(&self) -> Vec<GamepadDeviceInfo> {
+        let mut devices: Vec<GamepadDeviceInfo> = self
+            .devices
+            .values()
+            .filter_map(|record| {
+                Some(GamepadDeviceInfo {
+                    id: record.id.clone()?,
+                    model: record.model,
+                    connection: record.connection,
+                    connected_at_ms: record.connected_at_ms,
+                    last_report_at_ms: record.last_report_at_ms,
+                    report_count: record.report_count,
+                    last_chord_at_ms: record.last_chord_at_ms,
+                    reconnect_count: record.reconnect_count,
+                })
+            })
+            .collect();
+        devices.sort_by(|left, right| left.id.cmp(&right.id));
+        devices
+    }
+
+    pub(crate) fn last_report_at_ms(&self) -> Option<u64> {
+        self.last_report_at_ms
+    }
+
+    pub(crate) fn duplicate_reports(&self) -> u64 {
+        self.duplicate_reports
+    }
+
+    pub(crate) fn reconnects(&self) -> u64 {
+        self.reconnects
+    }
+
+    #[cfg(test)]
+    pub(crate) fn last_arrival_ms(&self) -> Option<u64> {
+        self.last_arrival_ms
     }
 }
 
@@ -190,13 +695,16 @@ fn now_ms() -> u64 {
 }
 
 #[cfg(target_os = "windows")]
+const MAX_PATH_CACHE: usize = 32;
+
+#[cfg(target_os = "windows")]
 pub(crate) struct GamepadHomeRuntime {
     window: native::Hwnd,
     tracker: ComboTracker,
-    devices: HashSet<usize>,
+    bookkeeping: DeviceBookkeeping,
     device_paths: HashMap<usize, Option<String>>,
-    device_seen_ms: HashMap<usize, u64>,
     last_combo_at_ms: Option<u64>,
+    last_chord: Option<ChordDiagnostic>,
     last_error: Option<String>,
 }
 
@@ -211,10 +719,10 @@ impl GamepadHomeRuntime {
         Ok(Self {
             window,
             tracker: ComboTracker::default(),
-            devices: HashSet::new(),
+            bookkeeping: DeviceBookkeeping::default(),
             device_paths: HashMap::new(),
-            device_seen_ms: HashMap::new(),
             last_combo_at_ms: None,
+            last_chord: None,
             last_error: None,
         })
     }
@@ -233,13 +741,18 @@ impl GamepadHomeRuntime {
         }
         if message == native::WM_INPUT_DEVICE_CHANGE {
             let device = l_param as usize;
-            if w_param == native::GIDC_REMOVAL {
-                let key = self.device_key(device);
-                self.devices.remove(&device);
+            let at_ms = now_ms();
+            if w_param == native::GIDC_ARRIVAL {
+                // The next report must resolve the path again. Any chord
+                // state from the previous connection is stale.
                 self.device_paths.remove(&device);
-                self.device_seen_ms.remove(&device);
-                if let Some(key) = key {
-                    self.tracker.remove_device(&key);
+                if let Some(id) = self.bookkeeping.arrival(device, at_ms) {
+                    self.tracker.remove_device(&id);
+                }
+            } else if w_param == native::GIDC_REMOVAL {
+                self.device_paths.remove(&device);
+                if let Some(id) = self.bookkeeping.remove(device, at_ms) {
+                    self.tracker.remove_device(&id);
                 }
             }
             return false;
@@ -257,18 +770,7 @@ impl GamepadHomeRuntime {
             let Some(device) = report.device else {
                 continue;
             };
-            let cached = self.device_paths.get(&device).cloned().flatten();
-            let path = match cached {
-                Some(path) => Some(path),
-                None => {
-                    // A transient device-info failure must not poison the cache
-                    // until physical reconnect.
-                    let path = native::device_path(device);
-                    self.device_paths.insert(device, path.clone());
-                    path
-                }
-            };
-            let Some(path) = path else {
+            let Some(path) = self.resolve_device_path(device) else {
                 continue;
             };
             if !is_dualsense_device_path(&path) {
@@ -277,10 +779,19 @@ impl GamepadHomeRuntime {
             let Some(buttons) = parse_dualsense_report(&report.data) else {
                 continue;
             };
-            self.devices.insert(device);
-            self.device_seen_ms.insert(device, at_ms);
-            if self.tracker.observe(&path, buttons, at_ms) {
+            let ReportRecord::Accepted(id) =
+                self.bookkeeping
+                    .note_report(device, &path, &report.data, at_ms)
+            else {
+                continue;
+            };
+            let (triggered_now, outcome) = self.tracker.observe_diagnostic(&id, buttons, at_ms);
+            if outcome != ChordOutcome::Ignored {
+                self.last_chord = Some(ChordDiagnostic { outcome, at_ms });
+            }
+            if triggered_now {
                 self.last_combo_at_ms = Some(at_ms);
+                self.bookkeeping.note_chord(device, at_ms);
                 triggered = true;
                 let result = session_orchestrator::return_home(app, TransitionCause::GamepadHome);
                 self.last_error = result.as_ref().err().map(|error| error.message.clone());
@@ -295,34 +806,47 @@ impl GamepadHomeRuntime {
         triggered
     }
 
-    fn device_key(&self, device: usize) -> Option<String> {
-        self.device_paths.get(&device).cloned().flatten()
+    fn resolve_device_path(&mut self, device: usize) -> Option<String> {
+        match self.device_paths.get(&device) {
+            Some(Some(path)) => return Some(path.clone()),
+            Some(None) => {
+                // A transient device-info failure must not poison the cache
+                // until physical reconnect.
+            }
+            None => {}
+        }
+        let path = native::device_path(device);
+        if self.device_paths.len() >= MAX_PATH_CACHE {
+            self.device_paths.clear();
+        }
+        self.device_paths.insert(device, path.clone());
+        path
     }
 
     pub(crate) fn status(&self, running: bool) -> GamepadHomeStatus {
+        let devices = self.bookkeeping.devices();
         GamepadHomeStatus {
             windows: true,
             running,
-            device_count: self.devices.len(),
+            device_count: devices.len(),
             last_combo_at_ms: self.last_combo_at_ms,
             last_error: self.last_error.clone(),
             fallback: Some(
-                "Gdy DualSense nie jest widoczny lub Windows odmówi fokusu, użyj Ctrl+Alt+N."
+                "Gdy DualSense nie jest widoczny lub Windows odmówi fokusu, użyj skonfigurowanego skrótu powrotu."
                     .into(),
             ),
+            devices,
+            last_report_at_ms: self.bookkeeping.last_report_at_ms(),
+            duplicate_reports: self.bookkeeping.duplicate_reports(),
+            reconnects: self.bookkeeping.reconnects(),
+            last_chord: self.last_chord,
         }
     }
 
     pub(crate) fn refresh_devices(&mut self) {
         let at_ms = now_ms();
+        self.bookkeeping.prune(at_ms);
         self.tracker.prune(at_ms);
-        self.devices.retain(|device| {
-            self.device_paths.get(device).is_some_and(Option::is_some)
-                && self
-                    .device_seen_ms
-                    .get(device)
-                    .is_some_and(|seen| at_ms.saturating_sub(*seen) <= DEVICE_STALE_MS)
-        });
     }
 }
 
@@ -346,7 +870,8 @@ mod native {
 
     pub(super) const WM_INPUT: u32 = 0x00ff;
     pub(super) const WM_INPUT_DEVICE_CHANGE: u32 = 0x00fe;
-    pub(super) const GIDC_REMOVAL: usize = 1;
+    pub(super) const GIDC_ARRIVAL: usize = 1;
+    pub(super) const GIDC_REMOVAL: usize = 2;
 
     const HTYPE_HID: u32 = 2;
     const RID_INPUT: u32 = 0x1000_0003;
@@ -429,11 +954,7 @@ mod native {
             data: *mut c_void,
             size: *mut u32,
         ) -> u32;
-        fn RegisterRawInputDevices(
-            devices: *const RawInputDevice,
-            count: u32,
-            size: u32,
-        ) -> i32;
+        fn RegisterRawInputDevices(devices: *const RawInputDevice, count: u32, size: u32) -> i32;
         fn GetLastError() -> u32;
         fn SetLastError(error: u32);
     }
@@ -682,9 +1203,24 @@ mod native {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_dualsense_device_path, parse_dualsense_report, ComboTracker, DualSenseButtons,
-        CHORD_WINDOW_MS, COMBO_COOLDOWN_MS, DEVICE_STALE_MS,
+        device_label, dualsense_connection, dualsense_model, fnv1a_64, is_dualsense_device_path,
+        parse_dualsense_report, ChordDiagnostic, ChordOutcome, ComboTracker, DeviceBookkeeping,
+        DualSenseButtons, DualSenseConnection, DualSenseModel, GamepadHomeStatus, ReportRecord,
+        CHORD_WINDOW_MS, COMBO_COOLDOWN_MS, DEVICE_STALE_MS, DUPLICATE_REPORT_WINDOW_MS,
+        MAX_TRACKED_DEVICES,
     };
+
+    const USB_PATH: &str =
+        r"\\?\USB#VID_054C&PID_0CE6#7&1a2b3c4d&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}";
+    const USB_EDGE_PATH: &str =
+        r"\\?\USB#VID_054C&PID_0DF2#8&5e6f7a8b&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}";
+    const BLUETOOTH_PATH: &str = r"\\?\BTHENUM#{00001124-0000-1000-8000-00805f9b34fb}_VID&0002054c_PID&0ce6#9&3c4d5e6f&0&0001";
+    const HID_PATH: &str =
+        r"\\?\HID#VID_054C&PID_0CE6#a&7b8c9d0e&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}";
+
+    fn buttons(ps: bool, options: bool) -> DualSenseButtons {
+        DualSenseButtons { ps, options }
+    }
 
     const USB_REPORT_LEN: usize = 64;
     const BT_FULL_REPORT_LEN: usize = 78;
@@ -722,30 +1258,33 @@ mod tests {
         assert!(is_dualsense_device_path(
             r"\\?\HID#VID_054C&PID_0CE6#8&2a4d5e6f&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}"
         ));
-        assert!(is_dualsense_device_path(
-            r"\\?\hid#vid_054c&pid_0df2#..."
-        ));
-        assert!(!is_dualsense_device_path(
-            r"\\?\HID#VID_054C&PID_05C4#..."
-        ));
-        assert!(!is_dualsense_device_path(
-            r"\\?\HID#VID_045E&PID_0B13#..."
-        ));
+        assert!(is_dualsense_device_path(r"\\?\hid#vid_054c&pid_0df2#..."));
+        assert!(!is_dualsense_device_path(r"\\?\HID#VID_054C&PID_05C4#..."));
+        assert!(!is_dualsense_device_path(r"\\?\HID#VID_045E&PID_0B13#..."));
     }
 
     #[test]
     fn parses_usb_ps_and_options_bits() {
         assert_eq!(
             parse_dualsense_report(&usb_report(true, true)),
-            Some(DualSenseButtons { ps: true, options: true })
+            Some(DualSenseButtons {
+                ps: true,
+                options: true
+            })
         );
         assert_eq!(
             parse_dualsense_report(&usb_report(false, true)),
-            Some(DualSenseButtons { ps: false, options: true })
+            Some(DualSenseButtons {
+                ps: false,
+                options: true
+            })
         );
         assert_eq!(
             parse_dualsense_report(&usb_report(true, false)),
-            Some(DualSenseButtons { ps: true, options: false })
+            Some(DualSenseButtons {
+                ps: true,
+                options: false
+            })
         );
     }
 
@@ -753,7 +1292,10 @@ mod tests {
     fn parses_bluetooth_full_report_with_valid_crc() {
         assert_eq!(
             parse_dualsense_report(&bt_full_report(true, true)),
-            Some(DualSenseButtons { ps: true, options: true })
+            Some(DualSenseButtons {
+                ps: true,
+                options: true
+            })
         );
         let mut corrupted = bt_full_report(true, true);
         corrupted[11] = 0;
@@ -771,7 +1313,10 @@ mod tests {
     fn parses_bluetooth_minimal_report() {
         assert_eq!(
             parse_dualsense_report(&bt_minimal_report(true, true)),
-            Some(DualSenseButtons { ps: true, options: true })
+            Some(DualSenseButtons {
+                ps: true,
+                options: true
+            })
         );
     }
 
@@ -790,43 +1335,89 @@ mod tests {
     #[test]
     fn chord_triggers_once_and_requires_release_before_repeat() {
         let mut tracker = ComboTracker::default();
-        assert!(!tracker.observe("pad", DualSenseButtons { ps: false, options: false }, 0));
-        assert!(tracker.observe("pad", DualSenseButtons { ps: true, options: true }, 100));
         assert!(!tracker.observe(
             "pad",
-            DualSenseButtons { ps: true, options: true },
+            DualSenseButtons {
+                ps: false,
+                options: false
+            },
+            0
+        ));
+        assert!(tracker.observe(
+            "pad",
+            DualSenseButtons {
+                ps: true,
+                options: true
+            },
+            100
+        ));
+        assert!(!tracker.observe(
+            "pad",
+            DualSenseButtons {
+                ps: true,
+                options: true
+            },
             120
         ));
         assert!(!tracker.observe(
             "pad",
-            DualSenseButtons { ps: false, options: false },
+            DualSenseButtons {
+                ps: false,
+                options: false
+            },
             200
         ));
         assert!(!tracker.observe(
             "pad",
-            DualSenseButtons { ps: true, options: true },
+            DualSenseButtons {
+                ps: true,
+                options: true
+            },
             300
         ));
         assert!(!tracker.observe(
             "pad",
-            DualSenseButtons { ps: true, options: true },
+            DualSenseButtons {
+                ps: true,
+                options: true
+            },
             320
         ));
         assert!(!tracker.observe(
             "pad",
-            DualSenseButtons { ps: false, options: false },
+            DualSenseButtons {
+                ps: false,
+                options: false
+            },
             400
         ));
-        assert!(tracker.observe("pad", DualSenseButtons { ps: true, options: true }, 2_000));
+        assert!(tracker.observe(
+            "pad",
+            DualSenseButtons {
+                ps: true,
+                options: true
+            },
+            2_000
+        ));
     }
 
     #[test]
     fn chord_rejects_a_button_held_before_the_window() {
         let mut tracker = ComboTracker::default();
-        assert!(!tracker.observe("pad", DualSenseButtons { ps: true, options: false }, 0));
         assert!(!tracker.observe(
             "pad",
-            DualSenseButtons { ps: true, options: true },
+            DualSenseButtons {
+                ps: true,
+                options: false
+            },
+            0
+        ));
+        assert!(!tracker.observe(
+            "pad",
+            DualSenseButtons {
+                ps: true,
+                options: true
+            },
             CHORD_WINDOW_MS + 1
         ));
     }
@@ -834,47 +1425,500 @@ mod tests {
     #[test]
     fn either_button_may_be_pressed_first_within_the_window() {
         let mut tracker = ComboTracker::default();
-        assert!(!tracker.observe("pad", DualSenseButtons { ps: false, options: true }, 0));
+        assert!(!tracker.observe(
+            "pad",
+            DualSenseButtons {
+                ps: false,
+                options: true
+            },
+            0
+        ));
         assert!(tracker.observe(
             "pad",
-            DualSenseButtons { ps: true, options: true },
+            DualSenseButtons {
+                ps: true,
+                options: true
+            },
             CHORD_WINDOW_MS
         ));
-        assert!(!tracker.observe("pad", DualSenseButtons { ps: false, options: false }, 500));
-        assert!(tracker.observe("pad", DualSenseButtons { ps: true, options: true }, 1_000));
+        assert!(!tracker.observe(
+            "pad",
+            DualSenseButtons {
+                ps: false,
+                options: false
+            },
+            500
+        ));
+        assert!(tracker.observe(
+            "pad",
+            DualSenseButtons {
+                ps: true,
+                options: true
+            },
+            1_000
+        ));
     }
 
     #[test]
     fn cooldown_and_stale_device_reset_prevent_repeat_triggers() {
         let mut tracker = ComboTracker::default();
-        assert!(tracker.observe("pad", DualSenseButtons { ps: true, options: true }, 0));
-        assert!(!tracker.observe("pad", DualSenseButtons { ps: false, options: false }, 100));
+        assert!(tracker.observe(
+            "pad",
+            DualSenseButtons {
+                ps: true,
+                options: true
+            },
+            0
+        ));
         assert!(!tracker.observe(
             "pad",
-            DualSenseButtons { ps: true, options: true },
+            DualSenseButtons {
+                ps: false,
+                options: false
+            },
+            100
+        ));
+        assert!(!tracker.observe(
+            "pad",
+            DualSenseButtons {
+                ps: true,
+                options: true
+            },
             COMBO_COOLDOWN_MS - 1
         ));
         assert_eq!(tracker.device_count(), 1);
         assert_eq!(tracker.prune(1_000 + DEVICE_STALE_MS), 0);
         assert_eq!(tracker.device_count(), 0);
-        assert!(tracker.observe("pad", DualSenseButtons { ps: true, options: true }, 10_000));
+        assert!(tracker.observe(
+            "pad",
+            DualSenseButtons {
+                ps: true,
+                options: true
+            },
+            10_000
+        ));
     }
 
     #[test]
     fn disconnect_and_reconnect_resets_the_chord_state() {
         let mut tracker = ComboTracker::default();
-        assert!(!tracker.observe("pad", DualSenseButtons { ps: true, options: false }, 0));
+        assert!(!tracker.observe(
+            "pad",
+            DualSenseButtons {
+                ps: true,
+                options: false
+            },
+            0
+        ));
         tracker.remove_device("pad");
         assert_eq!(tracker.device_count(), 0);
-        assert!(tracker.observe("pad", DualSenseButtons { ps: true, options: true }, 1_000));
+        assert!(tracker.observe(
+            "pad",
+            DualSenseButtons {
+                ps: true,
+                options: true
+            },
+            1_000
+        ));
     }
 
     #[test]
     fn independent_devices_share_the_global_cooldown() {
         let mut tracker = ComboTracker::default();
-        assert!(tracker.observe("pad-a", DualSenseButtons { ps: true, options: true }, 0));
-        assert!(!tracker.observe("pad-b", DualSenseButtons { ps: true, options: true }, 10));
-        assert!(!tracker.observe("pad-b", DualSenseButtons { ps: false, options: false }, 100));
-        assert!(tracker.observe("pad-b", DualSenseButtons { ps: true, options: true }, 1_000));
+        assert!(tracker.observe(
+            "pad-a",
+            DualSenseButtons {
+                ps: true,
+                options: true
+            },
+            0
+        ));
+        assert!(!tracker.observe(
+            "pad-b",
+            DualSenseButtons {
+                ps: true,
+                options: true
+            },
+            10
+        ));
+        assert!(!tracker.observe(
+            "pad-b",
+            DualSenseButtons {
+                ps: false,
+                options: false
+            },
+            100
+        ));
+        assert!(tracker.observe(
+            "pad-b",
+            DualSenseButtons {
+                ps: true,
+                options: true
+            },
+            1_000
+        ));
+    }
+
+    #[test]
+    fn identifies_dualsense_model_from_pid_only() {
+        assert_eq!(dualsense_model(USB_PATH), DualSenseModel::DualSense);
+        assert_eq!(
+            dualsense_model(USB_EDGE_PATH),
+            DualSenseModel::DualSenseEdge
+        );
+        assert_eq!(
+            dualsense_model(r"\\?\HID#VID_054C&PID_05C4#..."),
+            DualSenseModel::Unknown
+        );
+        assert_eq!(
+            dualsense_model(r"\\?\HID#VID_054C#no-pid"),
+            DualSenseModel::Unknown
+        );
+        assert_eq!(
+            dualsense_model(r"\\?\HID#VID_054C&PID_0CE65#..."),
+            DualSenseModel::Unknown
+        );
+        assert_eq!(
+            dualsense_model(&USB_EDGE_PATH.to_ascii_lowercase()),
+            DualSenseModel::DualSenseEdge
+        );
+    }
+
+    #[test]
+    fn connection_mode_requires_an_explicit_path_marker() {
+        assert_eq!(dualsense_connection(USB_PATH), DualSenseConnection::Usb);
+        assert_eq!(
+            dualsense_connection(&USB_PATH.to_ascii_lowercase()),
+            DualSenseConnection::Usb
+        );
+        assert_eq!(
+            dualsense_connection(BLUETOOTH_PATH),
+            DualSenseConnection::Bluetooth
+        );
+        assert_eq!(
+            dualsense_connection(r"\\?\BTHLEDEVICE#BluetoothLE#..."),
+            DualSenseConnection::Bluetooth
+        );
+        assert_eq!(
+            dualsense_connection("{00001124-0000-1000-8000-00805f9b34fb}"),
+            DualSenseConnection::Bluetooth
+        );
+        // Sony VID/PID alone is not enough to claim a physical transport.
+        assert_eq!(dualsense_connection(HID_PATH), DualSenseConnection::Unknown);
+        assert_eq!(dualsense_connection(""), DualSenseConnection::Unknown);
+    }
+
+    #[test]
+    fn stable_device_labels_are_hashed_case_insensitive_and_path_free() {
+        let label = device_label(USB_PATH);
+        assert_eq!(label, device_label(USB_PATH));
+        assert_eq!(label, device_label(&USB_PATH.to_ascii_uppercase()));
+        assert_ne!(label, device_label(HID_PATH));
+        assert_eq!(label.len(), 16);
+        assert!(label.chars().all(|character| character.is_ascii_hexdigit()));
+        assert!(!label.contains(r"\\?\"));
+        assert_eq!(
+            device_label(r"\\?\USB#ABC"),
+            device_label("usb#abc"),
+            "normalization must ignore the Win32 extension prefix and case"
+        );
+        assert_eq!(fnv1a_64(b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(fnv1a_64(b"foobar"), 0x8594_4171_f739_67e8);
+    }
+
+    #[test]
+    fn diagnostic_enums_serialize_with_the_camel_case_contract() {
+        assert_eq!(
+            serde_json::to_value(DualSenseConnection::Usb).unwrap(),
+            "usb"
+        );
+        assert_eq!(
+            serde_json::to_value(DualSenseConnection::Bluetooth).unwrap(),
+            "bluetooth"
+        );
+        assert_eq!(
+            serde_json::to_value(DualSenseConnection::Unknown).unwrap(),
+            "unknown"
+        );
+        assert_eq!(
+            serde_json::to_value(DualSenseModel::DualSenseEdge).unwrap(),
+            "dualSenseEdge"
+        );
+        assert_eq!(
+            serde_json::to_value(ChordOutcome::RejectedWindow).unwrap(),
+            "rejectedWindow"
+        );
+    }
+
+    #[test]
+    fn bookkeeping_tracks_connection_model_and_sorted_device_labels() {
+        let mut bookkeeping = DeviceBookkeeping::default();
+        assert_eq!(bookkeeping.arrival(11, 500), None);
+        assert_eq!(
+            bookkeeping.note_report(11, USB_PATH, &usb_report(false, false), 510),
+            ReportRecord::Accepted(device_label(USB_PATH))
+        );
+        bookkeeping.arrival(12, 520);
+        assert_eq!(
+            bookkeeping.note_report(12, BLUETOOTH_PATH, &bt_minimal_report(false, false), 530),
+            ReportRecord::Accepted(device_label(BLUETOOTH_PATH))
+        );
+        bookkeeping.note_chord(11, 540);
+
+        let devices = bookkeeping.devices();
+        assert_eq!(devices.len(), 2);
+        let ids: Vec<String> = devices.iter().map(|device| device.id.clone()).collect();
+        let mut sorted = ids.clone();
+        sorted.sort();
+        assert_eq!(ids, sorted);
+
+        let usb = devices
+            .iter()
+            .find(|device| device.id == device_label(USB_PATH))
+            .expect("USB device is tracked");
+        assert_eq!(usb.model, DualSenseModel::DualSense);
+        assert_eq!(usb.connection, DualSenseConnection::Usb);
+        assert_eq!(usb.connected_at_ms, 500);
+        assert_eq!(usb.last_report_at_ms, Some(510));
+        assert_eq!(usb.report_count, 1);
+        assert_eq!(usb.last_chord_at_ms, Some(540));
+        assert_eq!(usb.reconnect_count, 0);
+        assert_eq!(bookkeeping.device_count(), 2);
+        assert_eq!(bookkeeping.last_report_at_ms(), Some(530));
+        assert_eq!(bookkeeping.duplicate_reports(), 0);
+        assert_eq!(bookkeeping.reconnects(), 0);
+        assert_eq!(bookkeeping.last_arrival_ms(), Some(520));
+    }
+
+    #[test]
+    fn removal_is_idempotent() {
+        let mut bookkeeping = DeviceBookkeeping::default();
+        let label = device_label(USB_PATH);
+        bookkeeping.arrival(1, 0);
+        bookkeeping.note_report(1, USB_PATH, &usb_report(false, false), 10);
+        assert_eq!(bookkeeping.remove(1, 20), Some(label));
+        assert_eq!(bookkeeping.remove(1, 21), None);
+        assert_eq!(bookkeeping.device_count(), 0);
+    }
+
+    #[test]
+    fn reconnect_counter_increments_on_arrival_and_removal_history() {
+        let mut bookkeeping = DeviceBookkeeping::default();
+        bookkeeping.arrival(1, 0);
+        bookkeeping.note_report(1, USB_PATH, &usb_report(false, false), 10);
+        assert_eq!(bookkeeping.reconnects(), 0);
+
+        assert_eq!(bookkeeping.remove(1, 100), Some(device_label(USB_PATH)));
+        bookkeeping.arrival(1, 1_000);
+        bookkeeping.note_report(1, USB_PATH, &usb_report(false, false), 1_010);
+        assert_eq!(bookkeeping.devices()[0].reconnect_count, 1);
+        assert_eq!(bookkeeping.reconnects(), 1);
+
+        // An arrival for a still-active device is treated as a re-arrival, but
+        // duplicate Windows notifications within one second are ignored.
+        bookkeeping.arrival(1, 2_000);
+        bookkeeping.note_report(1, USB_PATH, &usb_report(false, false), 2_010);
+        assert_eq!(bookkeeping.devices()[0].reconnect_count, 2);
+        assert_eq!(bookkeeping.reconnects(), 2);
+
+        bookkeeping.arrival(1, 2_500);
+        bookkeeping.note_report(1, USB_PATH, &usb_report(false, false), 2_510);
+        assert_eq!(bookkeeping.devices()[0].reconnect_count, 2);
+        assert_eq!(bookkeeping.reconnects(), 2);
+    }
+
+    #[test]
+    fn stale_devices_are_pruned_and_a_later_report_counts_as_reconnect() {
+        let mut bookkeeping = DeviceBookkeeping::default();
+        bookkeeping.arrival(3, 0);
+        bookkeeping.note_report(3, USB_PATH, &usb_report(false, false), 10);
+        assert_eq!(bookkeeping.prune(10 + DEVICE_STALE_MS + 1), 0);
+        assert_eq!(bookkeeping.device_count(), 0);
+
+        bookkeeping.note_report(3, USB_PATH, &usb_report(false, false), 20_000);
+        assert_eq!(bookkeeping.devices()[0].reconnect_count, 1);
+        assert_eq!(bookkeeping.reconnects(), 1);
+    }
+
+    #[test]
+    fn duplicate_reports_are_counted_and_skipped_within_the_window() {
+        let mut bookkeeping = DeviceBookkeeping::default();
+        let report = usb_report(false, false);
+        let label = device_label(USB_PATH);
+        assert_eq!(
+            bookkeeping.note_report(4, USB_PATH, &report, 1_000),
+            ReportRecord::Accepted(label.clone())
+        );
+        assert_eq!(
+            bookkeeping.note_report(4, USB_PATH, &report, 1_000 + DUPLICATE_REPORT_WINDOW_MS - 1),
+            ReportRecord::Duplicate
+        );
+        assert_eq!(bookkeeping.duplicate_reports(), 1);
+
+        // The same bytes exactly at the window boundary are a new report.
+        assert_eq!(
+            bookkeeping.note_report(4, USB_PATH, &report, 1_000 + DUPLICATE_REPORT_WINDOW_MS),
+            ReportRecord::Accepted(label.clone())
+        );
+        assert_eq!(
+            bookkeeping.note_report(4, USB_PATH, &usb_report(true, false), 1_020),
+            ReportRecord::Accepted(label)
+        );
+
+        let device = &bookkeeping.devices()[0];
+        assert_eq!(device.report_count, 3);
+        assert_eq!(device.last_report_at_ms, Some(1_020));
+        assert_eq!(bookkeeping.last_report_at_ms(), Some(1_020));
+        assert_eq!(bookkeeping.duplicate_reports(), 1);
+    }
+
+    #[test]
+    fn tracked_devices_stay_bounded() {
+        let mut bookkeeping = DeviceBookkeeping::default();
+        for device in 0..MAX_TRACKED_DEVICES + 4 {
+            let path = format!(r"\\?\USB#VID_054C&PID_0CE6#device{device}");
+            let at_ms = device as u64 * 10;
+            bookkeeping.arrival(device, at_ms);
+            bookkeeping.note_report(device, &path, &usb_report(false, false), at_ms + 1);
+        }
+        assert_eq!(bookkeeping.devices().len(), MAX_TRACKED_DEVICES);
+        assert_eq!(bookkeeping.device_count(), MAX_TRACKED_DEVICES);
+    }
+
+    #[test]
+    fn chord_tracker_stays_bounded() {
+        let mut tracker = ComboTracker::default();
+        for device in 0..MAX_TRACKED_DEVICES + 4 {
+            tracker.observe(
+                &format!("pad-{device}"),
+                buttons(false, false),
+                device as u64,
+            );
+        }
+        assert_eq!(tracker.device_count(), MAX_TRACKED_DEVICES);
+    }
+
+    #[test]
+    fn chord_diagnostics_cover_every_outcome() {
+        let mut tracker = ComboTracker::default();
+        let none = buttons(false, false);
+
+        assert_eq!(
+            tracker.observe_diagnostic("pad", none, 0),
+            (false, ChordOutcome::Ignored)
+        );
+        assert_eq!(
+            tracker.observe_diagnostic("pad", buttons(true, false), 10),
+            (false, ChordOutcome::Armed)
+        );
+        assert_eq!(
+            tracker.observe_diagnostic("pad", buttons(true, true), 100),
+            (true, ChordOutcome::Triggered)
+        );
+        assert_eq!(
+            tracker.observe_diagnostic("pad", buttons(true, true), 110),
+            (false, ChordOutcome::Latched)
+        );
+        assert_eq!(
+            tracker.observe_diagnostic("pad", buttons(false, true), 120),
+            (false, ChordOutcome::Latched)
+        );
+        assert_eq!(
+            tracker.observe_diagnostic("pad", none, 130),
+            (false, ChordOutcome::Released)
+        );
+        assert_eq!(
+            tracker.observe_diagnostic("pad", none, 140),
+            (false, ChordOutcome::Ignored)
+        );
+
+        // A chord inside the global cooldown is rejected and latched.
+        assert_eq!(
+            tracker.observe_diagnostic("pad-b", buttons(true, true), 200),
+            (false, ChordOutcome::Cooldown)
+        );
+        assert_eq!(
+            tracker.observe_diagnostic("pad-b", none, 210),
+            (false, ChordOutcome::Released)
+        );
+
+        // Both buttons held, but the second arrived outside the 250 ms window.
+        assert_eq!(
+            tracker.observe_diagnostic("pad-b", buttons(true, false), 300),
+            (false, ChordOutcome::Armed)
+        );
+        assert_eq!(
+            tracker.observe_diagnostic("pad-b", buttons(true, true), 300 + CHORD_WINDOW_MS + 1),
+            (false, ChordOutcome::RejectedWindow)
+        );
+    }
+
+    #[test]
+    fn repeated_identical_chord_reports_never_trigger_twice() {
+        let mut tracker = ComboTracker::default();
+        let both = buttons(true, true);
+        assert!(tracker.observe("pad", both, 100));
+        for tick in 1..=20 {
+            assert!(!tracker.observe("pad", both, 100 + tick * 10));
+        }
+        assert_eq!(
+            tracker.observe_diagnostic("pad", both, 400),
+            (false, ChordOutcome::Latched)
+        );
+        assert!(!tracker.observe("pad", buttons(false, false), 410));
+        assert!(tracker.observe("pad", both, 2_000));
+    }
+
+    #[test]
+    fn legacy_status_payloads_default_the_diagnostics_fields() {
+        let status: GamepadHomeStatus = serde_json::from_str(
+            r#"{"windows":true,"running":true,"deviceCount":0,"lastComboAtMs":null,"lastError":null,"fallback":null}"#,
+        )
+        .unwrap();
+        assert!(status.devices.is_empty());
+        assert_eq!(status.last_report_at_ms, None);
+        assert_eq!(status.duplicate_reports, 0);
+        assert_eq!(status.reconnects, 0);
+        assert_eq!(status.last_chord, None);
+    }
+
+    #[test]
+    fn status_serializes_only_hashed_ids_and_camel_case_enums() {
+        let mut bookkeeping = DeviceBookkeeping::default();
+        bookkeeping.arrival(21, 1_000);
+        bookkeeping.note_report(21, USB_EDGE_PATH, &usb_report(true, true), 1_010);
+        bookkeeping.note_chord(21, 1_010);
+        let status = GamepadHomeStatus {
+            windows: true,
+            running: true,
+            device_count: bookkeeping.device_count(),
+            last_combo_at_ms: Some(1_010),
+            last_error: None,
+            fallback: None,
+            devices: bookkeeping.devices(),
+            last_report_at_ms: bookkeeping.last_report_at_ms(),
+            duplicate_reports: bookkeeping.duplicate_reports(),
+            reconnects: bookkeeping.reconnects(),
+            last_chord: Some(ChordDiagnostic {
+                outcome: ChordOutcome::Triggered,
+                at_ms: 1_010,
+            }),
+        };
+
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(json["devices"][0]["id"], device_label(USB_EDGE_PATH));
+        assert_eq!(json["devices"][0]["model"], "dualSenseEdge");
+        assert_eq!(json["devices"][0]["connection"], "usb");
+        assert_eq!(json["devices"][0]["reportCount"], 1_u64);
+        assert_eq!(json["devices"][0]["lastChordAtMs"], 1_010_u64);
+        assert_eq!(json["lastChord"]["outcome"], "triggered");
+        assert_eq!(json["lastChord"]["atMs"], 1_010_u64);
+        assert_eq!(json["duplicateReports"], 0_u64);
+        assert_eq!(json["reconnects"], 0_u64);
+
+        let serialized = serde_json::to_string(&status).unwrap();
+        assert!(!serialized.contains(r"\\?\"));
+        assert!(!serialized.contains("VID_054C"));
+        assert!(!serialized.contains("PID_0DF2"));
     }
 }
