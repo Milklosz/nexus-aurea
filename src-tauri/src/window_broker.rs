@@ -6,6 +6,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 pub(crate) const FOREGROUND_CHANGED_EVENT: &str = "velora-foreground-changed";
 pub(crate) const TRACKING_ERROR_EVENT: &str = "velora-window-tracking-error";
+pub(crate) const FOREGROUND_POLL_MS: u64 = 750;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +25,84 @@ pub struct TrackedWindow {
     pub process_id: u32,
     pub process_name: Option<String>,
     pub class_name: Option<String>,
+    /// Creation timestamp of the owning process. Prevents a recycled PID plus
+    /// recycled HWND from being treated as the same game window.
+    #[serde(default)]
+    pub process_created_at_100ns: Option<u64>,
+    /// Higher scores are more likely to be the application's main window.
+    #[serde(default)]
+    pub score: u8,
+    /// True for the best candidate of this process only.
+    #[serde(default)]
+    pub is_main: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct WindowScoreInput<'a> {
+    pub visible: bool,
+    pub iconic: bool,
+    pub has_owner: bool,
+    pub toolwindow: bool,
+    pub cloaked: bool,
+    pub width: i32,
+    pub height: i32,
+    pub class_name: Option<&'a str>,
+    pub foreground: bool,
+}
+
+/// Returns `None` for windows that cannot be an application's main window.
+/// Auxiliary tool windows and cloaked UWP surfaces are still enumerated by
+/// Windows but must not become the focus target of a launch.
+pub(crate) fn window_score(input: &WindowScoreInput<'_>) -> Option<u8> {
+    if !input.visible || input.cloaked || input.toolwindow {
+        return None;
+    }
+    if input.width <= 0 || input.height <= 0 {
+        return None;
+    }
+    if input.has_owner {
+        // Owned dialogs are auxiliary; keep them trackable but never "main".
+        return Some(10);
+    }
+    let mut score = 20u8;
+    if input.width >= 640 && input.height >= 360 {
+        score = score.saturating_add(20);
+    }
+    if input.iconic {
+        score = score.saturating_add(5);
+    } else {
+        score = score.saturating_add(10);
+    }
+    if input.foreground {
+        score = score.saturating_add(40);
+    }
+    let class = input.class_name.unwrap_or_default();
+    if matches!(
+        class,
+        "SDL_app" | "UnityWndClass" | "UnrealWindow" | "GLFW30" | "gfxWindow"
+    ) {
+        score = score.saturating_add(25);
+    } else if class.starts_with("Chrome_WidgetWin") || class.starts_with("MozillaWindowClass") {
+        score = score.saturating_add(10);
+    }
+    Some(score.min(100))
+}
+
+/// Marks exactly one main candidate per process. Ties keep the first window,
+/// which is the enumeration order and therefore stable for a stationary app.
+pub(crate) fn mark_main_windows(windows: &mut [TrackedWindow]) {
+    let mut best: HashMap<u32, (usize, u8)> = HashMap::new();
+    for (index, window) in windows.iter().enumerate() {
+        let entry = best.entry(window.process_id).or_insert((index, window.score));
+        if window.score > entry.1 {
+            *entry = (index, window.score);
+        }
+    }
+    for (index, window) in windows.iter_mut().enumerate() {
+        window.is_main = best
+            .get(&window.process_id)
+            .is_some_and(|(best_index, _)| *best_index == index);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,6 +115,7 @@ pub struct WindowBrokerSnapshot {
     pub tracked_processes: Vec<u32>,
     pub tracked_windows: Vec<TrackedWindow>,
     pub last_error: Option<String>,
+    pub poll_interval_ms: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,6 +140,20 @@ pub enum RestoreOutcome {
     UnsupportedPlatform,
 }
 
+/// Why Windows declined the foreground request. `None` means either the call
+/// succeeded or no reliable reason was reported.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ForegroundDenial {
+    /// SetForegroundWindow returned without error, but focus stayed elsewhere.
+    /// The Windows foreground lock is the usual cause.
+    ForegroundLock,
+    AccessDenied,
+    InvalidWindow,
+    NotFocused,
+    Unknown,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RestoreResult {
@@ -71,8 +165,48 @@ pub struct RestoreResult {
     pub foreground_before: ForegroundWindow,
     pub foreground_after: ForegroundWindow,
     pub error_code: Option<u32>,
+    #[serde(default)]
+    pub denial: Option<ForegroundDenial>,
     pub message: String,
 }
+
+pub(crate) fn classify_foreground_denial(error_code: Option<u32>, focused: bool) -> Option<ForegroundDenial> {
+    if focused {
+        return None;
+    }
+    Some(match error_code {
+        Some(5) => ForegroundDenial::AccessDenied,
+        Some(1400) => ForegroundDenial::InvalidWindow,
+        Some(0) | None => ForegroundDenial::ForegroundLock,
+        Some(_) => ForegroundDenial::Unknown,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ForegroundChange {
+    Gained,
+    Lost,
+    Changed,
+    Unchanged,
+}
+
+pub(crate) fn foreground_change(
+    previous: Option<u64>,
+    current: Option<u64>,
+    own_window: Option<u64>,
+) -> ForegroundChange {
+    if previous == current {
+        ForegroundChange::Unchanged
+    } else if own_window.is_some() && current == own_window {
+        ForegroundChange::Gained
+    } else if own_window.is_some() && previous == own_window {
+        ForegroundChange::Lost
+    } else {
+        ForegroundChange::Changed
+    }
+}
+
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RestoreDecision {
@@ -159,6 +293,7 @@ fn blocked_result(
         foreground_after: foreground_before.clone(),
         foreground_before,
         error_code: None,
+        denial: None,
         message: message.into(),
     }
 }
@@ -182,6 +317,7 @@ fn windows_denied_result(
             Some(code) => format!("Windows odrzucił aktywację VELORA (kod {code}). Użyj Alt+Tab."),
             None => "Windows nie przekazał fokusu VELORA. Użyj Alt+Tab.".into(),
         },
+        denial: classify_foreground_denial(error_code, false),
         error_code,
     }
 }
@@ -196,9 +332,20 @@ fn window_is_valid(_window: u64) -> bool {
     false
 }
 
+#[cfg(target_os = "windows")]
+fn window_class(window: u64) -> Option<String> {
+    native::window_class(window)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn window_class(_window: u64) -> Option<String> {
+    None
+}
+
 #[derive(Default)]
 struct BrokerState {
     own_window: Option<u64>,
+    own_window_class: Option<String>,
     tracked_processes: HashSet<u32>,
     tracked_windows: HashMap<u64, TrackedWindow>,
     foreground: ForegroundWindow,
@@ -219,6 +366,7 @@ impl BrokerState {
             tracked_processes,
             tracked_windows,
             last_error: self.last_error.clone(),
+            poll_interval_ms: FOREGROUND_POLL_MS,
         }
     }
 }
@@ -242,6 +390,7 @@ impl WindowBroker {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.own_window = Some(window);
+        state.own_window_class = window_class(window);
         state.tracked_processes.insert(std::process::id());
     }
 
@@ -270,7 +419,7 @@ impl WindowBroker {
             .retain(|_, window| window.process_id != process_id);
     }
 
-    fn refresh(&self) -> WindowBrokerSnapshot {
+    pub(crate) fn refresh(&self) -> WindowBrokerSnapshot {
         #[cfg(target_os = "windows")]
         {
             let (tracked_processes, own_window) = {
@@ -314,7 +463,24 @@ impl WindowBroker {
     }
 
     pub(crate) fn foreground(&self) -> ForegroundWindow {
-        self.refresh().foreground
+        #[cfg(target_os = "windows")]
+        {
+            let foreground = native::foreground().unwrap_or_default();
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.foreground = foreground.clone();
+            foreground
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            self.state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .foreground
+                .clone()
+        }
     }
 
     pub(crate) fn windows_for_processes(&self, process_ids: &HashSet<u32>) -> Vec<TrackedWindow> {
@@ -354,12 +520,16 @@ impl WindowBroker {
 
         #[cfg(target_os = "windows")]
         {
-            let (own_window, own_process_id) = {
+            let (own_window, own_window_class, own_process_id) = {
                 let state = self
                     .state
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                (state.own_window, std::process::id())
+                (
+                    state.own_window,
+                    state.own_window_class.clone(),
+                    std::process::id(),
+                )
             };
             let Some(own_window) = own_window else {
                 return blocked_result(
@@ -388,6 +558,17 @@ impl WindowBroker {
                     "Uchwyt okna należy do innego procesu. Uruchom ponownie VELORA.",
                 );
             }
+            if let Some(expected_class) = own_window_class.as_deref() {
+                if native::window_class(own_window).as_deref() != Some(expected_class) {
+                    return blocked_result(
+                        reason,
+                        Some(own_window),
+                        native::foreground().unwrap_or_default(),
+                        RestoreOutcome::WindowUnavailable,
+                        "Uchwyt okna VELORA został ponownie użyty przez inne okno. Uruchom ponownie aplikację.",
+                    );
+                }
+            }
 
             // Re-check the policy immediately before the Win32 call. This does
             // not make foreground arbitration atomic, so the outcome is always
@@ -410,6 +591,7 @@ impl WindowBroker {
                         foreground_before: foreground_before.clone(),
                         foreground_after: foreground_before,
                         error_code: None,
+                        denial: None,
                         message: "VELORA ma już fokus.".into(),
                     };
                 }
@@ -440,7 +622,9 @@ fn now_ms() -> u64 {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ForegroundChangedEvent {
+    previous_hwnd: Option<u64>,
     foreground: ForegroundWindow,
+    change: ForegroundChange,
     at_ms: u64,
 }
 
@@ -471,28 +655,41 @@ pub(crate) fn restore_velora(app: &AppHandle, reason: RestoreReason) -> RestoreR
     app.state::<WindowBroker>().restore(reason)
 }
 
+static MONITOR_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static MONITOR_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub(crate) fn start_foreground_monitor(app: AppHandle) {
+    #[cfg(not(target_os = "windows"))]
+    let _ = app;
     #[cfg(target_os = "windows")]
     {
-        std::thread::Builder::new()
+        use std::sync::atomic::Ordering;
+        if MONITOR_STARTED.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        MONITOR_STOP.store(false, Ordering::Release);
+        let spawned = std::thread::Builder::new()
             .name("velora-window-broker".into())
             .spawn(move || {
                 let mut previous: Option<u64> = None;
                 let mut reported_error: Option<String> = None;
-                loop {
+                while !MONITOR_STOP.load(Ordering::Acquire) {
                     let broker = app.state::<WindowBroker>();
                     let snapshot = broker.refresh();
                     let current = snapshot.foreground.hwnd;
-                    if current != previous {
-                        previous = current;
+                    let change = foreground_change(previous, current, snapshot.own_window);
+                    if change != ForegroundChange::Unchanged {
                         let _ = app.emit(
                             FOREGROUND_CHANGED_EVENT,
                             ForegroundChangedEvent {
+                                previous_hwnd: previous,
                                 foreground: snapshot.foreground,
+                                change,
                                 at_ms: now_ms(),
                             },
                         );
                     }
+                    previous = current;
                     match snapshot.last_error {
                         Some(error) if reported_error.as_deref() != Some(error.as_str()) => {
                             reported_error = Some(error.clone());
@@ -501,11 +698,39 @@ pub(crate) fn start_foreground_monitor(app: AppHandle) {
                         None => reported_error = None,
                         _ => {}
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    std::thread::sleep(std::time::Duration::from_millis(FOREGROUND_POLL_MS));
                 }
-            })
-            .ok();
+                MONITOR_STARTED.store(false, Ordering::Release);
+            });
+        if spawned.is_err() {
+            MONITOR_STARTED.store(false, Ordering::Release);
+        }
     }
+}
+
+pub(crate) fn stop_foreground_monitor() {
+    MONITOR_STOP.store(true, std::sync::atomic::Ordering::Release);
+}
+
+/// Refreshes native state after sleep/wake and verifies that the stored own
+/// HWND still belongs to this process. No foreground request is made.
+pub(crate) fn handle_system_resume(app: &AppHandle) -> bool {
+    let broker = app.state::<WindowBroker>();
+    let snapshot = broker.refresh();
+    snapshot.own_window_valid
+        && snapshot
+            .own_window
+            .is_some_and(|window| snapshot_own_window_process(window) == Some(std::process::id()))
+}
+
+#[cfg(target_os = "windows")]
+fn snapshot_own_window_process(window: u64) -> Option<u32> {
+    native::window_process_id(window)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn snapshot_own_window_process(_window: u64) -> Option<u32> {
+    None
 }
 
 #[tauri::command]
@@ -520,6 +745,7 @@ pub async fn get_window_broker_status(app: AppHandle) -> WindowBrokerSnapshot {
             tracked_processes: Vec::new(),
             tracked_windows: Vec::new(),
             last_error: Some("Odczyt stanu okien został przerwany.".into()),
+            poll_interval_ms: FOREGROUND_POLL_MS,
         })
 }
 
@@ -540,6 +766,7 @@ pub async fn restore_velora_window(app: AppHandle) -> RestoreResult {
         foreground_before: ForegroundWindow::default(),
         foreground_after: ForegroundWindow::default(),
         error_code: None,
+        denial: None,
         message: "Operacja przywracania okna została przerwana.".into(),
     })
 }
@@ -547,8 +774,10 @@ pub async fn restore_velora_window(app: AppHandle) -> RestoreResult {
 #[cfg(target_os = "windows")]
 mod native {
     use super::{
-        windows_denied_result, ForegroundWindow, RestoreReason, RestoreResult, TrackedWindow,
+        mark_main_windows, window_score, windows_denied_result, ForegroundWindow, RestoreReason,
+        RestoreResult, TrackedWindow, WindowScoreInput,
     };
+    use crate::process_table;
     use std::collections::{HashMap, HashSet};
     use std::ffi::c_void;
     use std::path::Path;
@@ -558,10 +787,12 @@ mod native {
 
     const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
     const GWL_EXSTYLE: i32 = -20;
+    const GW_OWNER: u32 = 4;
     const WS_EX_TOOLWINDOW: isize = 0x0000_0080;
     const SW_RESTORE: i32 = 9;
     const FLASHW_TRAY: u32 = 2;
     const FLASHW_TIMERNOFG: u32 = 12;
+    const DWMWA_CLOAKED: u32 = 14;
 
     #[repr(C)]
     #[derive(Clone, Copy, Default)]
@@ -595,9 +826,20 @@ mod native {
         fn GetClassNameW(window: Hwnd, class_name: *mut u16, max_count: i32) -> i32;
         fn GetWindowLongW(window: Hwnd, index: i32) -> i32;
         fn GetWindowRect(window: Hwnd, rect: *mut Rect) -> i32;
+        fn GetWindow(window: Hwnd, command: u32) -> Hwnd;
         fn ShowWindowAsync(window: Hwnd, command: i32) -> i32;
         fn SetForegroundWindow(window: Hwnd) -> i32;
         fn FlashWindowEx(info: *mut FlashInfo) -> i32;
+    }
+
+    #[link(name = "dwmapi")]
+    extern "system" {
+        fn DwmGetWindowAttribute(
+            window: Hwnd,
+            attribute: u32,
+            value: *mut c_void,
+            size: u32,
+        ) -> i32;
     }
 
     #[link(name = "kernel32")]
@@ -622,6 +864,8 @@ mod native {
     struct EnumContext {
         process_ids: HashSet<u32>,
         process_names: HashMap<u32, Option<String>>,
+        process_created_at: HashMap<u32, Option<u64>>,
+        foreground_hwnd: Option<u64>,
         windows: Vec<TrackedWindow>,
     }
 
@@ -659,6 +903,19 @@ mod native {
         (length > 0).then(|| String::from_utf16_lossy(&value[..length as usize]))
     }
 
+    fn is_cloaked(window: Hwnd) -> bool {
+        let mut cloaked = 0u32;
+        let result = unsafe {
+            DwmGetWindowAttribute(
+                window,
+                DWMWA_CLOAKED,
+                (&mut cloaked as *mut u32).cast::<c_void>(),
+                std::mem::size_of::<u32>() as u32,
+            )
+        };
+        result == 0 && cloaked != 0
+    }
+
     unsafe extern "system" fn enum_window(window: Hwnd, parameter: isize) -> i32 {
         if unsafe { IsWindowVisible(window) } == 0 {
             return 1;
@@ -681,16 +938,41 @@ mod native {
         {
             return 1;
         }
+        let class = class_name(window);
+        let has_owner = unsafe { !GetWindow(window, GW_OWNER).is_null() };
+        let score = match window_score(&WindowScoreInput {
+            visible: true,
+            iconic: unsafe { IsIconic(window) } != 0,
+            has_owner,
+            toolwindow: false,
+            cloaked: is_cloaked(window),
+            width: rect.right - rect.left,
+            height: rect.bottom - rect.top,
+            class_name: class.as_deref(),
+            foreground: context.foreground_hwnd == Some(window_id(window)),
+        }) {
+            Some(score) => score,
+            None => return 1,
+        };
         let name = context
             .process_names
             .entry(process_id)
             .or_insert_with(|| process_name(process_id))
             .clone();
+        let created_at = *context
+            .process_created_at
+            .entry(process_id)
+            .or_insert_with(|| {
+                process_table::identity(process_id).map(|identity| identity.created_at_100ns)
+            });
         context.windows.push(TrackedWindow {
             hwnd: window_id(window),
             process_id,
             process_name: name,
-            class_name: class_name(window),
+            class_name: class,
+            process_created_at_100ns: created_at,
+            score,
+            is_main: false,
         });
         1
     }
@@ -703,6 +985,8 @@ mod native {
         let mut context = EnumContext {
             process_ids: process_ids.clone(),
             process_names: HashMap::new(),
+            process_created_at: HashMap::new(),
+            foreground_hwnd: foreground.hwnd,
             windows: Vec::new(),
         };
         unsafe { SetLastError(0) };
@@ -720,6 +1004,7 @@ mod native {
                 return Err(format!("Windows nie zwrócił listy okien (kod {code})."));
             }
         }
+        mark_main_windows(&mut context.windows);
         Ok(NativeSnapshot {
             foreground,
             windows: context.windows,
@@ -751,6 +1036,13 @@ mod native {
 
     pub(super) fn is_window_valid(window: u64) -> bool {
         !window.eq(&0) && unsafe { IsWindow(hwnd(window)) } != 0
+    }
+
+    pub(super) fn window_class(window: u64) -> Option<String> {
+        if window == 0 {
+            return None;
+        }
+        class_name(hwnd(window))
     }
 
     pub(super) fn window_process_id(window: u64) -> Option<u32> {
@@ -793,6 +1085,7 @@ mod native {
                 foreground_before,
                 foreground_after,
                 error_code: None,
+                denial: None,
                 message: "VELORA odzyskała fokus.".into(),
             };
         }
@@ -817,8 +1110,9 @@ mod native {
 #[cfg(test)]
 mod tests {
     use super::{
-        evaluate_restore, ForegroundWindow, RestoreDecision, RestoreOutcome, RestoreReason,
-        RestoreResult, WindowBroker,
+        classify_foreground_denial, evaluate_restore, foreground_change, mark_main_windows,
+        window_score, ForegroundChange, ForegroundDenial, ForegroundWindow, RestoreDecision,
+        RestoreOutcome, RestoreReason, RestoreResult, TrackedWindow, WindowBroker, WindowScoreInput,
     };
 
     const OWN_PID: u32 = 4242;
@@ -986,6 +1280,100 @@ mod tests {
     }
 
     #[test]
+    fn foreground_denial_is_classified_truthfully() {
+        assert_eq!(
+            classify_foreground_denial(Some(5), false),
+            Some(ForegroundDenial::AccessDenied)
+        );
+        assert_eq!(
+            classify_foreground_denial(Some(1400), false),
+            Some(ForegroundDenial::InvalidWindow)
+        );
+        assert_eq!(
+            classify_foreground_denial(None, false),
+            Some(ForegroundDenial::ForegroundLock)
+        );
+        assert_eq!(
+            classify_foreground_denial(Some(0), false),
+            Some(ForegroundDenial::ForegroundLock)
+        );
+        assert_eq!(
+            classify_foreground_denial(Some(87), false),
+            Some(ForegroundDenial::Unknown)
+        );
+        assert_eq!(classify_foreground_denial(Some(5), true), None);
+    }
+
+    #[test]
+    fn focus_changes_distinguish_gain_loss_and_other_windows() {
+        assert_eq!(
+            foreground_change(None, Some(100), Some(100)),
+            ForegroundChange::Gained
+        );
+        assert_eq!(
+            foreground_change(Some(100), Some(900), Some(100)),
+            ForegroundChange::Lost
+        );
+        assert_eq!(
+            foreground_change(Some(900), Some(901), Some(100)),
+            ForegroundChange::Changed
+        );
+        assert_eq!(
+            foreground_change(Some(900), Some(900), Some(100)),
+            ForegroundChange::Unchanged
+        );
+    }
+
+    #[test]
+    fn auxiliary_or_cloaked_windows_are_not_main_window_candidates() {
+        let base = |visible, iconic, has_owner, toolwindow, cloaked, width, height, class, foreground| {
+            WindowScoreInput {
+                visible,
+                iconic,
+                has_owner,
+                toolwindow,
+                cloaked,
+                width,
+                height,
+                class_name: class,
+                foreground,
+            }
+        };
+        assert_eq!(window_score(&base(false, false, false, false, false, 1920, 1080, Some("SDL_app"), true)), None);
+        assert_eq!(window_score(&base(true, false, false, true, false, 1920, 1080, Some("SDL_app"), true)), None);
+        assert_eq!(window_score(&base(true, false, false, false, true, 1920, 1080, Some("SDL_app"), true)), None);
+        assert_eq!(window_score(&base(true, false, false, false, false, 0, 1080, Some("SDL_app"), true)), None);
+        assert!(window_score(&base(true, false, true, false, false, 800, 600, None, false)).unwrap() < 20);
+        let main = window_score(&base(true, false, false, false, false, 1920, 1080, Some("SDL_app"), true)).unwrap();
+        let background = window_score(&base(true, false, false, false, false, 1920, 1080, Some("SDL_app"), false)).unwrap();
+        assert!(main > background);
+    }
+
+    #[test]
+    fn exactly_one_main_window_is_marked_per_process() {
+        let window = |hwnd, process_id, score| TrackedWindow {
+            hwnd,
+            process_id,
+            process_name: Some("game.exe".into()),
+            class_name: None,
+            process_created_at_100ns: Some(1),
+            score,
+            is_main: false,
+        };
+        let mut windows = vec![
+            window(1, 10, 20),
+            window(2, 10, 90),
+            window(3, 10, 40),
+            window(4, 20, 30),
+        ];
+        mark_main_windows(&mut windows);
+        assert!(!windows[0].is_main);
+        assert!(windows[1].is_main);
+        assert!(!windows[2].is_main);
+        assert!(windows[3].is_main);
+    }
+
+    #[test]
     fn restore_result_serializes_win32_failure_details() {
         let result = RestoreResult {
             attempted: true,
@@ -996,6 +1384,7 @@ mod tests {
             foreground_before: foreground(Some("chrome.exe"), None, true),
             foreground_after: foreground(Some("chrome.exe"), None, true),
             error_code: Some(5),
+            denial: Some(super::ForegroundDenial::AccessDenied),
             message: "Windows odrzucił aktywację VELORA (kod 5). Użyj Alt+Tab.".into(),
         };
         let value = serde_json::to_value(result).unwrap();

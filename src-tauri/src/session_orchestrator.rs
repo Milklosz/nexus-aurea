@@ -1,8 +1,13 @@
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::operation_registry::{
+    OperationKind, OperationRegistry, SessionOperation, RETURN_HOME_TIMEOUT_MS,
+};
+use crate::session_store::{self, PersistedSession};
 use crate::window_broker::{self, RestoreReason, RestoreResult};
 
 pub(crate) const SESSION_CHANGED_EVENT: &str = "velora-session-changed";
@@ -47,12 +52,17 @@ pub enum TransitionCause {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionContext {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process_id: Option<u32>,
+    /// Revision of the session transition this launch context belongs to.
+    /// Together with `launchId` it lets events be correlated across a
+    /// restart or a repeated command without guessing from timestamps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_revision: Option<u64>,
 }
 
 impl SessionContext {
@@ -61,8 +71,32 @@ impl SessionContext {
             launch_id: Some(launch_id.to_string()),
             app_id: app_id.map(str::to_string),
             process_id,
+            session_revision: None,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RecoveryReason {
+    /// The previous process ended without writing a clean-shutdown marker.
+    UnexpectedExit,
+    /// The application was closed normally while an external session was active.
+    CleanRestart,
+    /// The persisted file was unreadable or from an unsupported version.
+    CorruptState,
+    /// The persisted launch context no longer exists in LaunchRegistry.
+    OrphanedLaunch,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionRecovery {
+    pub recovered_at_ms: u64,
+    pub previous_session: SessionId,
+    pub previous_revision: u64,
+    pub reason: RecoveryReason,
+    pub message: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +108,8 @@ pub struct SessionSnapshot {
     pub transitioned_at_ms: u64,
     pub context: Option<SessionContext>,
     pub allowed_targets: Vec<SessionId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<SessionRecovery>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,6 +128,14 @@ pub struct SessionChangedEvent {
 pub enum SessionErrorCode {
     InvalidTransition,
     InternalStateUnavailable,
+    /// An optimistic-concurrency caller expected a different revision.
+    StaleRevision,
+    /// A queued command exceeded its validity window.
+    ExpiredCommand,
+    /// A command id was reused for a different target.
+    InvalidCommand,
+    /// The operation was cancelled before it completed.
+    Cancelled,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -101,6 +145,8 @@ pub struct SessionError {
     pub message: String,
     pub from: SessionId,
     pub target: SessionId,
+    pub current_revision: u64,
+    pub allowed_targets: Vec<SessionId>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -110,7 +156,23 @@ pub struct TransitionRequest {
     pub cause: TransitionCause,
     #[serde(default)]
     pub context: Option<SessionContext>,
+    /// Optional client-generated id. Replaying the same id returns the
+    /// originally applied snapshot instead of transitioning twice.
+    #[serde(default)]
+    pub command_id: Option<String>,
+    /// Optional optimistic-concurrency guard. A mismatch is rejected before
+    /// the state machine is touched.
+    #[serde(default)]
+    pub expected_revision: Option<u64>,
+    /// Millisecond timestamp supplied by a queued caller. Expired commands are
+    /// rejected instead of being applied long after their user gesture.
+    #[serde(default)]
+    pub issued_at_ms: Option<u64>,
 }
+
+pub(crate) const COMMAND_TTL_MS: u64 = 10_000;
+const MAX_APPLIED_COMMANDS: usize = 64;
+const MAX_COMMAND_ID_LEN: usize = 128;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -125,6 +187,8 @@ pub struct ReturnHomeEvent {
 pub struct ReturnHomeResult {
     pub session: SessionSnapshot,
     pub restore: RestoreResult,
+    pub operation_id: String,
+    pub timed_out: bool,
 }
 
 /// Explicit transition table. `Ambient` and `Desktop` are leaving states: the
@@ -148,12 +212,21 @@ pub(crate) fn transition_is_allowed(from: SessionId, target: SessionId) -> bool 
 }
 
 #[derive(Clone, Debug)]
+struct AppliedCommand {
+    id: String,
+    target: SessionId,
+    snapshot: SessionSnapshot,
+}
+
+#[derive(Clone, Debug)]
 struct SessionMachine {
     current: SessionId,
     previous: Option<SessionId>,
     revision: u64,
     transitioned_at_ms: u64,
     context: Option<SessionContext>,
+    recovery: Option<SessionRecovery>,
+    applied_commands: VecDeque<AppliedCommand>,
 }
 
 impl Default for SessionMachine {
@@ -164,6 +237,8 @@ impl Default for SessionMachine {
             revision: 0,
             transitioned_at_ms: 0,
             context: None,
+            recovery: None,
+            applied_commands: VecDeque::new(),
         }
     }
 }
@@ -177,6 +252,23 @@ impl SessionMachine {
             transitioned_at_ms: self.transitioned_at_ms,
             context: self.context.clone(),
             allowed_targets: allowed_targets(self.current).to_vec(),
+            recovery: self.recovery.clone(),
+        }
+    }
+
+    fn error(
+        &self,
+        code: SessionErrorCode,
+        message: impl Into<String>,
+        target: SessionId,
+    ) -> SessionError {
+        SessionError {
+            code,
+            message: message.into(),
+            from: self.current,
+            target,
+            current_revision: self.revision,
+            allowed_targets: allowed_targets(self.current).to_vec(),
         }
     }
 
@@ -184,32 +276,37 @@ impl SessionMachine {
         &mut self,
         target: SessionId,
         cause: TransitionCause,
-        context: Option<SessionContext>,
+        mut context: Option<SessionContext>,
         at_ms: u64,
     ) -> Result<(SessionSnapshot, Option<SessionChangedEvent>), SessionError> {
         let from = self.current;
         if target == from {
-            if context.is_some() {
-                self.context = context;
+            if let Some(context) = context.as_mut() {
+                context.session_revision = Some(self.revision);
+                self.context = Some(context.clone());
             }
             return Ok((self.snapshot(), None));
         }
         if !transition_is_allowed(from, target) {
-            return Err(SessionError {
-                code: SessionErrorCode::InvalidTransition,
-                message: format!(
+            return Err(self.error(
+                SessionErrorCode::InvalidTransition,
+                format!(
                     "Przejście sesji {} → {} nie jest dozwolone.",
                     from.as_str(),
                     target.as_str()
                 ),
-                from,
                 target,
-            });
+            ));
         }
         self.previous = Some(from);
         self.current = target;
-        self.context = context;
         self.revision = self.revision.saturating_add(1);
+        if let Some(context) = context.as_mut() {
+            context.session_revision = Some(self.revision);
+            self.context = Some(context.clone());
+        } else {
+            self.context = None;
+        }
         self.transitioned_at_ms = at_ms;
         let snapshot = self.snapshot();
         let event = SessionChangedEvent {
@@ -222,17 +319,115 @@ impl SessionMachine {
         };
         Ok((snapshot, Some(event)))
     }
+
+    fn apply_command(
+        &mut self,
+        request: &TransitionRequest,
+        at_ms: u64,
+    ) -> Result<(SessionSnapshot, Option<SessionChangedEvent>), SessionError> {
+        if let Some(command_id) = request.command_id.as_deref() {
+            if command_id.is_empty() || command_id.len() > MAX_COMMAND_ID_LEN {
+                return Err(self.error(
+                    SessionErrorCode::InvalidCommand,
+                    "Identyfikator komendy sesji jest nieprawidłowy.",
+                    request.target,
+                ));
+            }
+            if let Some(applied) = self
+                .applied_commands
+                .iter()
+                .find(|entry| entry.id == command_id)
+            {
+                if applied.target != request.target {
+                    return Err(self.error(
+                        SessionErrorCode::InvalidCommand,
+                        "Ten identyfikator komendy został już użyty dla innego przejścia.",
+                        request.target,
+                    ));
+                }
+                return Ok((applied.snapshot.clone(), None));
+            }
+        }
+        if let Some(expected) = request.expected_revision {
+            if expected != self.revision {
+                return Err(self.error(
+                    SessionErrorCode::StaleRevision,
+                    format!(
+                        "Oczekiwana rewizja sesji {expected} nie odpowiada bieżącej {}.",
+                        self.revision
+                    ),
+                    request.target,
+                ));
+            }
+        }
+        if let Some(issued_at) = request.issued_at_ms {
+            if at_ms.saturating_sub(issued_at) > COMMAND_TTL_MS {
+                return Err(self.error(
+                    SessionErrorCode::ExpiredCommand,
+                    "Komenda sesji wygasła, zanim została zastosowana.",
+                    request.target,
+                ));
+            }
+        }
+        let (snapshot, event) = self.transition_at(
+            request.target,
+            request.cause,
+            request.context.clone(),
+            at_ms,
+        )?;
+        if let Some(command_id) = request.command_id.as_deref() {
+            self.applied_commands.push_back(AppliedCommand {
+                id: command_id.to_string(),
+                target: request.target,
+                snapshot: snapshot.clone(),
+            });
+            while self.applied_commands.len() > MAX_APPLIED_COMMANDS {
+                self.applied_commands.pop_front();
+            }
+        }
+        Ok((snapshot, event))
+    }
 }
 
 pub struct SessionOrchestrator {
     machine: Mutex<SessionMachine>,
+    operations: Mutex<OperationRegistry>,
+    last_persist_error: Mutex<Option<String>>,
 }
 
 impl Default for SessionOrchestrator {
     fn default() -> Self {
         Self {
             machine: Mutex::new(SessionMachine::default()),
+            operations: Mutex::new(OperationRegistry::default()),
+            last_persist_error: Mutex::new(None),
         }
+    }
+}
+
+impl SessionOrchestrator {
+    fn persist(&self, app: &AppHandle, snapshot: &SessionSnapshot) {
+        let error = session_store::save(app, snapshot, false).err();
+        *self
+            .last_persist_error
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = error;
+    }
+
+    pub(crate) fn persistence_error(&self) -> Option<String> {
+        self.last_persist_error
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(crate) fn operation_snapshot(&self) -> Vec<SessionOperation> {
+        let mut operations = self
+            .operations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        operations.expire(now_ms());
+        operations.snapshot()
     }
 }
 
@@ -249,6 +444,8 @@ fn internal_error(from: SessionId, target: SessionId) -> SessionError {
         message: "Stan sesji VELORA jest chwilowo niedostępny.".into(),
         from,
         target,
+        current_revision: 0,
+        allowed_targets: allowed_targets(from).to_vec(),
     }
 }
 
@@ -259,24 +456,59 @@ pub(crate) fn apply_transition(
     context: Option<SessionContext>,
 ) -> Result<SessionSnapshot, SessionError> {
     let orchestrator = app.state::<SessionOrchestrator>();
-    let mut machine = orchestrator
-        .machine
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    // Emit while the state lock is still held so concurrent transitions cannot
-    // publish revision 2 before revision 1 to the WebView.
-    match machine.transition_at(target, cause, context, now_ms()) {
-        Ok((snapshot, event)) => {
-            if let Some(event) = event {
-                let _ = app.emit(SESSION_CHANGED_EVENT, event);
+    let result = {
+        let mut machine = orchestrator
+            .machine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Emit while the state lock is still held so concurrent transitions cannot
+        // publish revision 2 before revision 1 to the WebView.
+        match machine.transition_at(target, cause, context, now_ms()) {
+            Ok((snapshot, event)) => {
+                if let Some(event) = event {
+                    let _ = app.emit(SESSION_CHANGED_EVENT, event);
+                }
+                Ok(snapshot)
             }
-            Ok(snapshot)
+            Err(error) => {
+                let _ = app.emit(SESSION_ERROR_EVENT, error.clone());
+                Err(error)
+            }
         }
-        Err(error) => {
-            let _ = app.emit(SESSION_ERROR_EVENT, error.clone());
-            Err(error)
-        }
+    };
+    if let Ok(snapshot) = &result {
+        orchestrator.persist(app, snapshot);
     }
+    result
+}
+
+fn apply_transition_command(
+    app: &AppHandle,
+    request: &TransitionRequest,
+) -> Result<SessionSnapshot, SessionError> {
+    let orchestrator = app.state::<SessionOrchestrator>();
+    let result = {
+        let mut machine = orchestrator
+            .machine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match machine.apply_command(request, now_ms()) {
+            Ok((snapshot, event)) => {
+                if let Some(event) = event {
+                    let _ = app.emit(SESSION_CHANGED_EVENT, event);
+                }
+                Ok(snapshot)
+            }
+            Err(error) => {
+                let _ = app.emit(SESSION_ERROR_EVENT, error.clone());
+                Err(error)
+            }
+        }
+    };
+    if let Ok(snapshot) = &result {
+        orchestrator.persist(app, snapshot);
+    }
+    result
 }
 
 pub(crate) fn current_snapshot(app: &AppHandle) -> SessionSnapshot {
@@ -287,6 +519,97 @@ pub(crate) fn current_snapshot(app: &AppHandle) -> SessionSnapshot {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .snapshot();
     snapshot
+}
+
+/// Rehydrates the last session after a restart. VELORA always resumes in its
+/// own Home; the previous external session is reported, never silently claimed.
+/// The revision continues from the persisted value so `launchId` plus
+/// `sessionRevision` remain meaningful across restarts.
+fn apply_persisted_recovery(
+    machine: &mut SessionMachine,
+    state: &PersistedSession,
+    now: u64,
+) -> Option<SessionRecovery> {
+    let previous = state.snapshot.current;
+    if state.clean_shutdown && previous == SessionId::VeloraHome {
+        return None;
+    }
+    let reason = if state.clean_shutdown {
+        RecoveryReason::CleanRestart
+    } else {
+        RecoveryReason::UnexpectedExit
+    };
+    let recovery = SessionRecovery {
+        recovered_at_ms: now,
+        previous_session: previous,
+        previous_revision: state.snapshot.revision,
+        reason,
+        message: match reason {
+            RecoveryReason::UnexpectedExit => {
+                "Poprzednie uruchomienie VELORA zakończyło się nieoczekiwanie. Sesja wróciła do ekranu głównego."
+                    .into()
+            }
+            _ => {
+                "VELORA została uruchomiona ponownie. Poprzednia sesja zewnętrzna wymaga świadomego wyboru."
+                    .into()
+            }
+        },
+    };
+    machine.current = SessionId::VeloraHome;
+    machine.previous = (previous != SessionId::VeloraHome).then_some(previous);
+    machine.revision = state.snapshot.revision.saturating_add(1);
+    machine.transitioned_at_ms = now;
+    // A persisted launch context is not trusted after a restart: the process
+    // may have exited while VELORA was down.
+    machine.context = None;
+    machine.recovery = Some(recovery.clone());
+    Some(recovery)
+}
+
+pub(crate) fn restore_persisted_session(
+    app: &AppHandle,
+) -> Result<Option<SessionRecovery>, String> {
+    let loaded = session_store::load(app);
+    let orchestrator = app.state::<SessionOrchestrator>();
+    let now = now_ms();
+    let mut machine = orchestrator
+        .machine
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    match loaded {
+        Ok(Some(state)) => {
+            let Some(recovery) = apply_persisted_recovery(&mut machine, &state, now) else {
+                return Ok(None);
+            };
+            let snapshot = machine.snapshot();
+            drop(machine);
+            let _ = session_store::save(app, &snapshot, false);
+            Ok(Some(recovery))
+        }
+        Ok(None) => Ok(None),
+        Err(error) => {
+            let recovery = SessionRecovery {
+                recovered_at_ms: now,
+                previous_session: machine.current,
+                previous_revision: machine.revision,
+                reason: RecoveryReason::CorruptState,
+                message: format!(
+                    "{error} VELORA rozpoczęła od bezpiecznego ekranu głównego."
+                ),
+            };
+            machine.recovery = Some(recovery.clone());
+            let snapshot = machine.snapshot();
+            drop(machine);
+            let _ = session_store::save(app, &snapshot, false);
+            Ok(Some(recovery))
+        }
+    }
+}
+
+pub(crate) fn mark_clean_shutdown(app: &AppHandle) {
+    let snapshot = current_snapshot(app);
+    let _ = session_store::save(app, &snapshot, true);
 }
 
 pub(crate) fn emit_automatic_return(app: &AppHandle, restore: RestoreResult) {
@@ -310,60 +633,187 @@ pub(crate) fn launch_owns_session(app: &AppHandle, launch_id: &str) -> bool {
 /// superseded launch must not pull a newer session back to VELORA Home.
 pub(crate) fn finish_launch_session(app: &AppHandle, launch_id: &str) {
     let orchestrator = app.state::<SessionOrchestrator>();
-    let mut machine = orchestrator
-        .machine
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if machine
-        .context
-        .as_ref()
-        .and_then(|context| context.launch_id.as_deref())
-        != Some(launch_id)
-    {
-        return;
-    }
-    if let Ok((_, Some(event))) = machine.transition_at(
-        SessionId::VeloraHome,
-        TransitionCause::ProcessExit,
-        None,
-        now_ms(),
-    ) {
-        let _ = app.emit(SESSION_CHANGED_EVENT, event);
-    }
+    let snapshot = {
+        let mut machine = orchestrator
+            .machine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if machine
+            .context
+            .as_ref()
+            .and_then(|context| context.launch_id.as_deref())
+            != Some(launch_id)
+        {
+            return;
+        }
+        match machine.transition_at(
+            SessionId::VeloraHome,
+            TransitionCause::ProcessExit,
+            None,
+            now_ms(),
+        ) {
+            Ok((snapshot, event)) => {
+                if let Some(event) = event {
+                    let _ = app.emit(SESSION_CHANGED_EVENT, event);
+                }
+                snapshot
+            }
+            Err(_) => return,
+        }
+    };
+    orchestrator.persist(app, &snapshot);
 }
 
-pub(crate) fn return_home(app: &AppHandle, cause: TransitionCause) -> Result<ReturnHomeResult, SessionError> {
-    apply_transition(app, SessionId::VeloraHome, cause, None)?;
+/// Called after resume and at startup. A persisted launch context that is not
+/// present in LaunchRegistry is an orphan and must not keep VELORA in a game
+/// session forever.
+fn orphan_should_be_cleared(launch_id: Option<&str>, launch_active: bool) -> bool {
+    launch_id.is_some() && !launch_active
+}
+
+pub(crate) fn reconcile_orphaned_launch(app: &AppHandle) -> bool {
+    let snapshot = current_snapshot(app);
+    let Some(launch_id) = snapshot
+        .context
+        .as_ref()
+        .and_then(|context| context.launch_id.clone())
+    else {
+        return false;
+    };
+    if !orphan_should_be_cleared(
+        Some(launch_id.as_str()),
+        crate::launch_registry::is_launch_active(app, &launch_id),
+    ) {
+        return false;
+    }
+    {
+        let orchestrator = app.state::<SessionOrchestrator>();
+        let mut machine = orchestrator
+            .machine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if machine
+            .context
+            .as_ref()
+            .and_then(|context| context.launch_id.as_deref())
+            != Some(launch_id.as_str())
+        {
+            return false;
+        }
+        machine.recovery = Some(SessionRecovery {
+            recovered_at_ms: now_ms(),
+            previous_session: machine.current,
+            previous_revision: machine.revision,
+            reason: RecoveryReason::OrphanedLaunch,
+            message: "Kontekst uruchomienia nie istnieje już w rejestrze; sesja wróciła do Home."
+                .into(),
+        });
+    }
+    finish_launch_session(app, &launch_id);
+    true
+}
+
+pub(crate) fn return_home(
+    app: &AppHandle,
+    cause: TransitionCause,
+) -> Result<ReturnHomeResult, SessionError> {
+    let orchestrator = app.state::<SessionOrchestrator>();
+    let operation = orchestrator
+        .operations
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .begin(
+            OperationKind::ReturnHome,
+            now_ms(),
+            RETURN_HOME_TIMEOUT_MS,
+        );
+
+    if let Err(error) = apply_transition(app, SessionId::VeloraHome, cause, None) {
+        let _ = orchestrator
+            .operations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .finish(&operation.id, now_ms(), false);
+        return Err(error);
+    }
+
+    let cancelled = orchestrator
+        .operations
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .is_cancelled(&operation.id);
+    if cancelled {
+        let _ = orchestrator
+            .operations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .finish(&operation.id, now_ms(), false);
+        let machine = orchestrator
+            .machine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut error = machine.error(
+            SessionErrorCode::Cancelled,
+            "Sesja wróciła do Home, ale przywracanie okna zostało anulowane.",
+            SessionId::VeloraHome,
+        );
+        error.current_revision = machine.revision;
+        let _ = app.emit(SESSION_ERROR_EVENT, error.clone());
+        return Err(error);
+    }
+
     let restore = window_broker::restore_velora(app, RestoreReason::UserRequest);
     // The restore can take up to ~100 ms. Re-read the authoritative snapshot
     // so a concurrent transition is not overwritten by a stale event payload.
     let session = current_snapshot(app);
+    let timed_out = now_ms() > operation.deadline_at_ms;
+    let _ = orchestrator
+        .operations
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .finish(&operation.id, now_ms(), timed_out);
     let event = ReturnHomeEvent {
         cause,
         session: session.clone(),
         restore: restore.clone(),
     };
     let _ = app.emit(RETURN_HOME_EVENT, event);
-    Ok(ReturnHomeResult { session, restore })
+    Ok(ReturnHomeResult {
+        session,
+        restore,
+        operation_id: operation.id,
+        timed_out,
+    })
 }
 
 #[tauri::command]
 pub fn get_session_state(app: AppHandle) -> SessionSnapshot {
-    let orchestrator = app.state::<SessionOrchestrator>();
-    let snapshot = orchestrator
-        .machine
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .snapshot();
-    snapshot
+    current_snapshot(&app)
 }
 
 #[tauri::command]
-pub fn request_session_transition(
+pub fn get_session_operations(app: AppHandle) -> Vec<SessionOperation> {
+    app.state::<SessionOrchestrator>().operation_snapshot()
+}
+
+#[tauri::command]
+pub fn cancel_session_operation(app: AppHandle, operation_id: String) -> Option<SessionOperation> {
+    app.state::<SessionOrchestrator>()
+        .operations
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .cancel(&operation_id, now_ms())
+}
+
+#[tauri::command]
+pub async fn request_session_transition(
     app: AppHandle,
     request: TransitionRequest,
 ) -> Result<SessionSnapshot, SessionError> {
-    apply_transition(&app, request.target, request.cause, request.context)
+    let target = request.target;
+    tauri::async_runtime::spawn_blocking(move || apply_transition_command(&app, &request))
+        .await
+        .unwrap_or_else(|_| Err(internal_error(SessionId::VeloraHome, target)))
 }
 
 #[tauri::command]
@@ -378,9 +828,11 @@ pub async fn return_velora_home(app: AppHandle) -> Result<ReturnHomeResult, Sess
 #[cfg(test)]
 mod tests {
     use super::{
-        allowed_targets, transition_is_allowed, SessionChangedEvent, SessionContext, SessionErrorCode,
-        SessionId, SessionMachine, TransitionCause,
+        allowed_targets, apply_persisted_recovery, transition_is_allowed, SessionChangedEvent,
+        SessionContext, SessionErrorCode, SessionId, SessionMachine, TransitionCause,
+        TransitionRequest, COMMAND_TTL_MS,
     };
+    use crate::session_store::PersistedSession;
     use serde_json::json;
 
     fn machine() -> SessionMachine {
@@ -506,7 +958,9 @@ mod tests {
             .unwrap();
         assert!(event.is_none());
         assert_eq!(snapshot.revision, 1);
-        assert_eq!(snapshot.context, Some(context));
+        let mut expected = context;
+        expected.session_revision = Some(1);
+        assert_eq!(snapshot.context, Some(expected));
     }
 
     #[test]
@@ -560,6 +1014,7 @@ mod tests {
                     "launchId": "launch-1",
                     "appId": "playnite",
                     "processId": 900,
+                    "sessionRevision": 1,
                 },
                 "revision": 1,
                 "atMs": 75,
@@ -581,6 +1036,127 @@ mod tests {
         assert_eq!(value["cause"], "gamepadHome");
         assert_eq!(value["from"], "game");
         assert_eq!(value["to"], "veloraHome");
+    }
+
+    #[test]
+    fn unexpected_exit_recovery_returns_home_and_preserves_correlation() {
+        let mut original = machine();
+        original
+            .transition_at(SessionId::Game, TransitionCause::Launch, None, 50)
+            .unwrap();
+        let persisted = PersistedSession {
+            version: 1,
+            snapshot: original.snapshot(),
+            clean_shutdown: false,
+            saved_at_ms: 60,
+        };
+        let mut recovered = machine();
+        let recovery = apply_persisted_recovery(&mut recovered, &persisted, 1_000).unwrap();
+        let snapshot = recovered.snapshot();
+        assert_eq!(snapshot.current, SessionId::VeloraHome);
+        assert_eq!(snapshot.previous, Some(SessionId::Game));
+        assert_eq!(snapshot.revision, 2);
+        assert_eq!(snapshot.context, None);
+        assert_eq!(recovery.reason, super::RecoveryReason::UnexpectedExit);
+        assert_eq!(recovery.previous_revision, 1);
+        assert_eq!(snapshot.recovery.as_ref().map(|entry| entry.reason), Some(super::RecoveryReason::UnexpectedExit));
+    }
+
+    #[test]
+    fn clean_restart_at_home_does_not_create_recovery_noise() {
+        let persisted = PersistedSession {
+            version: 1,
+            snapshot: machine().snapshot(),
+            clean_shutdown: true,
+            saved_at_ms: 1,
+        };
+        let mut recovered = machine();
+        assert!(apply_persisted_recovery(&mut recovered, &persisted, 2).is_none());
+    }
+
+    #[test]
+    fn clean_restart_from_an_external_session_reports_it_without_claiming_it() {
+        let mut original = machine();
+        original
+            .transition_at(SessionId::Cinema, TransitionCause::User, None, 50)
+            .unwrap();
+        let persisted = PersistedSession {
+            version: 1,
+            snapshot: original.snapshot(),
+            clean_shutdown: true,
+            saved_at_ms: 60,
+        };
+        let mut recovered = machine();
+        let recovery = apply_persisted_recovery(&mut recovered, &persisted, 70).unwrap();
+        assert_eq!(recovery.reason, super::RecoveryReason::CleanRestart);
+        assert_eq!(recovered.snapshot().current, SessionId::VeloraHome);
+    }
+
+    fn request(target: SessionId, command_id: &str) -> TransitionRequest {
+        TransitionRequest {
+            target,
+            cause: TransitionCause::User,
+            context: None,
+            command_id: Some(command_id.into()),
+            expected_revision: None,
+            issued_at_ms: None,
+        }
+    }
+
+    #[test]
+    fn repeated_command_id_is_idempotent_and_returns_the_original_snapshot() {
+        let mut state = machine();
+        let first = state.apply_command(&request(SessionId::Cinema, "cmd-1"), 100).unwrap().0;
+        let second = state.apply_command(&request(SessionId::Cinema, "cmd-1"), 200).unwrap().0;
+        assert_eq!(first, second);
+        assert_eq!(state.snapshot().revision, 1);
+    }
+
+    #[test]
+    fn command_id_reuse_for_a_different_target_is_rejected() {
+        let mut state = machine();
+        state.apply_command(&request(SessionId::Cinema, "cmd-1"), 100).unwrap();
+        let error = state
+            .apply_command(&request(SessionId::Game, "cmd-1"), 200)
+            .unwrap_err();
+        assert_eq!(error.code, SessionErrorCode::InvalidCommand);
+        assert_eq!(state.snapshot().revision, 1);
+    }
+
+    #[test]
+    fn stale_revision_guard_rejects_the_transition_without_mutation() {
+        let mut state = machine();
+        state.apply_command(&request(SessionId::Cinema, "cmd-1"), 100).unwrap();
+        let mut stale = request(SessionId::Game, "cmd-2");
+        stale.expected_revision = Some(0);
+        let error = state.apply_command(&stale, 200).unwrap_err();
+        assert_eq!(error.code, SessionErrorCode::StaleRevision);
+        assert_eq!(error.current_revision, 1);
+        assert_eq!(error.allowed_targets, super::allowed_targets(SessionId::Cinema).to_vec());
+        assert_eq!(state.snapshot().current, SessionId::Cinema);
+    }
+
+    #[test]
+    fn expired_and_empty_command_ids_are_rejected() {
+        let mut state = machine();
+        let mut expired = request(SessionId::Cinema, "cmd-old");
+        expired.issued_at_ms = Some(1);
+        let error = state
+            .apply_command(&expired, 1 + COMMAND_TTL_MS + 1)
+            .unwrap_err();
+        assert_eq!(error.code, SessionErrorCode::ExpiredCommand);
+        let error = state
+            .apply_command(&request(SessionId::Cinema, ""), 200)
+            .unwrap_err();
+        assert_eq!(error.code, SessionErrorCode::InvalidCommand);
+        assert_eq!(state.snapshot().revision, 0);
+    }
+
+    #[test]
+    fn orphan_detection_requires_a_context_and_an_inactive_launch() {
+        assert!(!super::orphan_should_be_cleared(None, false));
+        assert!(!super::orphan_should_be_cleared(Some("game-1"), true));
+        assert!(super::orphan_should_be_cleared(Some("game-1"), false));
     }
 
     #[test]

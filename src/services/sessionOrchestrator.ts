@@ -15,6 +15,17 @@ export type SessionContext = {
   launchId?: string;
   appId?: string;
   processId?: number;
+  sessionRevision?: number;
+};
+
+export type RecoveryReason = "unexpectedExit" | "cleanRestart" | "corruptState" | "orphanedLaunch";
+
+export type SessionRecovery = {
+  recoveredAtMs: number;
+  previousSession: SessionId;
+  previousRevision: number;
+  reason: RecoveryReason;
+  message: string;
 };
 
 export type SessionSnapshot = {
@@ -24,6 +35,33 @@ export type SessionSnapshot = {
   transitionedAtMs: number;
   context: SessionContext | null;
   allowedTargets: SessionId[];
+  recovery?: SessionRecovery | null;
+};
+
+export type SessionErrorCode =
+  | "invalidTransition"
+  | "internalStateUnavailable"
+  | "staleRevision"
+  | "expiredCommand"
+  | "invalidCommand"
+  | "cancelled";
+
+export type SessionError = {
+  code: SessionErrorCode;
+  message: string;
+  from: SessionId;
+  target: SessionId;
+  currentRevision: number;
+  allowedTargets: SessionId[];
+};
+
+export type SessionOperation = {
+  id: string;
+  kind: "returnHome";
+  status: "pending" | "completed" | "cancelled" | "timedOut";
+  startedAtMs: number;
+  deadlineAtMs: number;
+  finishedAtMs: number | null;
 };
 
 export type RestoreResult = {
@@ -53,6 +91,7 @@ export type RestoreResult = {
     windowPresent: boolean;
   };
   errorCode: number | null;
+  denial?: "foregroundLock" | "accessDenied" | "invalidWindow" | "notFocused" | "unknown" | null;
   message: string;
 };
 
@@ -74,12 +113,17 @@ export type ReturnHomeEvent = {
 export type ReturnHomeResult = {
   session: SessionSnapshot;
   restore: RestoreResult;
+  operationId: string;
+  timedOut: boolean;
 };
 
 export type TransitionRequest = {
   target: SessionId;
   cause: TransitionCause;
   context?: SessionContext;
+  commandId?: string;
+  expectedRevision?: number;
+  issuedAtMs?: number;
 };
 
 const browserSession: SessionSnapshot = {
@@ -118,9 +162,21 @@ export async function returnVeloraHome(): Promise<ReturnHomeResult> {
         errorCode: null,
         message: "Przywracanie okna wymaga natywnej aplikacji Windows.",
       },
+      operationId: "browser-preview",
+      timedOut: false,
     };
   }
   return invoke<ReturnHomeResult>("return_velora_home");
+}
+
+export async function getSessionOperations(): Promise<SessionOperation[]> {
+  if (!isTauri()) return [];
+  return invoke<SessionOperation[]>("get_session_operations");
+}
+
+export async function cancelSessionOperation(operationId: string): Promise<SessionOperation | null> {
+  if (!isTauri()) return null;
+  return invoke<SessionOperation | null>("cancel_session_operation", { operationId });
 }
 
 export async function listenForSessionChange(

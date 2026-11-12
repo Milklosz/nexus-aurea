@@ -236,6 +236,18 @@
 .cc-footer button:last-child { border-color: rgba(221, 189, 137, .5); color: #ead4ad; background: rgba(212, 178, 127, .11); }
 .cc-footer-hint, .cc-hint { color: #918b80; font-size: clamp(.7rem, .8vw, .79rem); }
 .cc-hint { margin: -.35rem 0 0; text-align: center; }
+.system-diagnostics { margin-top: 1.2rem; padding-top: 1rem; border-top: 1px solid rgba(183, 155, 98, .35); display: grid; gap: .55rem; }
+.system-diagnostics h3 { margin: 0; color: #f0ddba; font-size: 1.05rem; letter-spacing: .06em; }
+.system-diagnostics .cc-card-heading { margin-bottom: .2rem; }
+.system-diagnostics-list { margin: .2rem 0; padding-left: 1.1rem; display: grid; gap: .25rem; color: #ddd2bd; font-size: .82rem; line-height: 1.45; }
+.system-diagnostics-list strong { color: #f5e8cf; }
+.system-diagnostics details { color: #d7cbb6; font-size: .8rem; }
+.system-diagnostics summary { cursor: pointer; color: #e4c37c; margin: .3rem 0; }
+.system-diagnostics details ul { padding-left: 1.1rem; display: grid; gap: .2rem; }
+.system-diagnostics-report { width: 100%; resize: vertical; min-height: 9rem; padding: .7rem; border: 1px solid rgba(183, 155, 98, .4); border-radius: 8px; background: #101216; color: #d8d1c3; font: .72rem/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.system-diagnostics code { color: #e4c37c; word-break: break-all; }
+.fallback-hotkey { display: flex; align-items: center; gap: .5rem; color: #d8ccb6; font-size: .82rem; }
+.fallback-hotkey select { min-height: 2.4rem; padding: .2rem .6rem; border: 1px solid rgba(183, 155, 98, .45); border-radius: 8px; background: #17191d; color: #f0e4cc; font: inherit; }
 @media (max-width: 760px) {
   .control-center { width: 96vw; max-height: 96dvh; height: 94dvh; padding: 1rem; gap: .7rem; border-radius: 21px; }
   .cc-card-grid { grid-template-columns: minmax(0, 1fr); }

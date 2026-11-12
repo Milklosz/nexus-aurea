@@ -11,6 +11,8 @@ use tauri::Emitter;
 #[cfg(target_os = "windows")]
 use crate::launch_registry::{self, LaunchKind, LaunchWatch};
 #[cfg(target_os = "windows")]
+use crate::process_table;
+#[cfg(target_os = "windows")]
 use crate::session_orchestrator::SessionId;
 
 /// Runs filesystem and process inspection outside Tauri's main thread.
@@ -152,7 +154,7 @@ fn app_manager_snapshot() -> AppManagerSnapshot {
             }
         }).collect();
         let (games, games_error) = if app_path("steamBigPicture").is_some() {
-            match steam_games() {
+            match steam_games_cached() {
                 Ok(games) => (games, None),
                 Err(error) => (Vec::new(), Some(error)),
             }
@@ -251,7 +253,7 @@ fn launch_managed_app_blocking(app: AppHandle, id: String) -> Result<LaunchRecei
     {
         let executable = app_path(spec.id)
             .ok_or_else(|| format!("Nie wykryto zainstalowanej aplikacji: {}.", spec.name))?;
-        let count = app_process_count(spec.id, spec.process_name)?;
+        let count = app_process_count_fresh(spec.id, spec.process_name)?;
         let already_running = count > 0;
         if already_running && !should_dispatch_when_running(spec.id) {
             return Ok(LaunchReceipt {
@@ -681,60 +683,35 @@ fn steam_games() -> Result<Vec<ManagedGame>, String> {
     Ok(games)
 }
 
+const STEAM_LIBRARY_CACHE_MS: u64 = 60_000;
+
+#[cfg(target_os = "windows")]
+fn steam_games_cached() -> Result<Vec<ManagedGame>, String> {
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+
+    static CACHE: OnceLock<Mutex<Option<(Instant, Vec<ManagedGame>)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    let mut guard = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((captured_at, games)) = guard.as_ref() {
+        if captured_at.elapsed() <= Duration::from_millis(STEAM_LIBRARY_CACHE_MS) {
+            return Ok(games.clone());
+        }
+    }
+    let games = steam_games()?;
+    *guard = Some((Instant::now(), games.clone()));
+    Ok(games)
+}
+
 fn first_existing(paths: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
     paths.into_iter().find(|path| path.is_file())
 }
 
 #[cfg(target_os = "windows")]
 fn process_count(image_name: &str) -> Result<usize, String> {
-    Ok(process_counts(&[image_name])?.into_iter().next().unwrap_or(0))
-}
-
-#[cfg(target_os = "windows")]
-fn process_counts(image_names: &[&str]) -> Result<Vec<usize>, String> {
-    use windows::core::HRESULT;
-    use windows::Win32::Foundation::{CloseHandle, ERROR_NO_MORE_FILES};
-    use windows::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
-        TH32CS_SNAPPROCESS,
-    };
-
-    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }
-        .map_err(|_| "Nie można odczytać stanu procesów Windows.".to_string())?;
-    let no_more_files = HRESULT::from_win32(ERROR_NO_MORE_FILES.0);
-    let mut entry = PROCESSENTRY32W {
-        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
-        ..Default::default()
-    };
-    let first = unsafe { Process32FirstW(snapshot, &mut entry) };
-    let mut counts = vec![0usize; image_names.len()];
-
-    let result = match first {
-        Ok(()) => loop {
-            for (index, image_name) in image_names.iter().enumerate() {
-                if process_entry_matches(&entry.szExeFile, image_name) {
-                    counts[index] += 1;
-                }
-            }
-            match unsafe { Process32NextW(snapshot, &mut entry) } {
-                Ok(()) => {}
-                Err(error) if error.code() == no_more_files => break Ok(counts),
-                Err(_) => break Err("Nie udało się odczytać stanu procesów Windows.".into()),
-            }
-        },
-        Err(error) if error.code() == no_more_files => Ok(counts),
-        Err(_) => Err("Nie udało się odczytać stanu procesów Windows.".into()),
-    };
-    let close_result = unsafe { CloseHandle(snapshot) };
-    if result.is_ok() && close_result.is_err() {
-        return Err("Nie udało się zamknąć migawki procesów Windows.".into());
-    }
-    result
-}
-
-fn process_entry_matches(executable_name: &[u16], image_name: &str) -> bool {
-    let length = executable_name.iter().position(|character| *character == 0).unwrap_or(executable_name.len());
-    String::from_utf16_lossy(&executable_name[..length]).eq_ignore_ascii_case(image_name)
+    Ok(process_table::snapshot(false)?.count_image(image_name))
 }
 
 #[cfg(target_os = "windows")]
@@ -746,12 +723,12 @@ struct PlayniteProcesses {
 
 #[cfg(target_os = "windows")]
 fn playnite_processes() -> Result<PlayniteProcesses, String> {
-    // One Toolhelp snapshot keeps the Fullscreen/Desktop transition coherent and
-    // avoids two full process scans on every watcher tick.
-    let counts = process_counts(&["Playnite.FullscreenApp.exe", "Playnite.DesktopApp.exe"])?;
+    // One shared process snapshot keeps the Fullscreen/Desktop transition
+    // coherent and avoids two full scans on every status read.
+    let table = process_table::snapshot(false)?;
     Ok(PlayniteProcesses {
-        fullscreen: counts[0],
-        desktop: counts[1],
+        fullscreen: table.count_image("Playnite.FullscreenApp.exe"),
+        desktop: table.count_image("Playnite.DesktopApp.exe"),
     })
 }
 
@@ -764,16 +741,31 @@ fn app_process_count(id: &str, process_name: &str) -> Result<usize, String> {
     process_count(process_name)
 }
 
+#[cfg(target_os = "windows")]
+fn app_process_count_fresh(id: &str, process_name: &str) -> Result<usize, String> {
+    let table = process_table::snapshot(true)?;
+    if id == "playniteFullscreen" {
+        return Ok(table.count_image("Playnite.FullscreenApp.exe")
+            + table.count_image("Playnite.DesktopApp.exe"));
+    }
+    Ok(table.count_image(process_name))
+}
+
 #[cfg(not(target_os = "windows"))]
 fn app_process_count(_id: &str, _process_name: &str) -> Result<usize, String> {
+    Ok(0)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn app_process_count_fresh(_id: &str, _process_name: &str) -> Result<usize, String> {
     Ok(0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        is_valid_steam_app_id, parse_steam_manifest, parse_vdf_pair, process_entry_matches,
-        should_dispatch_when_running, spec_for,
+        is_valid_steam_app_id, parse_steam_manifest, parse_vdf_pair, should_dispatch_when_running,
+        spec_for,
     };
 
     #[test]
@@ -845,10 +837,4 @@ mod tests {
         assert!(parse_steam_manifest(traversal).is_none());
     }
 
-    #[test]
-    fn process_diagnostics_match_names_case_insensitively() {
-        let name = "ChRoMe.ExE".encode_utf16().chain([0]).collect::<Vec<_>>();
-        assert!(process_entry_matches(&name, "chrome.exe"));
-        assert!(!process_entry_matches(&name, "steam.exe"));
-    }
 }
