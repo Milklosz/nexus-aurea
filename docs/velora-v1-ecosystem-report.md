@@ -51,21 +51,44 @@ dokładnie tak jak odnotowano w `docs/velora-v1-experience.md`.
 
 ## 4. Wyniki Windows CI
 
-Lokalna weryfikacja krzyżowa `cargo check --target x86_64-pc-windows-msvc`
-**nie jest możliwa na macOS**: `aws-lc-sys v0.47.0` (zależność Windows-only stosu
-`axum-server`/`rustls`) w build-skrypcie C wymaga nagłówków Windows SDK
-(`windows.h`, `stdlib.h`), których nie ma w toolchainie cross-kompilacji.
-To ograniczenie środowiska, **nie błąd kodu** — nie deklarujemy lokalnego PASS.
+**CI: PASS — obie platformy, oba przebiegi, `gh pr checks 18` exit 0.**
+`head` PR: `612ace57556be260a486fed4a754f2b6a1d7ba03`.
 
-Autorytatywny wynik (Windows MSVC `cargo check` + pełny build NSIS) pochodzi z
-`windows-latest` w `.github/workflows/ci.yml` i jest odczytywany przez
-`gh pr checks`. Szczegółowe identyfikatory przebiegów, artefakt i SHA-256
-instalatora są odnotowane w opisie Draft PR oraz w końcowym raporcie w czacie.
-Żaden instalator **nie został zainstalowany na MSI**.
+| Przebieg | macOS | Windows | Wniosek |
+| --- | --- | --- | --- |
+| `push` [43194820910](https://github.com/Milklosz/nexus-aurea/actions/runs/43194820910) | **pass** 1m36s | **pass** 10m31s | `success` |
+| `pull_request` [43194911192](https://github.com/Milklosz/nexus-aurea/actions/runs/43194911192) | **pass** 4m19s | **pass** 4m21s | `success` |
+
+`gh pr checks 18` → 4× `pass` + 2× `Publish GitHub Release` = `skipping`
+(brak tagu / release'u). Windows zweryfikował m.in.
+`cargo check --locked --target x86_64-pc-windows-msvc`,
+`cargo test --locked --lib`, `pnpm test`, `pnpm build`, `git diff --check`
+oraz **pełny build NSIS** (`pnpm tauri build --ci --target x86_64-pc-windows-msvc`).
+
+- Artefakt: `VELORA-Windows-x64-dd709e85780482e6e23baf30a56bc20305712aa9`
+  → `VELORA_0.9.2_x64-setup.exe` (3.57 MiB).
+- SHA-256 (PR run, merge `dd709e8…`): `3c452891ca120fa06cc5b9de8316ba040fb3de9b9c4fadea74ab224bc41fab8e`
+- SHA-256 (push run, head `612ace5…`): `110fb5d1c25c90a9a5075f1f45dcd9886eb33cf12bd408db6e880c491b9e7981`
+
+NSIS osadza znacznik czasu, stąd różne hashe przy identycznym kodzie aplikacji
+(zachowanie odnotowane już w `docs/velora-v1-experience.md`).
+
+**Uczciwe ograniczenie:** lokalna weryfikacja krzyżowa
+`cargo check --target x86_64-pc-windows-msvc` **nie jest możliwa na macOS** —
+`aws-lc-sys v0.47.0` (Windows-only stos `axum-server`/`rustls`) w build-skrypcie
+C wymaga nagłówków Windows SDK (`windows.h`, `stdlib.h`), niedostępnych w
+cross-toolchainie. To ograniczenie środowiska, **nie błąd kodu**; nie deklarujemy
+lokalnego PASS. Autorytatywny wynik powyżej pochodzi z `windows-latest`.
+**Żaden instalator nie został zainstalowany na MSI.**
 
 ## 5. Bezpieczeństwo
 
 Pełny przegląd: [`docs/velora-v1-ecosystem-security-review.md`](velora-v1-ecosystem-security-review.md).
+Wykonano **dwie niezależne weryfikacje**: statyczny przegląd lead-engineera oraz
+osobny, tylko-do-odczytu przegląd subagenta (8 obszarów, **8/8 PASS**, werdykt
+*"No new security regressions introduced"*). Obie zgodne co do wszystkich
+kontroli; jedyne trafienia grepa na „niebezpieczne" tokeny to literały w testach
+negatywnych / asercjach strażniczych, zweryfikowane przez odczyt kontekstu.
 
 **Werdykt: nie wprowadzono nowych regresji bezpieczeństwa.**
 
@@ -101,9 +124,15 @@ Pełny przegląd: [`docs/velora-v1-ecosystem-security-review.md`](velora-v1-ecos
 
 ## 7. Link do Draft PR
 
-Draft PR do `feat/velora-v1-experience`: link i numer znajdują się w opisie
-przeglądu (`gh pr view`) oraz w końcowym raporcie w czacie. PR jest **Draft**,
-bez merge i bez release; `Publish GitHub Release` pozostaje `skipping` (brak tagu).
+**PR #18 — https://github.com/Milklosz/nexus-aurea/pull/18**
+
+- Tytuł: *VELORA 1.0 — Ecosystem: Playnite real-data manifest, Edge Lifecycle 2.0,
+  iPhone Remote 2.0, Recovery, Couch Control & Contracts (Draft)*.
+- Kierunek: `feat/velora-v1-ecosystem` → **`feat/velora-v1-experience`** (PR #15).
+- Stan: **Draft / OPEN**, bez merge i bez release; `Publish GitHub Release`
+  pozostaje `skipping` (brak tagu / release'u).
+- Utworzony po 9 małych commitach; `gh pr checks 18` raportuje przebiegi CI
+  (`push` + `pull_request`, macOS + Windows).
 
 ## 8. Instrukcja testów na MSI (Windows) — do wykonania ręcznie
 
