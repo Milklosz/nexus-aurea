@@ -508,11 +508,16 @@ fn advance(
     process_ids.sort_unstable();
     tracked.session.process_ids = process_ids;
     tracked.session.foreground = foreground_matches;
-    tracked.session.window_id = windows
+    // Keep the last known HWND when the window list is temporarily empty. The
+    // close guard below must be able to distinguish a closed window from one
+    // that is merely cloaked or on another virtual desktop.
+    if let Some(window) = windows
         .iter()
         .find(|window| Some(window.hwnd) == observation.foreground.hwnd)
         .or_else(|| windows.first())
-        .map(|window| window.hwnd);
+    {
+        tracked.session.window_id = Some(window.hwnd);
+    }
 
     // Edge Cinema may keep helper/browser processes alive after the visible app
     // window closes. For launches that opt in, a missing window is a terminal
@@ -1692,6 +1697,56 @@ mod tests {
                 Some(crate::session_orchestrator::SessionId::Cinema)
             ),
             Some(crate::session_orchestrator::SessionId::Cinema)
+        );
+    }
+
+    #[test]
+    fn missing_window_does_not_forget_the_last_known_hwnd() {
+        let mut watch = LaunchWatch::new(
+            LaunchKind::Cinema,
+            "Edge Cinema",
+            Some("edge-cinema".into()),
+            Vec::new(),
+            Some(300),
+            true,
+            true,
+            Vec::new(),
+            true,
+            Some(crate::session_orchestrator::SessionId::Cinema),
+        )
+        .detect_window_close()
+        .include_root_window();
+        watch.baseline_captured = true;
+        let mut session = TrackedLaunch {
+            session: LaunchSession {
+                id: "cinema-hwnd".into(),
+                kind: LaunchKind::Cinema,
+                display_name: "Edge Cinema".into(),
+                app_id: Some("edge-cinema".into()),
+                phase: LaunchPhase::SessionActive,
+                process_ids: vec![300],
+                foreground: true,
+                window_id: Some(700),
+                started_at_ms: 1_000,
+                updated_at_ms: 1_000,
+                error: None,
+                restore: None,
+                session_revision: None,
+                pid_reuse_detected: false,
+                attention: None,
+            },
+            watch,
+            absent_since_ms: None,
+            window_absent_since_ms: None,
+        };
+        advance(
+            &mut session,
+            &observation(vec![(300, 1, "msedge.exe")], vec![], None, 2_000),
+        );
+        assert_eq!(
+            session.session.window_id,
+            Some(700),
+            "the last HWND is needed to distinguish closed from cloaked"
         );
     }
 
