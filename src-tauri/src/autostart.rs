@@ -742,6 +742,20 @@ mod tests {
         assert_only_hkcu_without_shell_or_cmd(&[registry_run_key().to_string()]);
     }
 
+    #[test]
+    fn installer_hook_never_creates_or_renames_a_startup_shortcut() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/windows/installer-hooks.nsh");
+        let source = std::fs::read_to_string(path).expect("installer hook must be readable");
+        assert!(
+            !source.contains("$SMPROGRAMS\\Startup"),
+            "autostart must stay in the opt-in HKCU Run value, not the Startup folder"
+        );
+        assert!(
+            !source.contains("Rename"),
+            "the installer must not rename shell shortcuts"
+        );
+    }
+
     // ===== Nowe, czyste testy diagnostyki (bez reg.exe, działają na macOS) =====
 
     fn good_exe() -> &'static str {

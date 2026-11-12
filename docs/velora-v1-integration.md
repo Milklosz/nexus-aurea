@@ -148,7 +148,8 @@ in `App.tsx`. It does not own sessions.
 - opt-in only; no automatic repair;
 - exactly one `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` value named
   `VELORA`;
-- no HKLM, Winlogon, shell replacement or Startup folder writes;
+- no HKLM, Winlogon, shell replacement or Startup folder writes; the NSIS
+  installer hook was audited and no longer renames a legacy Startup shortcut;
 - `--windowed` is the only optional startup flag;
 - stale/updated-path diagnostics are read-only and recommend toggling autostart
   again;
