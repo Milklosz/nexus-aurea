@@ -95,20 +95,22 @@ Siatka okładek: przyciski z roving `tabIndex`, `data-aurea-focus` i `aria-curre
 aktywnej karcie oraz 2D nawigacja strzałkami przez czysty helper `moveGridFocus`.
 Stan ładowania i błędy są ogłaszane przez `role="status"` / `aria-live="polite"`.
 
-## 5. Co musi zarejestrować integrator
+## 5. Gdzie panel jest zamontowany i co rejestruje integrator
 
-Panel **nie jest nigdzie zamontowany** w tym obszarze. Integrator w `GamingHub.tsx`
-wstawia `<PlayniteLibrary />` (import z `../components/PlayniteLibrary`), a w
-`src-tauri/src/lib.rs` dopisuje:
+Panel **jest już zamontowany** w `src/components/ControlCenter.tsx` (sekcja Gaming,
+około linii 340: `<PlayniteLibrary />`) — nie trzeba go ręcznie wstawiać do
+`GamingHub.tsx`. W `src-tauri/src/lib.rs` zarejestrowane są oba moduły i obie komendy:
 
 ```rust
 mod playnite_library;                       // obok pozostałych modułów
+mod playnite_manifest;                      // moduł A2 — parser manifestu
 // ... w invoke_handler(tauri::generate_handler![ ... ]):
 playnite_library::get_playnite_library,
+playnite_manifest::get_playnite_manifest,
 ```
 
 Nie są potrzebne żadne zmiany w `capabilities/default.json`, `tauri.conf.json`, CSP,
-`Cargo.toml` ani nowe zależności — to komenda aplikacji, nie wtyczki, i jest dozwolona
+`Cargo.toml` ani nowe zależności — to komendy aplikacji, nie wtyczki, i są dozwolone
 przez istniejący `invoke_handler`.
 
 ## 6. Lista kontrolna do sprawdzenia ręcznego na MSI (Windows)
@@ -144,3 +146,64 @@ Do wykonania na maszynie MSI z zainstalowanym Playnite, po wdrożeniu integrator
     i **nie wywołuje** `invoke` (brak błędów w konsoli o niedostępnej komendzie).
 12. **Brak ingerencji w system:** nie są tworzone wpisy rejestru, skróty, usługi ani
     pliki instalacyjne; VELORA nie instaluje Playnite ani dodatków.
+
+## 7. v1-ecosystem: lokalny, tylko-do-odczytu manifest (moduł A2)
+
+Powstał **jawny kontrakt wymiany** z rozszerzeniem Playnite — patrz
+[kontrakt manifestu](playnite-manifest-contract.md) oraz maszynowa
+[schema JSON](schemas/velora-playnite-manifest.schema.json). Zamiast czytać
+nieudokumentowaną bazę Playnite, małe rozszerzenie .NET eksportuje wybrane metadane
+do lokalnego pliku, który VELORA otwiera **wyłącznie do odczytu**:
+
+```
+%LOCALAPPDATA%\VELORA\Playnite\velora-library-manifest.json
+```
+
+### Status uczciwy
+
+- Integracja **nie została uruchomiona** w tym środowisku (macOS; Playnite działa
+  na Windows). Dostarczono kompletny parser + testy, kontrakt, schema i
+  [instrukcję instalacji rozszerzenia](playnite-extension-install.md).
+- Realny odczyt z `LOCALAPPDATA` istnieje **tylko na Windows**
+  (`#[cfg(target_os = "windows")]`). Poza Windows parser zwraca jawny błąd
+  `NonWindows`, więc `cargo test --lib` na macOS pozostaje bezpieczny i zielony.
+- Wymagana jest **ręczna instalacja rozszerzenia na Windows**. Nie wykonano testów
+  na MSI, testów sprzętowych ani weryfikacji 4K/HDR/DRM/HDCP.
+
+### Co się zmieniło w warstwie natywnej
+
+- Nowy moduł `src-tauri/src/playnite_manifest.rs` (tylko `serde`, `serde_json`,
+  `std`, `tauri`; bez nowych crate'ów) parsuje i **ściśle waliduje** każdą regułę
+  kontraktu: `schemaVersion === 1`, `kind`, `readOnly === true`, `source`,
+  `extension`, ISO-8601 UTC, ≤ 10 000 gier, GUID `id`, bezpieczne okładki
+  `data:image/...;base64,...`, oraz `launch.uri` wyłącznie równe
+  `playnite://playnite/start/<id>` (odrzuca `file:`, `javascript:`, `http(s)://`,
+  wstrzyknięte argumenty, duplikaty `id`). Błędy mapowane są na czyste, polskie
+  komunikaty bez surowych ścieżek i bez `os error`.
+- `get_playnite_library()` **preferuje teraz zwalidowany lokalny manifest**
+  (`resolve_library_snapshot(read_default_manifest().ok())`). Gdy manifest jest
+  nieobecny lub nieważny, wraca do **bezpiecznego** `playnite-detected` /
+  `unavailable` — nigdy nie zgaduje danych gier. Zwracany kształt pozostaje
+  identyczny (`PlayniteLibrarySnapshot`), więc UI i `normalizeSnapshot()` działają
+  bez zmian.
+- Nowa komenda `get_playnite_manifest` zwraca bogatszy, typowany widok
+  (`PlayniteManifestView`: `schemaVersion`, `generatedAt`, `source`, `readOnly`,
+  `gameCount`, `games`, `diagnostics`) z polami `favorite`, `installed`,
+  `playCount`, `playtimeSeconds` i `launch`.
+
+### Co się zmieniło w adapterze frontendu (addytywnie)
+
+`src/services/playniteLibrary.ts` **zachowuje wszystkie dotychczasowe eksporty
+i domyślny parametr** `readPlayniteLibrary(adapter = createTauriPlayniteAdapter())`.
+Dodano wyłącznie:
+
+- `readPlayniteManifest()` — `invoke("get_playnite_manifest")` ze ścisłą walidacją;
+  w podglądzie webowym nie woła `invoke`, a każdy błąd zwraca `null` (bez rzucania
+  do UI),
+- `playniteLaunchRefFor(game)` — czysty helper wyprowadzający bezpieczne URI z `id`
+  i ponownie weryfikujący `launch.uri`,
+- `createManifestPlayniteAdapter()` — nowy, **opt-in** adapter mapujący widok na
+  istniejący `PlayniteLibrarySnapshot` (przez `normalizeSnapshot`).
+
+Dzięki temu dotychczasowe 277 testów JS i 38 testów Rust pozostają zielone, a
+ścieżka z manifestem jest w pełni addytywna i bezpieczna w razie braku rozszerzenia.
