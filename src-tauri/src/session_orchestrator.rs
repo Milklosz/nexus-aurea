@@ -705,11 +705,14 @@ pub(crate) fn emit_automatic_return(app: &AppHandle, restore: RestoreResult) {
 }
 
 pub(crate) fn launch_owns_session(app: &AppHandle, launch_id: &str) -> bool {
-    current_snapshot(app)
-        .context
-        .as_ref()
-        .and_then(|context| context.launch_id.as_deref())
-        == Some(launch_id)
+    context_owned_by_launch(current_snapshot(app).context.as_ref(), launch_id)
+}
+
+/// Pure ownership rule behind [`launch_owns_session`]. Only the launch id that
+/// is currently stored in the session context owns the session. A stale watcher
+/// holding an older id, or a session with no context, never owns it.
+pub(crate) fn context_owned_by_launch(context: Option<&SessionContext>, launch_id: &str) -> bool {
+    context.and_then(|context| context.launch_id.as_deref()) == Some(launch_id)
 }
 
 /// Clears the session only when the ending launch still owns it. A stale or
@@ -1589,5 +1592,66 @@ mod tests {
             1_100
         ));
         assert!(!super::home_completion_is_reusable(None, &snapshot, 1_100));
+    }
+}
+
+#[cfg(test)]
+mod stale_watcher_tests {
+    use super::{context_owned_by_launch, SessionContext, SessionId, SessionMachine, TransitionCause};
+
+    fn launch_context(launch_id: &str) -> SessionContext {
+        SessionContext::for_launch(launch_id, Some("edge-cinema"), None)
+    }
+
+    #[test]
+    fn only_the_current_launch_context_owns_the_session() {
+        let mut machine = SessionMachine::default();
+        machine
+            .transition_at(
+                SessionId::Cinema,
+                TransitionCause::Launch,
+                Some(launch_context("cinema-1")),
+                1_000,
+            )
+            .unwrap();
+        assert!(context_owned_by_launch(machine.snapshot().context.as_ref(), "cinema-1"));
+        assert!(!context_owned_by_launch(machine.snapshot().context.as_ref(), "cinema-0"));
+    }
+
+    #[test]
+    fn a_stale_watcher_cannot_finish_a_session_after_home_or_a_newer_launch() {
+        let mut machine = SessionMachine::default();
+        machine
+            .transition_at(
+                SessionId::Cinema,
+                TransitionCause::Launch,
+                Some(launch_context("cinema-1")),
+                1_000,
+            )
+            .unwrap();
+        // The user explicitly returns Home while the old launch's exit watcher
+        // is still in its grace window. Home clears the owner.
+        machine
+            .transition_at(SessionId::VeloraHome, TransitionCause::User, None, 2_000)
+            .unwrap();
+        assert!(!context_owned_by_launch(machine.snapshot().context.as_ref(), "cinema-1"));
+
+        // A newer launch then takes the session. The old id must not own it,
+        // so the stale watcher cannot pull the new session back to Home.
+        machine
+            .transition_at(
+                SessionId::Cinema,
+                TransitionCause::Launch,
+                Some(launch_context("cinema-2")),
+                3_000,
+            )
+            .unwrap();
+        assert!(!context_owned_by_launch(machine.snapshot().context.as_ref(), "cinema-1"));
+        assert!(context_owned_by_launch(machine.snapshot().context.as_ref(), "cinema-2"));
+    }
+
+    #[test]
+    fn a_session_without_context_has_no_owner_to_finish() {
+        assert!(!context_owned_by_launch(None, "anything"));
     }
 }

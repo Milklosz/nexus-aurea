@@ -206,6 +206,25 @@ dedicated profile, close and return Home.
 | K7 | Process privacy | Check diagnostics and Edge IPC for raw window titles/paths. | No raw window titles or user profile paths; Edge exposes only the profile label. | |
 | K8 | Uninstall security | Uninstall and audit leftover services/firewall/registry. | No unexpected service/firewall rule; documented leftovers only. | |
 
+## M. Foreground, Steam and auto-return follow-up (NOT RUN)
+
+Root causes, fixes and known limits: `docs/velora-windows-hardware-fix.md`.
+Nothing in this section was executed on hardware. Each row needs an MSI run.
+
+| # | Test | Expected result | Result |
+|---|---|---|---|
+| M1 | Steam Big Picture from VELORA (fullscreen) | Steam window comes to the front; VELORA stays alive behind it. | |
+| M2 | Netflix in Edge Cinema | Edge window in front; no VELORA focus stealing. | |
+| M3 | Playnite Fullscreen from VELORA | Playnite in front. | |
+| M4 | Close the Edge Cinema window | VELORA returns once; one notice at most. | |
+| M5 | Exit a Steam game | VELORA returns, or a clear `blockedByWindows` message. Record which. | |
+| M6 | Exit Edge while Chrome is in front | VELORA does not take focus from Chrome. | |
+| M7 | PS+Options while a managed app is in front | One Home attempt; honest result; no retry loop. | |
+| M8 | Ctrl+Alt+N from Steam or Edge | VELORA in front. | |
+| M9 | Ctrl+Alt+F12 | Control Service stops; window leaves fullscreen and gets a frame. | |
+| M10 | Steam "Guide button focuses Steam" off (see fix document) | PS button no longer opens Big Picture; PS+Options still works. | |
+| M11 | Broker status after each launch | `lastHandoff` shows attempted / granted / notForeground. Record values. | |
+
 ## L. Final gate
 
 | Criterion | Result |

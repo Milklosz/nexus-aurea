@@ -116,6 +116,9 @@ pub struct WindowBrokerSnapshot {
     pub tracked_windows: Vec<TrackedWindow>,
     pub last_error: Option<String>,
     pub poll_interval_ms: u64,
+    /// Outcome of the most recent foreground hand-off to a launched process.
+    #[serde(default)]
+    pub last_handoff: Option<ForegroundHandoff>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -294,6 +297,145 @@ pub(crate) fn evaluate_restore(
     RestoreDecision::Blocked(RestoreOutcome::BlockedUnsafeForeground)
 }
 
+/// PID → creation time (100 ns) for each process a managed launch owned while it
+/// was observed. LaunchRegistry records it and hands it over once, when that
+/// launch ends. Keeping the creation time means a recycled PID cannot inherit
+/// the grant.
+pub(crate) type EndedSessionOwners = HashMap<u32, u64>;
+
+/// `AllowSetForegroundWindow(ASFW_ANY)`. Used only for a ShellExecute hand-off
+/// when the target process does not exist yet, so no PID can be named.
+pub(crate) const ASFW_ANY: u32 = u32::MAX;
+
+/// Processes that may receive a foreground hand-off: never zero, never VELORA
+/// itself, and each process at most once. `ASFW_ANY` is kept as-is.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn foreground_handoff_targets(candidates: &[u32], own_process_id: u32) -> Vec<u32> {
+    let mut targets: Vec<u32> = Vec::with_capacity(candidates.len());
+    for &candidate in candidates {
+        if candidate == 0 || candidate == own_process_id || targets.contains(&candidate) {
+            continue;
+        }
+        targets.push(candidate);
+    }
+    targets
+}
+
+/// Outcome of a foreground hand-off request. `granted` counts the processes
+/// Windows accepted. `not_foreground` means VELORA did not hold the foreground,
+/// so the request was never sent: only the foreground process may grant it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForegroundHandoff {
+    pub attempted: usize,
+    pub granted: usize,
+    pub not_foreground: bool,
+}
+
+static LAST_HANDOFF: Mutex<Option<ForegroundHandoff>> = Mutex::new(None);
+
+/// Lets processes VELORA is handing the foreground to (a launched app, an
+/// already-running Steam or Playnite client) bring their own windows forward.
+/// This is the documented `AllowSetForegroundWindow` hand-off, issued while the
+/// user's launch gesture keeps VELORA in the foreground. It never forces focus,
+/// never changes system settings and never grants VELORA's own process.
+pub(crate) fn grant_foreground_handoff(process_ids: &[u32]) -> ForegroundHandoff {
+    let targets = foreground_handoff_targets(process_ids, std::process::id());
+    if targets.is_empty() {
+        return ForegroundHandoff::default();
+    }
+    let result = attempt_foreground_handoff(&targets);
+    *LAST_HANDOFF
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(result);
+    result
+}
+
+/// Most recent hand-off attempt, for the broker status diagnostics. It records
+/// what Windows answered, never a guess about what the user saw.
+pub(crate) fn last_foreground_handoff() -> Option<ForegroundHandoff> {
+    *LAST_HANDOFF
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(target_os = "windows")]
+fn attempt_foreground_handoff(targets: &[u32]) -> ForegroundHandoff {
+    if native::foreground_process_id() != Some(std::process::id()) {
+        return ForegroundHandoff {
+            attempted: 0,
+            granted: 0,
+            not_foreground: true,
+        };
+    }
+    let granted = targets
+        .iter()
+        .filter(|process_id| native::allow_foreground_process(**process_id))
+        .count();
+    ForegroundHandoff {
+        attempted: targets.len(),
+        granted,
+        not_foreground: false,
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn attempt_foreground_handoff(_targets: &[u32]) -> ForegroundHandoff {
+    ForegroundHandoff::default()
+}
+
+/// Whether the foreground window belongs to an identity captured while an
+/// ended launch owned it. PID alone is not enough: the creation time seen during
+/// the launch must match the foreground process's creation time.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn foreground_belongs_to_ended_session(
+    foreground: &ForegroundWindow,
+    foreground_created_at_100ns: Option<u64>,
+    ended_owners: &EndedSessionOwners,
+) -> bool {
+    match (foreground.process_id, foreground_created_at_100ns) {
+        (Some(process_id), Some(created_at)) => ended_owners.get(&process_id) == Some(&created_at),
+        _ => false,
+    }
+}
+
+/// Automatic return after a managed launch ended. The generic SessionEnded rule
+/// runs first (VELORA, desktop, Playnite). One addition: the foreground window
+/// may belong to the launch that just ended, for example its Steam client after
+/// a game exits, or a helper window that stayed open. Unrelated applications are
+/// still never focused or touched.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn evaluate_session_end_restore(
+    own_window: Option<u64>,
+    own_window_valid: bool,
+    own_process_id: u32,
+    tracked_processes: &HashSet<u32>,
+    foreground: &ForegroundWindow,
+    foreground_created_at_100ns: Option<u64>,
+    ended_owners: &EndedSessionOwners,
+) -> RestoreDecision {
+    let decision = evaluate_restore(
+        RestoreReason::SessionEnded,
+        own_window,
+        own_window_valid,
+        own_process_id,
+        tracked_processes,
+        foreground,
+    );
+    match decision {
+        RestoreDecision::Blocked(RestoreOutcome::BlockedUnsafeForeground)
+            if foreground_belongs_to_ended_session(
+                foreground,
+                foreground_created_at_100ns,
+                ended_owners,
+            ) =>
+        {
+            RestoreDecision::Allow
+        }
+        other => other,
+    }
+}
+
 fn blocked_result(
     reason: RestoreReason,
     own_window: Option<u64>,
@@ -398,6 +540,7 @@ impl BrokerState {
             tracked_windows,
             last_error: self.last_error.clone(),
             poll_interval_ms: FOREGROUND_POLL_MS,
+            last_handoff: last_foreground_handoff(),
         }
     }
 }
@@ -534,8 +677,13 @@ impl WindowBroker {
     }
 
     fn restore(&self, reason: RestoreReason) -> RestoreResult {
+        self.restore_with_owners(reason, &EndedSessionOwners::new())
+    }
+
+    fn restore_with_owners(&self, reason: RestoreReason, owners: &EndedSessionOwners) -> RestoreResult {
         #[cfg(not(target_os = "windows"))]
         {
+            let _ = owners;
             let state = self
                 .state
                 .lock()
@@ -606,14 +754,32 @@ impl WindowBroker {
             // not make foreground arbitration atomic, so the outcome is always
             // verified afterwards and reported truthfully.
             let foreground_before = native::foreground().unwrap_or_default();
-            match evaluate_restore(
-                reason,
-                Some(own_window),
-                true,
-                own_process_id,
-                &tracked_processes,
-                &foreground_before,
-            ) {
+            let decision = if reason == RestoreReason::SessionEnded {
+                let foreground_created_at = foreground_before
+                    .process_id
+                    .filter(|process_id| owners.contains_key(process_id))
+                    .and_then(crate::process_table::identity)
+                    .map(|identity| identity.created_at_100ns);
+                evaluate_session_end_restore(
+                    Some(own_window),
+                    true,
+                    own_process_id,
+                    &tracked_processes,
+                    &foreground_before,
+                    foreground_created_at,
+                    owners,
+                )
+            } else {
+                evaluate_restore(
+                    reason,
+                    Some(own_window),
+                    true,
+                    own_process_id,
+                    &tracked_processes,
+                    &foreground_before,
+                )
+            };
+            match decision {
                 RestoreDecision::AlreadyFocused => {
                     return RestoreResult {
                         attempted: false,
@@ -735,6 +901,17 @@ pub(crate) fn restore_velora(app: &AppHandle, reason: RestoreReason) -> RestoreR
     app.state::<WindowBroker>().restore(reason)
 }
 
+/// Single automatic return after a managed launch ended. `owners` must be the
+/// identities that launch recorded itself; the global tracked set has already
+/// dropped them by the time the launch is finished.
+pub(crate) fn restore_velora_after_session_end(
+    app: &AppHandle,
+    owners: &EndedSessionOwners,
+) -> RestoreResult {
+    app.state::<WindowBroker>()
+        .restore_with_owners(RestoreReason::SessionEnded, owners)
+}
+
 static MONITOR_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static MONITOR_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -826,6 +1003,7 @@ pub async fn get_window_broker_status(app: AppHandle) -> WindowBrokerSnapshot {
             tracked_windows: Vec::new(),
             last_error: Some("Odczyt stanu okien został przerwany.".into()),
             poll_interval_ms: FOREGROUND_POLL_MS,
+            last_handoff: None,
         })
 }
 
@@ -909,6 +1087,7 @@ mod native {
         fn GetWindow(window: Hwnd, command: u32) -> Hwnd;
         fn ShowWindowAsync(window: Hwnd, command: i32) -> i32;
         fn SetForegroundWindow(window: Hwnd) -> i32;
+        fn AllowSetForegroundWindow(process_id: u32) -> i32;
         fn PostMessageW(window: Hwnd, message: u32, wparam: usize, lparam: isize) -> i32;
         fn FlashWindowEx(info: *mut FlashInfo) -> i32;
     }
@@ -1113,6 +1292,20 @@ mod native {
             class_name: class_name(window),
             window_present: true,
         })
+    }
+
+    pub(super) fn foreground_process_id() -> Option<u32> {
+        let window = unsafe { GetForegroundWindow() };
+        if window.is_null() {
+            return None;
+        }
+        let mut process_id = 0u32;
+        unsafe { GetWindowThreadProcessId(window, &mut process_id) };
+        (process_id != 0).then_some(process_id)
+    }
+
+    pub(super) fn allow_foreground_process(process_id: u32) -> bool {
+        unsafe { AllowSetForegroundWindow(process_id) != 0 }
     }
 
     pub(super) fn is_window_valid(window: u64) -> bool {
@@ -1572,5 +1765,183 @@ mod tests {
         assert_eq!(value["reason"], "sessionEnded");
         assert_eq!(value["errorCode"], 5);
         assert_eq!(value["foregroundBefore"]["processName"], "chrome.exe");
+    }
+}
+
+#[cfg(test)]
+mod handoff_and_session_end_tests {
+    use super::{
+        evaluate_session_end_restore, foreground_belongs_to_ended_session,
+        foreground_handoff_targets, grant_foreground_handoff, EndedSessionOwners, ForegroundHandoff,
+        ForegroundWindow, RestoreDecision, RestoreOutcome, ASFW_ANY,
+    };
+    use std::collections::{HashMap, HashSet};
+
+    const OWN_PID: u32 = 4242;
+    const OWN_HWND: u64 = 100;
+    const STEAM_PID: u32 = 900;
+    const STEAM_CREATED: u64 = 7_000;
+
+    fn foreground(process_id: Option<u32>, process_name: Option<&str>) -> ForegroundWindow {
+        ForegroundWindow {
+            hwnd: process_id.map(|_| 901),
+            process_id,
+            process_name: process_name.map(str::to_string),
+            class_name: None,
+            window_present: process_id.is_some(),
+        }
+    }
+
+    fn owners(entries: &[(u32, u64)]) -> EndedSessionOwners {
+        entries.iter().copied().collect::<HashMap<_, _>>()
+    }
+
+    fn decide(
+        foreground: &ForegroundWindow,
+        created_at: Option<u64>,
+        ended_owners: &EndedSessionOwners,
+        tracked: &HashSet<u32>,
+    ) -> RestoreDecision {
+        evaluate_session_end_restore(
+            Some(OWN_HWND),
+            true,
+            OWN_PID,
+            tracked,
+            foreground,
+            created_at,
+            ended_owners,
+        )
+    }
+
+    #[test]
+    fn steam_client_left_in_front_after_a_game_ends_lets_velora_return() {
+        // The managed game exited while the Steam client it was started from
+        // stayed in the foreground. That client belongs to the ended launch.
+        assert_eq!(
+            decide(
+                &foreground(Some(STEAM_PID), Some("steam.exe")),
+                Some(STEAM_CREATED),
+                &owners(&[(STEAM_PID, STEAM_CREATED)]),
+                &HashSet::new(),
+            ),
+            RestoreDecision::Allow
+        );
+    }
+
+    #[test]
+    fn a_recycled_pid_with_another_creation_time_never_inherits_the_grant() {
+        let recycled = foreground(Some(STEAM_PID), Some("chrome.exe"));
+        let ended = owners(&[(STEAM_PID, STEAM_CREATED)]);
+        assert_eq!(
+            decide(&recycled, Some(STEAM_CREATED + 1), &ended, &HashSet::new()),
+            RestoreDecision::Blocked(RestoreOutcome::BlockedUnsafeForeground)
+        );
+        // A process whose creation time could not be read is not proven to be
+        // the ended session's process, so it stays blocked.
+        assert_eq!(
+            decide(&recycled, None, &ended, &HashSet::new()),
+            RestoreDecision::Blocked(RestoreOutcome::BlockedUnsafeForeground)
+        );
+    }
+
+    #[test]
+    fn unrelated_processes_stay_untouched_even_when_another_launch_tracks_them() {
+        // PID 555 belongs to a different, still tracked launch. It must not
+        // receive the ended launch's grant, and VELORA must not steal focus.
+        assert_eq!(
+            decide(
+                &foreground(Some(555), Some("chrome.exe")),
+                Some(9),
+                &owners(&[(STEAM_PID, STEAM_CREATED)]),
+                &HashSet::from([555]),
+            ),
+            RestoreDecision::Blocked(RestoreOutcome::BlockedUnsafeForeground)
+        );
+    }
+
+    #[test]
+    fn existing_automatic_return_rules_are_unchanged_by_the_session_owner_path() {
+        let empty = owners(&[]);
+        let none = HashSet::new();
+        assert_eq!(
+            decide(&foreground(Some(OWN_PID), Some("nexus-aurea.exe")), None, &empty, &none),
+            RestoreDecision::Allow
+        );
+        assert_eq!(
+            decide(&foreground(None, None), None, &empty, &none),
+            RestoreDecision::Allow
+        );
+        let already = ForegroundWindow {
+            hwnd: Some(OWN_HWND),
+            process_id: Some(OWN_PID),
+            process_name: Some("nexus-aurea.exe".into()),
+            class_name: None,
+            window_present: true,
+        };
+        assert_eq!(decide(&already, None, &empty, &none), RestoreDecision::AlreadyFocused);
+        assert_eq!(
+            evaluate_session_end_restore(
+                Some(OWN_HWND),
+                false,
+                OWN_PID,
+                &none,
+                &foreground(Some(STEAM_PID), Some("steam.exe")),
+                Some(STEAM_CREATED),
+                &owners(&[(STEAM_PID, STEAM_CREATED)]),
+            ),
+            RestoreDecision::Blocked(RestoreOutcome::WindowUnavailable),
+            "an invalid VELORA HWND is never replaced by a session-owner grant"
+        );
+    }
+
+    #[test]
+    fn owner_lookup_requires_both_pid_and_creation_time() {
+        let steam = foreground(Some(STEAM_PID), Some("steam.exe"));
+        let ended = owners(&[(STEAM_PID, STEAM_CREATED)]);
+        assert!(foreground_belongs_to_ended_session(&steam, Some(STEAM_CREATED), &ended));
+        assert!(!foreground_belongs_to_ended_session(&steam, Some(STEAM_CREATED + 1), &ended));
+        assert!(!foreground_belongs_to_ended_session(
+            &ForegroundWindow::default(),
+            Some(STEAM_CREATED),
+            &ended,
+        ));
+    }
+
+    #[test]
+    fn handoff_targets_drop_zero_velora_and_duplicates_but_keep_asfw_any() {
+        assert_eq!(
+            foreground_handoff_targets(&[0, OWN_PID, 812, 812, 0, 913], OWN_PID),
+            vec![812, 913]
+        );
+        assert_eq!(foreground_handoff_targets(&[ASFW_ANY], OWN_PID), vec![ASFW_ANY]);
+        assert!(foreground_handoff_targets(&[0, OWN_PID], OWN_PID).is_empty());
+    }
+
+    #[test]
+    fn asfw_any_is_the_documented_all_processes_value() {
+        assert_eq!(ASFW_ANY, u32::MAX);
+    }
+
+    #[test]
+    fn a_handoff_without_real_targets_is_a_silent_no_op_on_every_platform() {
+        // Empty targets must never reach the Win32 call, so no grant is issued
+        // to VELORA's own process or to the zero PID.
+        assert_eq!(
+            grant_foreground_handoff(&[0, std::process::id()]),
+            ForegroundHandoff::default()
+        );
+    }
+
+    #[test]
+    fn the_handoff_diagnostic_keeps_camel_case_keys_for_the_status_snapshot() {
+        let value = serde_json::to_value(ForegroundHandoff {
+            attempted: 2,
+            granted: 1,
+            not_foreground: false,
+        })
+        .unwrap();
+        assert_eq!(value["attempted"], 2);
+        assert_eq!(value["granted"], 1);
+        assert_eq!(value["notForeground"], false);
     }
 }

@@ -34,11 +34,14 @@ pub fn launch_platform(launcher: String) -> Result<(), String> {
         } else {
             &["--startfullscreen"]
         };
-        std::process::Command::new(path)
+        let child = std::process::Command::new(path)
             .args(arguments)
             .spawn()
-            .map(|_| ())
-            .map_err(|_| "Windows nie uruchomił wybranej aplikacji.".to_string())
+            .map_err(|_| "Windows nie uruchomił wybranej aplikacji.".to_string())?;
+        // VELORA is foreground because the user chose this launcher; grant the
+        // hand-off so the client window is not left behind the launcher.
+        crate::window_broker::grant_foreground_handoff(&[child.id()]);
+        Ok(())
     }
     #[cfg(not(target_os = "windows"))]
     {

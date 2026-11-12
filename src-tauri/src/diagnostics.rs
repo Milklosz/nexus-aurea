@@ -375,6 +375,7 @@ mod tests {
                 tracked_windows: Vec::new(),
                 last_error: None,
                 poll_interval_ms: 750,
+                last_handoff: None,
             },
             control_service: ControlServiceStatus {
                 windows: true,

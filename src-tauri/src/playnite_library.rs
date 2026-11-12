@@ -255,6 +255,14 @@ fn open_playnite_uri(uri: &str) -> Result<(), String> {
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
+    // A running Playnite FullscreenApp receives the URI through its single
+    // instance, so grant its PID. When Playnite is not running yet the shell
+    // starts a process with no PID we can name, so the hand-off uses ASFW_ANY for
+    // this one call only, while VELORA is still foreground after the click.
+    let running = launch_registry::find_process_id("Playnite.FullscreenApp.exe");
+    crate::window_broker::grant_foreground_handoff(&[
+        running.unwrap_or(crate::window_broker::ASFW_ANY),
+    ]);
     let operation = HSTRING::from("open");
     let file = HSTRING::from(uri);
     let operation = PCWSTR(operation.as_ptr());

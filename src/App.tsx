@@ -20,7 +20,6 @@ import { useLaunchGuard } from "./hooks/useLaunchGuard";
 import { getDialogNavigationControls, shouldUseNativeDialogArrowKey } from "./services/dialogNavigation";
 import { useToast } from "./hooks/useToast";
 import { useWeather } from "./hooks/useWeather";
-import { focusWindowSafely } from "./services/focusWindowSafely";
 import { openStreamingService, streamingServiceErrorMessage } from "./services/openStreamingService";
 import { getControlServiceStatus, setControlGameMode } from "./services/controlService";
 import { launchManagedApp, listenForLaunchEvent, listenForManagedAppExit, managedAppErrorMessage } from "./services/appManager";
@@ -38,7 +37,6 @@ import {
   type SystemVolumeAction,
 } from "./services/musicBridge";
 import { MusicMiniPlayer } from "./components/MusicPanel";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listenForRemoteCommand } from "./services/remoteAccess";
 import { dispatchRemoteCommand } from "./services/remoteCommand";
 import { canRemoteSelect } from "./services/remotePermissions";
@@ -145,9 +143,11 @@ export default function App() {
         // A newer launch won the race; do not report a false Windows denial.
         return;
       }
-      void focusWindowSafely(getCurrentWindow(), () => {
-        showToast("Windows zablokował powrót do VELORA. Wróć do aplikacji przez Alt+Tab.");
-      });
+      // Do not retry focus from the WebView: Tauri's setFocus can fall back to an
+      // injected Alt keypress to get past the Windows foreground lock. A failed
+      // transaction is reported instead; a denied focus is described by the
+      // native restore result in velora-return-home.
+      showToast("VELORA nie mogła wrócić do ekranu głównego. Użyj skrótu powrotu albo Alt+Tab.");
     });
   }, [navigation.focusApp, showToast]);
   const openDiagnosticsFromCenter = useCallback(() => {
