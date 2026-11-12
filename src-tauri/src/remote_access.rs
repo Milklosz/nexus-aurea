@@ -125,6 +125,11 @@ struct RemoteInner {
     /// Successful command receipts for exact duplicate acknowledgement. Bounded
     /// and in-memory; never contains a token or signature.
     command_receipts: Mutex<CommandReceiptLog>,
+    /// Serializes the whole command transaction for one server process. A
+    /// sequence is reserved before its side effect, and a parallel duplicate
+    /// waits here instead of observing an "in flight" sequence as an attack.
+    #[cfg(windows)]
+    command_gate: Mutex<()>,
 }
 
 #[derive(Clone, Default)]
@@ -589,7 +594,7 @@ impl RemoteAccess {
         sequence: u64,
         command: &RemoteCommand,
         signature: &[u8],
-    ) -> Result<ReplayDecision, StatusCode> {
+    ) -> Result<CommandReservation, StatusCode> {
         use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 
         if !lock(&self.inner.status).enabled {
@@ -597,10 +602,17 @@ impl RemoteAccess {
         }
         self.ensure_vault_loaded().map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
         let mut vault = lock(&self.inner.vault);
-        let Some(device) = vault.devices.iter_mut().find(|device| device.id == device_id) else {
+        let Some(index) = vault
+            .devices
+            .iter()
+            .position(|device| device.id == device_id)
+        else {
             return Err(StatusCode::UNAUTHORIZED);
         };
-        let token_bytes = URL_SAFE_NO_PAD.decode(&device.token).map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        let token = vault.devices[index].token.clone();
+        let token_bytes = URL_SAFE_NO_PAD
+            .decode(&token)
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
         if !verify_command_signature(&token_bytes, device_id, sequence, command, signature) {
             return Err(StatusCode::UNAUTHORIZED);
         }
@@ -616,7 +628,7 @@ impl RemoteAccess {
         let decision = {
             let receipts = lock(&self.inner.command_receipts);
             classify_replay(
-                device.last_sequence,
+                vault.devices[index].last_sequence,
                 receipts.lookup(device_id, sequence),
                 sequence,
                 command.as_str(),
@@ -624,14 +636,120 @@ impl RemoteAccess {
         };
         match decision {
             ReplayDecision::Execute => {
-                device.last_sequence = sequence;
-                save_vault(&vault).map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-                Ok(ReplayDecision::Execute)
+                // Reserve before the side effect; the command gate prevents a
+                // parallel duplicate from executing the same sequence.
+                let previous_sequence = vault.devices[index].last_sequence;
+                vault.devices[index].last_sequence = sequence;
+                if save_vault(&vault).is_err() {
+                    vault.devices[index].last_sequence = previous_sequence;
+                    return Err(StatusCode::SERVICE_UNAVAILABLE);
+                }
+                Ok(CommandReservation::Execute { previous_sequence })
             }
-            ReplayDecision::AcknowledgeReplay => Ok(ReplayDecision::AcknowledgeReplay),
+            ReplayDecision::AcknowledgeReplay => Ok(CommandReservation::Acknowledge),
+            ReplayDecision::Ambiguous => Err(StatusCode::CONFLICT),
             ReplayDecision::RejectReplay => Err(StatusCode::UNAUTHORIZED),
         }
     }
+
+    #[cfg(windows)]
+    fn rollback_command_reservation(&self, device_id: &str, sequence: u64, previous: u64) {
+        let mut vault = lock(&self.inner.vault);
+        let Some(device) = vault.devices.iter_mut().find(|device| device.id == device_id) else {
+            return;
+        };
+        if device.last_sequence == sequence {
+            device.last_sequence = previous;
+            let _ = save_vault(&vault);
+        }
+    }
+
+    #[cfg(windows)]
+    fn record_command_receipt(&self, device_id: &str, sequence: u64, command: &str) {
+        lock(&self.inner.command_receipts).record(device_id, sequence, command);
+    }
+
+    #[cfg(windows)]
+    fn execute_command(
+        &self,
+        app: &tauri::AppHandle,
+        request: &CommandRequest,
+        signature: &[u8],
+    ) -> StatusCode {
+        use tauri::Emitter;
+
+        let _gate = lock(&self.inner.command_gate);
+        let reservation = match self.authenticate_command(
+            &request.device_id,
+            request.sequence,
+            &request.command,
+            signature,
+        ) {
+            Ok(reservation) => reservation,
+            Err(status) => return status,
+        };
+        let previous_sequence = match reservation {
+            CommandReservation::Acknowledge => return StatusCode::NO_CONTENT,
+            CommandReservation::Execute { previous_sequence } => previous_sequence,
+        };
+
+        // Home is the one command with a fully native, session-authoritative
+        // action. Perform it before the HTTP acknowledgement so a hidden or
+        // busy WebView cannot turn a real Home request into a false success.
+        let native_home = request.command == RemoteCommand::Home;
+        if native_home {
+            let result = crate::session_orchestrator::return_home(
+                app,
+                crate::session_orchestrator::TransitionCause::ControlService,
+                crate::session_orchestrator::HomeRequestSource::Device,
+            );
+            if result.is_err() {
+                self.rollback_command_reservation(
+                    &request.device_id,
+                    request.sequence,
+                    previous_sequence,
+                );
+                return StatusCode::CONFLICT;
+            }
+        }
+
+        if app
+            .emit("nexus-remote-command", request.command.clone())
+            .is_err()
+        {
+            if native_home {
+                // The native Home transition already happened; report it
+                // truthfully and keep the receipt so a retry cannot repeat it.
+                self.record_command_receipt(
+                    &request.device_id,
+                    request.sequence,
+                    request.command.as_str(),
+                );
+                return StatusCode::NO_CONTENT;
+            }
+            // No side effect reached the UI. Release the reservation so the
+            // same signed command can be retried cleanly.
+            self.rollback_command_reservation(
+                &request.device_id,
+                request.sequence,
+                previous_sequence,
+            );
+            return StatusCode::SERVICE_UNAVAILABLE;
+        }
+        self.record_command_receipt(
+            &request.device_id,
+            request.sequence,
+            request.command.as_str(),
+        );
+        StatusCode::NO_CONTENT
+    }
+}
+
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CommandReservation {
+    Execute { previous_sequence: u64 },
+    Acknowledge,
 }
 
 fn allow_rate<K: Eq + std::hash::Hash>(
@@ -863,69 +981,24 @@ async fn send_command(
     axum::extract::State(context): axum::extract::State<ServerContext>,
     axum::Json(request): axum::Json<CommandRequest>,
 ) -> axum::response::Response {
-        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
-    use tauri::Emitter;
 
-    let Ok(signature) = URL_SAFE_NO_PAD.decode(&request.signature) else {
-        return StatusCode::UNAUTHORIZED.into_response();
-    };
-    let decision = match context.remote.authenticate_command(
-        &request.device_id,
-        request.sequence,
-        &request.command,
-        &signature,
-    ) {
-        Ok(decision) => decision,
-        Err(status) => return status.into_response(),
-    };
-    if decision == ReplayDecision::AcknowledgeReplay {
-        // The exact signed command already executed. Acknowledge the replay
-        // without invoking the side effect a second time.
-        return StatusCode::NO_CONTENT.into_response();
-    }
-
-    // Home is the one command with a fully native, session-authoritative
-    // action. Perform it before the HTTP acknowledgement so a hidden or busy
-    // WebView cannot turn a real Home request into a false success.
-    let native_home = if request.command == RemoteCommand::Home {
-        let app = context.app.clone();
-        let home = tauri::async_runtime::spawn_blocking(move || {
-            crate::session_orchestrator::return_home(
-                &app,
-                crate::session_orchestrator::TransitionCause::ControlService,
-            )
-        })
-        .await;
-        match home {
-            Ok(Ok(_)) => true,
-            Ok(Err(_)) => return StatusCode::CONFLICT.into_response(),
-            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-        }
-    } else {
-        false
-    };
-
-    if context.app.emit("nexus-remote-command", request.command.clone()).is_err() {
-        // The native Home transition already happened; report it truthfully
-        // even if the WebView notification failed.
-        if native_home {
-            lock(&context.remote.inner.command_receipts).record(
-                &request.device_id,
-                request.sequence,
-                request.command.as_str(),
-            );
-            return StatusCode::NO_CONTENT.into_response();
-        }
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    }
-    lock(&context.remote.inner.command_receipts).record(
-        &request.device_id,
-        request.sequence,
-        request.command.as_str(),
-    );
-    StatusCode::NO_CONTENT.into_response()
+    // Authentication, sequence reservation, the optional native Home
+    // transition and the receipt are one serialized blocking transaction. A
+    // parallel duplicate waits instead of being misclassified as a replay.
+    let status = tauri::async_runtime::spawn_blocking(move || {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+        let Ok(signature) = URL_SAFE_NO_PAD.decode(&request.signature) else {
+            return StatusCode::UNAUTHORIZED;
+        };
+        context
+            .remote
+            .execute_command(&context.app, &request, &signature)
+    })
+    .await
+    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    status.into_response()
 }
 
 #[tauri::command]

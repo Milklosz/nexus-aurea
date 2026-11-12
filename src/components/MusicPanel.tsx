@@ -46,7 +46,7 @@ export function MusicPanel(props: Props) {
     <button type="button" disabled={busy || inGameMode || !status.appleSessionFound || !status.canNext} onClick={() => void run(() => props.onControl("next"))}>Następny ⏭</button>
   </div>;
 
-  return <section className="music-panel" aria-label="VELORA Music">
+  return <section className="music-panel" aria-label="VELORA Music" data-remote-allow="">
     <h3>VELORA Music · Apple Music</h3>
     <p role="status">{status.appleSessionFound
       ? `Sesja Apple Music · ${status.playbackState ?? "stan niedostępny"}`

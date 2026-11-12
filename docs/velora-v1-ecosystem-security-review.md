@@ -67,9 +67,9 @@
 
 ## 4. Ryzyka rezydualne i zaakceptowane prototypy (uczciwie)
 
-1. **Rozszerzenie Playnite nie zostało skompilowane ani uruchomione** (macOS; wymaga Windows + .NET Framework 4.6.2 + Playnite.SDK). Wersja `PlayniteSDK` w `.csproj` jest oznaczona jako placeholder do przypięcia na Windows. Parser VELORA jest przetestowany, ale **realne dane gier nie zostały odczytane** w tym środowisku.
+1. **Rozszerzenie Playnite jest zbudowane, ale nie załadowane w Playnite.** Projekt używa przypiętego `PlayniteSDK 6.18.0` (net462 / Playnite 10) i przechodzi build lokalny oraz Windows CI. Parser VELORA jest przetestowany, ale **realne dane gier nie zostały odczytane** — wymaga testu E2 na MSI.
 2. **Model certyfikatów iPhone pozostaje z identyfikowanymi ryzykami** (device-wide root trust, CA key współdzielony z tokenami HMAC w jednym blobie w Credential Manager, brak pinningu, brak CRL/rotacji, niezweryfikowany checkbox `trust_confirmed`). Zgodnie z wymaganiem misji **nie zastosowano prowizorycznego obejścia** — bezpieczna poprawka wymaga zmiany UX + infrastruktury i jest dostarczona jako plan + testy.
-3. **Niezawodność iPhone Remote to prototyp + plan.** Prymitywy są przetestowane, ale NIE wpięte w PWA ani serwer. Wymóg wstępny przed jakimkolwiek retry: **idempotencja po stronie serwera** (serwer utrwala `last_sequence` przed `emit()`, więc ślepe ponowienie spali sekwencję).
+3. **Niezawodność iPhone Remote ma wdrożoną idempotencję serwerową**, ale klient nadal nie auto-retryuje. Serwer rezerwuje sekwencję przed skutkiem, serializuje transakcję i zwraca 409 Ambiguous dla przerwanego wykonania (bez rozparowania). Kolejka/retry PWA pozostaje planem.
 4. **Edge Cinema Lifecycle to adapter + typowane zdarzenia**, nie `WindowBroker`. Wykrycie zamknięcia i bezpieczne zamknięcie są delegowane do przyszłej integracji (dziedzina DeepSeek). VELORA nie odpytuje okien ani nie zabija procesów.
 5. **Couch-only app control nie jest wpięty w `App.tsx`** — przetestowany reducer/adapter bez skutków ubocznych.
 6. **Brak testów sprzętowych / MSI / 4K-HDR-DRM-HDCP.** Lokalna weryfikacja krzyżowa `x86_64-pc-windows-msvc` nie jest możliwa na macOS (`aws-lc-sys` wymaga nagłówków Windows SDK); autorytatywny wynik daje CI na `windows-latest`.

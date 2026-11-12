@@ -24,11 +24,10 @@ haseł GOG/Epic/EA/Ubisoft). Uruchomienie gier odbywa się wyłącznie przez
 ## 1. Wymagania wstępne
 
 - [ ] **Windows** (Playnite desktop działa na Windows; na macOS/Linux nie działa).
-- [ ] **Playnite 10 lub 11** (wersja desktop, zainstalowana i uruchomiona co najmniej raz).
+- [ ] **Playnite 10** (wersja desktop, zainstalowana i uruchomiona co najmniej raz). Playnite 11 wymaga osobnego builda `net10.0` / SDK 11 i nie jest objęty tym projektem.
 - [ ].NET Framework **4.6.2** (targeting pack / Developer Pack) do zbudowania projektu.
 - [ ] **Visual Studio 2017+** (z workloadem .NET desktop) albo **MSBuild Build Tools** (`msbuild`).
-- [ ] Pakiet NuGet **`PlayniteSDK`** — dokładna wersja **musi być potwierdzona / przypięta
-      na Windows** względem docelowej instalacji Playnite (wartość w `.csproj` to placeholder).
+- [x] Pakiet NuGet **`PlayniteSDK 6.18.0`** — przypięty w `.csproj`; oficjalny pakiet 6.x dla `net462` / Playnite 10.
 - [ ] Uprawnienia do zapisu w `%LOCALAPPDATA%` (katalog użytkownika) i do katalogu
       `%AppData%\Playnite\Extensions`.
 - [ ] VELORA (build z włączonym panelem **Biblioteka Playnite** / Control Center → Gaming).
@@ -41,8 +40,8 @@ systemowego, sterowników, jakiegokolwiek omijania DRM / HDCP.
 ## 2. Zbudowanie rozszerzenia (na Windows)
 
 1. Otwórz `playnite-extension/VeloraLibraryExporter.csproj`.
-2. Ustaw / potwierdź wersję `PlayniteSDK` (komentarz w csproj). Nie dodawaj
-   referencji do `Playnite` / `Playnite.Common`.
+2. Pozostaw przypiętą wersję `PlayniteSDK 6.18.0`. Nie dodawaj referencji do
+   `Playnite` / `Playnite.Common`.
 3. Z poziomu wiersza poleceń (Developer Command Prompt for VS):
    ```
    msbuild VeloraLibraryExporter.csproj /t:Restore /p:Configuration=Release

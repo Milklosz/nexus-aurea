@@ -86,8 +86,9 @@ now asserts the current confirmed-command cache.
    was indistinguishable from a replay attack.
 7. **Concurrent Home.** Gamepad, iPhone Remote and UI could each request Home,
    duplicating focus restoration and `velora-return-home` events.
-8. **C# extension.** The Playnite exporter is source only. The SDK version is a
-   placeholder and the authoring environment has no .NET/Playnite toolchain.
+8. **C# extension.** The Playnite exporter now pins the official
+   `PlayniteSDK 6.18.0` (Playnite 10 / net462), compiles locally and in Windows
+   CI. Loading it in Playnite remains a manual MSI check.
 
 ## 5. Integration order
 

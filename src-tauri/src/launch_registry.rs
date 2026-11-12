@@ -651,6 +651,8 @@ impl LaunchRegistry {
             .registration
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let orchestrator = app.state::<session_orchestrator::SessionOrchestrator>();
+        let _transaction = orchestrator.lock_transaction();
         if !watch.baseline_captured {
             capture_baseline(app, &mut watch)?;
         }
@@ -688,6 +690,34 @@ impl LaunchRegistry {
         };
         let target = session_target_for(watch.kind, watch.session_target);
         let context = SessionContext::for_launch(&session.id, session.app_id.as_deref(), None);
+
+        // The session transition is validated and applied before the launch is
+        // published. A failed multi-step fallback therefore cannot leave an
+        // active LaunchRegistry entry without a session owner.
+        let mut session = session;
+        if let Some(target) = target {
+            let current = session_orchestrator::current_snapshot(app);
+            let steps = session_orchestrator::transition_steps(current.current, target)?;
+            let last_index = steps.len().saturating_sub(1);
+            for (index, step) in steps.iter().enumerate() {
+                let step_context = (index == last_index).then(|| context.clone());
+                session_orchestrator::apply_transition(
+                    app,
+                    *step,
+                    TransitionCause::Launch,
+                    step_context,
+                )
+                .map_err(|error| error.message)?;
+            }
+            let applied = session_orchestrator::current_snapshot(app);
+            if applied.current != target {
+                return Err(
+                    "Sesja nie osiągnęła stanu docelowego; uruchomienie nie zostało zarejestrowane."
+                        .into(),
+                );
+            }
+            session.session_revision = Some(applied.revision);
+        }
 
         let mut superseded = Vec::new();
         let mut released_process_ids = Vec::new();
@@ -734,45 +764,6 @@ impl LaunchRegistry {
         }
         for event in &superseded {
             let _ = app.emit(LAUNCH_EVENT, event);
-        }
-        let mut session = session;
-        if let Some(target) = target {
-            if session_orchestrator::apply_transition(
-                app,
-                target,
-                TransitionCause::Launch,
-                Some(context.clone()),
-            )
-            .is_err()
-            {
-                // A launch started from Desktop/Ambient cannot jump directly to
-                // the target session. Clear the leaving state first, then
-                // attach the new launch context to the target.
-                let _ = session_orchestrator::apply_transition(
-                    app,
-                    SessionId::VeloraHome,
-                    TransitionCause::Launch,
-                    None,
-                );
-                let _ = session_orchestrator::apply_transition(
-                    app,
-                    target,
-                    TransitionCause::Launch,
-                    Some(context),
-                );
-            }
-            session.session_revision = Some(session_orchestrator::current_snapshot(app).revision);
-            let mut state = self
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(tracked) = state
-                .launches
-                .iter_mut()
-                .find(|tracked| tracked.session.id == session.id)
-            {
-                tracked.session.session_revision = session.session_revision;
-            }
         }
         ensure_watcher(app.clone());
         Ok(session)
@@ -877,8 +868,10 @@ impl LaunchRegistry {
             .registration
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let orchestrator = app.state::<session_orchestrator::SessionOrchestrator>();
+        let _transaction = orchestrator.lock_transaction();
         for launch_id in failed {
-            session_orchestrator::finish_launch_session(app, &launch_id);
+            session_orchestrator::finish_launch_session_inner(app, &launch_id);
         }
 
         for session in finished {
@@ -900,7 +893,7 @@ impl LaunchRegistry {
                 window_broker::release_process(app, *process_id);
             }
             if owns_session {
-                session_orchestrator::finish_launch_session(app, &session.id);
+                session_orchestrator::finish_launch_session_inner(app, &session.id);
             }
             if session.kind == LaunchKind::Playnite {
                 let _ = app.emit(
@@ -1117,6 +1110,12 @@ pub(crate) fn launch_by_id(app: &AppHandle, launch_id: &str) -> Option<LaunchSes
 /// request returns the already-finished session instead of emitting again.
 pub(crate) fn cancel_launch(app: &AppHandle, launch_id: &str) -> Result<LaunchSession, String> {
     let registry = app.state::<LaunchRegistry>();
+    let _registration = registry
+        .registration
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let orchestrator = app.state::<session_orchestrator::SessionOrchestrator>();
+    let _transaction = orchestrator.lock_transaction();
     let (session, event) = {
         let mut state = registry
             .state
@@ -1144,7 +1143,7 @@ pub(crate) fn cancel_launch(app: &AppHandle, launch_id: &str) -> Result<LaunchSe
     if let Some(event) = event {
         let _ = app.emit(LAUNCH_EVENT, event);
     }
-    session_orchestrator::finish_launch_session(app, launch_id);
+    session_orchestrator::finish_launch_session_inner(app, launch_id);
     Ok(session)
 }
 

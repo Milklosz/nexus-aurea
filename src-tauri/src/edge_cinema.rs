@@ -232,6 +232,18 @@ fn marker_matches_identity(
     })
 }
 
+/// Adoption is service-specific. A live Netflix window must not silently
+/// satisfy a Disney+ request: the user expects the selected service.
+fn adoption_is_compatible(marker: &EdgeSessionMarker, requested_url: &str) -> bool {
+    validate_marker(marker) && marker.url == requested_url
+}
+
+/// The IPC surface exposes the stable profile label, never the full
+/// `%LOCALAPPDATA%` path. The native layer still uses the real directory.
+fn public_profile_label() -> String {
+    profile_directory_name().to_string()
+}
+
 fn edge_watch(root_process_id: Option<u32>) -> LaunchWatch {
     LaunchWatch::new(
         LaunchKind::Cinema,
@@ -400,7 +412,7 @@ fn current_session(app: &AppHandle) -> EdgeCinemaSession {
     #[cfg(target_os = "windows")]
     {
         let marker = current_marker(app);
-        let profile = edge_profile_dir().map(|path| path.to_string_lossy().into_owned());
+        let profile = Some(public_profile_label());
         if let Some(launch) = launch_registry::active_launch_for_app(app, EDGE_APP_ID) {
             let url = marker
                 .as_ref()
@@ -464,19 +476,25 @@ pub fn launch_edge_cinema(app: AppHandle, url: String) -> Result<EdgeCinemaRecei
         // is never adopted.
         if let Some(marker) = read_marker(&profile_dir) {
             if marker_is_live(&app, &marker) {
+                if !adoption_is_compatible(&marker, canonical) {
+                    return Err(
+                        "W oknie Edge Cinema otwarta jest inna usługa. Zamknij je i wybierz nową usługę."
+                            .to_string(),
+                    );
+                }
                 let watch = edge_watch(Some(marker.process_id));
                 let launch = launch_registry::track_launch(&app, watch)?;
                 let _ = store_marker(&app, &launch.id, marker.process_id, &marker.url);
                 let session = session_from_launch(
                     &launch,
                     Some(marker.url),
-                    Some(profile_dir_string.clone()),
+                    Some(public_profile_label()),
                 );
                 emit_session(&app, session);
                 return Ok(EdgeCinemaReceipt {
                     launched: true,
                     mode: "app-fullscreen".to_string(),
-                    profile_dir: profile_dir_string,
+                    profile_dir: public_profile_label(),
                     launch_id: Some(launch.id),
                     adopted: true,
                 });
@@ -503,14 +521,14 @@ pub fn launch_edge_cinema(app: AppHandle, url: String) -> Result<EdgeCinemaRecei
         let session = session_from_launch(
             &launch,
             Some(canonical.to_string()),
-            Some(profile_dir_string.clone()),
+            Some(public_profile_label()),
         );
         emit_session(&app, session);
 
         Ok(EdgeCinemaReceipt {
             launched: true,
             mode: "app-fullscreen".to_string(),
-            profile_dir: profile_dir_string,
+            profile_dir: public_profile_label(),
             launch_id: Some(launch.id),
             adopted: false,
         })
@@ -524,7 +542,7 @@ pub fn get_edge_cinema_status() -> EdgeCinemaStatus {
         EdgeCinemaStatus {
             windows: true,
             edge_detected: edge_executable().is_some(),
-            profile_dir: edge_profile_dir().map(|path| path.to_string_lossy().into_owned()),
+            profile_dir: edge_profile_dir().map(|_| public_profile_label()),
             notes: edge_cinema_notes(),
         }
     }
@@ -713,11 +731,11 @@ pub(crate) fn reconcile_edge_marker(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        edge_cinema_arguments, edge_cinema_notes, edge_watch, is_allowed_streaming_url,
-        marker_matches_identity, phase_state, profile_directory_name, session_from_launch,
-        validate_marker, EdgeCinemaReceipt, EdgeCinemaSession, EdgeCinemaStatus,
-        EdgeSessionMarker, ALLOWED_STREAMING_URLS, EDGE_CINEMA_PROFILE_NAME,
-        SESSION_MARKER_VERSION,
+        adoption_is_compatible, edge_cinema_arguments, edge_cinema_notes, edge_watch,
+        is_allowed_streaming_url, marker_matches_identity, phase_state, profile_directory_name,
+        public_profile_label, session_from_launch, validate_marker, EdgeCinemaReceipt,
+        EdgeCinemaSession, EdgeCinemaStatus, EdgeSessionMarker, ALLOWED_STREAMING_URLS,
+        EDGE_CINEMA_PROFILE_NAME, SESSION_MARKER_VERSION,
     };
     use crate::launch_registry::{LaunchKind, LaunchPhase, LaunchSession};
     use crate::process_table::ProcessIdentity;
@@ -900,6 +918,37 @@ mod tests {
             })
         ));
         assert!(!marker_matches_identity(&marker, None));
+    }
+
+    #[test]
+    fn adoption_is_limited_to_the_requested_service() {
+        let netflix = marker();
+        assert!(adoption_is_compatible(
+            &netflix,
+            "https://www.netflix.com/pl/"
+        ));
+        assert!(!adoption_is_compatible(
+            &netflix,
+            "https://www.disneyplus.com/pl-pl"
+        ));
+        assert!(!adoption_is_compatible(
+            &netflix,
+            "https://www.youtube.com/"
+        ));
+        let mut invalid = marker();
+        invalid.url = "https://evil.example/".into();
+        assert!(!adoption_is_compatible(&invalid, "https://evil.example/"));
+    }
+
+    #[test]
+    fn public_profile_projection_never_exposes_the_user_path() {
+        let label = public_profile_label();
+        assert_eq!(label, EDGE_CINEMA_PROFILE_NAME);
+        assert!(!label.contains(':'));
+        assert!(!label.contains('\\'));
+        assert!(!label.contains('/'));
+        assert!(!label.to_ascii_lowercase().contains("appdata"));
+        assert!(!label.to_ascii_lowercase().contains("users"));
     }
 
     #[test]

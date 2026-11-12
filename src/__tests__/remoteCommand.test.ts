@@ -21,6 +21,24 @@ afterEach(() => {
 });
 
 describe("iPhone Remote command mapping", () => {
+  it("prefers the remote-safe select handler over the shared controller select", () => {
+    const handlers = makeHandlers({
+      select: vi.fn(),
+      selectRemote: vi.fn(),
+    });
+
+    dispatchRemoteCommand("select", handlers);
+
+    expect(handlers.selectRemote).toHaveBeenCalledOnce();
+    expect(handlers.select).not.toHaveBeenCalled();
+  });
+
+  it("falls back to select when no remote-specific handler is wired", () => {
+    const handlers = makeHandlers();
+    dispatchRemoteCommand("select", handlers);
+    expect(handlers.select).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ["up", "navigate", -1],
     ["left", "navigate", -1],

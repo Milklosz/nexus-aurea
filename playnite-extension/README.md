@@ -119,13 +119,12 @@ kontraktem — to podejście preferowane dla poprawności. (DTO w
 ## Budowanie (Windows)
 
 Wymagania: Windows, Visual Studio 2017+ (lub MSBuild Build Tools + `msbuild`),
-**.NET Framework 4.6.2** (targeting pack), pakiet NuGet **`PlayniteSDK`**, Playnite
-10/11 desktop. Nie są potrzebne żadne inne zależności; projekt **nie** referuje
-assembly nie-SDK (`Playnite`, `Playnite.Common`).
+**.NET Framework 4.6.2** (targeting pack), pakiet NuGet **`PlayniteSDK 6.18.0`**,
+Playnite 10 desktop. Playnite 11 wymaga osobnego builda `net10.0` / SDK 11.
+Projekt **nie** referuje assembly nie-SDK (`Playnite`, `Playnite.Common`).
 
-1. W `VeloraLibraryExporter.csproj` **ustaw / potwierdź dokładną wersję**
-   `PlayniteSDK` zgodną z docelową instalacją Playnite (wartość `6.0.0` w repo to
-   placeholder — patrz komentarz w csproj).
+1. Pozostaw przypiętą wersję `PlayniteSDK 6.18.0` (komentarz w csproj wyjaśnia
+   zakres Playnite 10).
 2. `msbuild VeloraLibraryExporter.csproj /t:Restore /p:Configuration=Release`
 3. `msbuild VeloraLibraryExporter.csproj /p:Configuration=Release`
    (albo: otwórz projekt w Visual Studio, wybierz `Release`, Build).

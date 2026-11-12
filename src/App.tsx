@@ -41,6 +41,7 @@ import { MusicMiniPlayer } from "./components/MusicPanel";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listenForRemoteCommand } from "./services/remoteAccess";
 import { dispatchRemoteCommand } from "./services/remoteCommand";
+import { canRemoteSelect } from "./services/remotePermissions";
 import type { ControllerProfile } from "./services/controllerEngine";
 import "./styles.css";
 
@@ -134,7 +135,16 @@ export default function App() {
     setControlCenterOpen(false);
     setDiagnostics(false);
     navigation.focusApp(0);
-    void returnVeloraHome().catch(() => {
+    void returnVeloraHome().catch((error: unknown) => {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        (error as { code?: unknown }).code === "supersededHome"
+      ) {
+        // A newer launch won the race; do not report a false Windows denial.
+        return;
+      }
       void focusWindowSafely(getCurrentWindow(), () => {
         showToast("Windows zablokował powrót do VELORA. Wróć do aplikacji przez Alt+Tab.");
       });
@@ -173,6 +183,21 @@ export default function App() {
     }
     activateSelected();
   }, [activateSelected]);
+  // The paired remote must not reach administrative dialog controls through a
+  // generic active.click(). Dialog actions require an explicit allow marker.
+  const confirmRemoteFocus = useCallback(() => {
+    const dialog = document.querySelector("dialog[open]");
+    const active = document.activeElement;
+    if (dialog && active instanceof HTMLElement && dialog.contains(active)) {
+      if (!canRemoteSelect(active)) {
+        showToast("Pilot nie ma uprawnień do tej operacji administracyjnej.");
+        return;
+      }
+      active.click();
+      return;
+    }
+    activateSelected();
+  }, [activateSelected, showToast]);
   const backControllerFocus = useCallback(() => {
     if (controlCenterOpen) {
       closeControlCenter();
@@ -325,6 +350,7 @@ export default function App() {
       dispatchRemoteCommand(command, {
         navigate: moveControllerFocus,
         select: confirmControllerFocus,
+        selectRemote: confirmRemoteFocus,
         back: backControllerFocus,
         home: returnToNexus,
         volume: (action) => {
@@ -340,7 +366,7 @@ export default function App() {
       active = false;
       unlisten?.();
     };
-  }, [backControllerFocus, changeCinemaProfile, confirmControllerFocus, handleSystemVolume, moveControllerFocus, returnToNexus, showToast]);
+  }, [backControllerFocus, changeCinemaProfile, confirmControllerFocus, confirmRemoteFocus, handleSystemVolume, moveControllerFocus, returnToNexus, showToast]);
 
   useEffect(() => {
     let active = true;

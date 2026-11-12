@@ -121,8 +121,12 @@ pub struct WindowBrokerSnapshot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RestoreReason {
-    /// A direct user gesture (PS + Options, Ctrl+Alt+N, Home button).
+    /// A direct local user gesture (UI button, local fallback shortcut).
     UserRequest,
+    /// A Home gesture from a paired device (DualSense chord or iPhone Remote).
+    /// Treated as a user intent, but never allowed to steal focus from an
+    /// unrelated foreground application the user did not launch through VELORA.
+    DeviceRequest,
     /// An automatic restore after a managed launch session ended.
     SessionEnded,
     /// An explicit diagnostic/command request without a user gesture.
@@ -238,13 +242,15 @@ fn is_playnite_process(process: &str) -> bool {
 /// Automatic focus recovery is deliberately conservative: VELORA may return
 /// only when the user is on the Windows desktop, still in Playnite, still in
 /// VELORA, or when no foreground window exists. Any other foreground app wins.
-/// A direct user gesture authorises a best-effort foreground request, but it is
-/// still verified and never retried in a loop.
+/// A direct local user gesture authorises a best-effort foreground request, but
+/// it is still verified and never retried in a loop. A device Home gesture may
+/// focus only VELORA, the desktop, Playnite, or a process VELORA launched.
 pub(crate) fn evaluate_restore(
     reason: RestoreReason,
     own_window: Option<u64>,
     own_window_valid: bool,
     own_process_id: u32,
+    tracked_processes: &HashSet<u32>,
     foreground: &ForegroundWindow,
 ) -> RestoreDecision {
     let Some(own_window) = own_window.filter(|_| own_window_valid) else {
@@ -257,6 +263,17 @@ pub(crate) fn evaluate_restore(
         return RestoreDecision::Allow;
     }
     if foreground.process_id == Some(own_process_id) {
+        return RestoreDecision::Allow;
+    }
+    if reason == RestoreReason::DeviceRequest
+        && foreground
+            .process_id
+            .is_some_and(|process_id| tracked_processes.contains(&process_id))
+    {
+        // The game/cinema/launcher was started by VELORA. Returning focus to
+        // VELORA is part of the same managed session, not a foreign takeover.
+        // Automatic returns stay conservative: a recycled PID must not grant
+        // focus after a session ended.
         return RestoreDecision::Allow;
     }
     if foreground.window_present && foreground.process_name.is_none() {
@@ -534,7 +551,7 @@ impl WindowBroker {
 
         #[cfg(target_os = "windows")]
         {
-            let (own_window, own_window_class, own_process_id) = {
+            let (own_window, own_window_class, own_process_id, tracked_processes) = {
                 let state = self
                     .state
                     .lock()
@@ -543,6 +560,7 @@ impl WindowBroker {
                     state.own_window,
                     state.own_window_class.clone(),
                     std::process::id(),
+                    state.tracked_processes.clone(),
                 )
             };
             let Some(own_window) = own_window else {
@@ -593,6 +611,7 @@ impl WindowBroker {
                 Some(own_window),
                 true,
                 own_process_id,
+                &tracked_processes,
                 &foreground_before,
             ) {
                 RestoreDecision::AlreadyFocused => {
@@ -1186,6 +1205,7 @@ mod tests {
 
     const OWN_PID: u32 = 4242;
     const OWN_HWND: u64 = 100;
+    use std::collections::HashSet;
 
     fn foreground(process: Option<&str>, class: Option<&str>, present: bool) -> ForegroundWindow {
         ForegroundWindow {
@@ -1214,6 +1234,7 @@ mod tests {
                 Some(OWN_HWND),
                 true,
                 OWN_PID,
+                &HashSet::new(),
                 &foreground(process, class, present),
             );
             assert_eq!(decision, RestoreDecision::Allow, "{process:?} {class:?}");
@@ -1235,6 +1256,7 @@ mod tests {
                 Some(OWN_HWND),
                 true,
                 OWN_PID,
+                &HashSet::new(),
                 &foreground(process, class, true),
             );
             assert_eq!(
@@ -1243,6 +1265,19 @@ mod tests {
                 "{process:?} {class:?}"
             );
         }
+        // Even a tracked PID is not sufficient for an automatic return after a
+        // session ended; only the explicit device gesture may use that set.
+        assert_eq!(
+            evaluate_restore(
+                RestoreReason::SessionEnded,
+                Some(OWN_HWND),
+                true,
+                OWN_PID,
+                &HashSet::from([900]),
+                &foreground(Some("Cyberpunk2077.exe"), None, true),
+            ),
+            RestoreDecision::Blocked(RestoreOutcome::BlockedUnsafeForeground)
+        );
     }
 
     #[test]
@@ -1253,6 +1288,7 @@ mod tests {
                 Some(OWN_HWND),
                 true,
                 OWN_PID,
+                &HashSet::new(),
                 &foreground(None, None, false),
             ),
             RestoreDecision::Allow
@@ -1267,6 +1303,7 @@ mod tests {
                 Some(OWN_HWND),
                 true,
                 OWN_PID,
+                &HashSet::new(),
                 &foreground(Some("chrome.exe"), None, true),
             ),
             RestoreDecision::Allow
@@ -1274,9 +1311,75 @@ mod tests {
     }
 
     #[test]
+    fn device_home_never_steals_an_unrelated_foreground_window() {
+        assert_eq!(
+            evaluate_restore(
+                RestoreReason::DeviceRequest,
+                Some(OWN_HWND),
+                true,
+                OWN_PID,
+                &HashSet::new(),
+                &foreground(Some("chrome.exe"), None, true),
+            ),
+            RestoreDecision::Blocked(RestoreOutcome::BlockedUnsafeForeground)
+        );
+        // A process VELORA launched is part of the same session and may yield
+        // focus back to the console.
+        assert_eq!(
+            evaluate_restore(
+                RestoreReason::DeviceRequest,
+                Some(OWN_HWND),
+                true,
+                OWN_PID,
+                &HashSet::from([900]),
+                &foreground(Some("Cyberpunk2077.exe"), None, true),
+            ),
+            RestoreDecision::Allow
+        );
+        // Desktop/Playnite/VELORA remain safe.
+        assert_eq!(
+            evaluate_restore(
+                RestoreReason::DeviceRequest,
+                Some(OWN_HWND),
+                true,
+                OWN_PID,
+                &HashSet::new(),
+                &foreground(None, None, false),
+            ),
+            RestoreDecision::Allow
+        );
+    }
+
+    #[test]
+    fn stale_device_home_request_is_rejected_before_focus() {
+        // A Home request that waited behind a newer launch must not restore a
+        // stale UI state. This mirrors the transaction-gate revision check.
+        use crate::session_orchestrator::{home_request_is_superseded, SessionId, SessionSnapshot};
+        let request = SessionSnapshot {
+            current: SessionId::Game,
+            previous: Some(SessionId::VeloraHome),
+            revision: 4,
+            transitioned_at_ms: 100,
+            context: None,
+            allowed_targets: vec![SessionId::VeloraHome],
+            recovery: None,
+        };
+        let mut newer_launch = request.clone();
+        newer_launch.revision = 5;
+        newer_launch.transitioned_at_ms = 200;
+        assert!(home_request_is_superseded(&request, &newer_launch));
+        assert!(!home_request_is_superseded(&request, &request));
+        let mut home = request.clone();
+        home.current = SessionId::VeloraHome;
+        home.revision = 5;
+        assert!(!home_request_is_superseded(&request, &home));
+    }
+
+    #[test]
     fn stale_own_hwnd_is_never_used() {
         for reason in [
             RestoreReason::UserRequest,
+            RestoreReason::DeviceRequest,
             RestoreReason::SessionEnded,
             RestoreReason::Manual,
         ] {
@@ -1286,6 +1389,7 @@ mod tests {
                     Some(OWN_HWND),
                     false,
                     OWN_PID,
+                    &HashSet::new(),
                     &foreground(Some("chrome.exe"), None, true),
                 ),
                 RestoreDecision::Blocked(RestoreOutcome::WindowUnavailable)
@@ -1303,6 +1407,7 @@ mod tests {
                 Some(OWN_HWND),
                 true,
                 OWN_PID,
+                &HashSet::new(),
                 &current,
             ),
             RestoreDecision::AlreadyFocused
@@ -1318,6 +1423,7 @@ mod tests {
                 Some(OWN_HWND),
                 true,
                 OWN_PID,
+                &HashSet::new(),
                 &before,
             ),
             RestoreDecision::Allow
@@ -1329,6 +1435,7 @@ mod tests {
                 Some(OWN_HWND),
                 true,
                 OWN_PID,
+                &HashSet::new(),
                 &after,
             ),
             RestoreDecision::Blocked(RestoreOutcome::BlockedUnsafeForeground)
@@ -1444,6 +1551,10 @@ mod tests {
 
     #[test]
     fn restore_result_serializes_win32_failure_details() {
+        assert_eq!(
+            serde_json::to_value(RestoreReason::DeviceRequest).unwrap(),
+            serde_json::json!("deviceRequest")
+        );
         let result = RestoreResult {
             attempted: true,
             restored: false,

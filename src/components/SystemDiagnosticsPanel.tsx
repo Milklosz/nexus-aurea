@@ -70,7 +70,7 @@ export function SystemDiagnosticsPanel() {
       <span className="cc-card-index">07</span>
       <div><h3>System Intelligence</h3><p>Bezpieczny, tylko do odczytu raport stanu dla MSI.</p></div>
     </div>
-    <button type="button" onClick={() => void load()} aria-busy={loading} disabled={loading}>
+    <button type="button" data-remote-allow="" onClick={() => void load()} aria-busy={loading} disabled={loading}>
       {loading ? "Odczytuję…" : "Odśwież diagnostykę"}
     </button>
     {error && <p role="alert">{error}</p>}
@@ -131,7 +131,7 @@ export function SystemDiagnosticsPanel() {
         <summary>Ograniczenia i zakres</summary>
         <ul>{snapshot.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul>
       </details>
-      <button type="button" disabled={exporting} aria-busy={exporting} onClick={() => void exportReport()}>
+      <button type="button" data-remote-allow="" disabled={exporting} aria-busy={exporting} onClick={() => void exportReport()}>
         {exporting ? "Eksportuję…" : "Eksportuj bezpieczny raport"}
       </button>
       {reportSha && <p role="status">SHA-256 raportu: <code>{reportSha}</code></p>}

@@ -126,9 +126,9 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
 
   const formatGiB = (bytes: number) => `${(bytes / 1024 ** 3).toLocaleString("pl-PL", { maximumFractionDigits: 1 })} GB`;
 
-  if (loading && !snapshot.windows && !retrying) return <section className="gaming-hub" aria-label="VELORA Gaming Hub"><p role="status">Odczytuję stan App Managera…</p></section>;
+  if (loading && !snapshot.windows && !retrying) return <section className="gaming-hub" aria-label="VELORA Gaming Hub" data-remote-allow=""><p role="status">Odczytuję stan App Managera…</p></section>;
 
-  if (!snapshot.windows) return <section className="gaming-hub" aria-label="VELORA Gaming Hub">
+  if (!snapshot.windows) return <section className="gaming-hub" aria-label="VELORA Gaming Hub" data-remote-allow="">
     <p>Wykrywanie bibliotek gier wymaga natywnego App Managera Windows. Podgląd webowy pozostaje tylko do odczytu.</p>
     {loading && <p role="status">Odczytuję stan App Managera…</p>}
     {error && <p role="alert">{error}</p>}
@@ -138,7 +138,7 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
     </button>
   </section>;
 
-  return <section className="gaming-hub" aria-label="VELORA Gaming Hub">
+  return <section className="gaming-hub" aria-label="VELORA Gaming Hub" data-remote-allow="">
     <div className="gaming-launchers">
       <div className="gaming-launcher">
         <div><strong>Steam</strong><span>{steam?.installed ? "Wykryto" : "Nie wykryto"}</span></div>

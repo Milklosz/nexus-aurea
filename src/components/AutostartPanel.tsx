@@ -86,7 +86,7 @@ export function AutostartPanel() {
   };
 
   return (
-    <section className="cc-card autostart-panel" aria-label="Autostart VELORA" aria-busy={busy}>
+    <section className="cc-card autostart-panel" aria-label="Autostart VELORA" aria-busy={busy} data-remote-admin="">
       <div className="cc-card-heading">
         <span className="cc-card-index">07</span>
         <div>

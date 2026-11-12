@@ -49,7 +49,7 @@ export function AppManagerPanel() {
   };
 
   const byId = new Map(snapshot.apps.map(app => [app.id, app]));
-  return <section className="app-manager" aria-label="VELORA App Manager">
+  return <section className="app-manager" aria-label="VELORA App Manager" data-remote-allow="">
     <h3>VELORA App Manager</h3>
     {!snapshot.windows
       ? <p>Wykrywanie i uruchamianie aplikacji wymaga natywnej wersji Windows.</p>

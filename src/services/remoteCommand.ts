@@ -10,6 +10,8 @@ export type RemoteCommand =
 export type RemoteCommandHandlers = {
   navigate: (direction: -1 | 1) => void;
   select: () => void;
+  /** Remote-safe select. When present it replaces `select` for the pilot. */
+  selectRemote?: () => void;
   back: () => void;
   home: () => void;
   volume: (action: SystemVolumeAction) => void;
@@ -57,7 +59,7 @@ export function dispatchRemoteCommand(command: RemoteCommand, handlers: RemoteCo
       navigateDirectionCommand("right", 1, handlers);
       break;
     case "select":
-      handlers.select();
+      (handlers.selectRemote ?? handlers.select)();
       break;
     case "back":
       handlers.back();

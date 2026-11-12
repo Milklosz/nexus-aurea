@@ -111,6 +111,45 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  playnite-extension:
+    name: Windows / Playnite extension (net462)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Restore Playnite SDK 6.18.0
+        working-directory: playnite-extension
+        run: msbuild VeloraLibraryExporter.csproj /t:Restore /p:Configuration=Release
+
+      - name: Build Playnite extension
+        working-directory: playnite-extension
+        run: msbuild VeloraLibraryExporter.csproj /p:Configuration=Release
+
+      - name: Verify extension output
+        shell: pwsh
+        run: |
+          $dll = 'playnite-extension/bin/Release/VeloraLibraryExporter.dll'
+          if (-not (Test-Path -LiteralPath $dll)) {
+            throw "Expected Playnite extension DLL was not produced."
+          }
+          Copy-Item -LiteralPath 'playnite-extension/extension.yaml' -Destination 'playnite-extension/bin/Release/extension.yaml'
+          Get-Item -LiteralPath $dll | Select-Object FullName, Length
+
+      - name: Upload Playnite extension
+        uses: actions/upload-artifact@v7
+        with:
+          name: VELORA-Playnite-Extension-${{ github.sha }}
+          path: |
+            playnite-extension/bin/Release/VeloraLibraryExporter.dll
+            playnite-extension/bin/Release/extension.yaml
+          if-no-files-found: error
+          retention-days: 30
+
   publish-release:
     name: Publish GitHub Release
     runs-on: ubuntu-latest

@@ -28,8 +28,8 @@ It targets `net462` (Playnite's .NET Framework runtime), `AnyCPU`, `LangVersion
 
 | Blocker | Detail |
 |---|---|
-| Toolchain | Requires Windows + Visual Studio/MSBuild with .NET Framework 4.6.2 developer pack, or an equivalent .NET SDK capable of `net462`. |
-| Playnite SDK | `PackageReference Include="PlayniteSDK" Version="6.0.0"` is explicitly marked as a **placeholder**. It must be pinned to the exact SDK version shipped with the target Playnite installation. |
+| Toolchain | Windows + Visual Studio/MSBuild with the .NET Framework 4.6.2 developer pack. A cross-platform verification also succeeded with the official .NET 8 SDK plus `Microsoft.NETFramework.ReferenceAssemblies` (conditional package). |
+| Playnite SDK | **Resolved for Playnite 10:** pinned to official `PlayniteSDK 6.18.0` (latest 6.x, `lib/net462`, compatible with Playnite 10). Playnite 11 moved to .NET 10 / SDK 11 and needs a separate `net10.0` build; that is not covered here. |
 | Runtime proof | The extension must be loaded by Playnite and export a real manifest; a successful compile alone is not proof. |
 | UI proof | Playnite's main-menu item and startup export must be exercised on the MSI target. |
 
@@ -47,8 +47,10 @@ msbuild VeloraLibraryExporter.csproj /p:Configuration=Release
 
 ## Status
 
-**BLOCKED.** The Rust parser/launcher integration is implemented and tested with
-mocked manifests; it is not evidence that the C# extension compiles or runs.
-Keep the extension out of the “working” feature list until the Windows build and
-Playnite load test are recorded in
+**BUILD VERIFIED LOCALLY; PLAYNITE LOAD TEST PENDING.** The source also had an API typo (`OnApplicationStartedArgs`); it now uses the
+SDK 6.18.0 type `OnApplicationStartedEventArgs`. `dotnet build -c Release`
+produced `VeloraLibraryExporter.dll` with 0 warnings/errors. A Windows CI job
+(`Windows / Playnite extension (net462)`) rebuilds and uploads the DLL. Compile
+success is not runtime proof: keep the extension out of the “working” feature
+list until Playnite loads it and writes a manifest. Record that in
 [`velora-v1-msi-acceptance.md`](velora-v1-msi-acceptance.md) (rows E2/E5).

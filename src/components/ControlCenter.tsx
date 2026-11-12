@@ -246,7 +246,7 @@ export function ControlCenter(props: ControlCenterProps) {
         <h2 id="control-center-title">Control Center</h2>
         <p>Ustawienia konsoli multimedialnej</p>
       </div>
-      <button className="cc-close" type="button" onClick={props.onClose} aria-label="Zamknij Control Center">×</button>
+      <button className="cc-close" type="button" data-remote-allow="" onClick={props.onClose} aria-label="Zamknij Control Center">×</button>
     </header>
 
     <nav className="cc-tabs" role="tablist" aria-label="Sekcje Control Center">
@@ -255,6 +255,7 @@ export function ControlCenter(props: ControlCenterProps) {
         ref={(element) => { tabRefs.current[index] = element; }}
         id={`cc-tab-${panel.id}`}
         type="button"
+        data-remote-allow=""
         role="tab"
         aria-selected={activePanel === panel.id}
         aria-controls={`cc-panel-${panel.id}`}
@@ -271,7 +272,7 @@ export function ControlCenter(props: ControlCenterProps) {
           <section className="cc-card" aria-label="Profil kina">
             <div className="cc-card-heading"><span className="cc-card-index">01</span><div><h3>Profil kina</h3><p>Wybierz nastrój dla tej sesji.</p></div></div>
             <div className="cc-actions cc-profile-actions">
-              {profiles.map((profile) => <button key={profile.id} type="button"
+              {profiles.map((profile) => <button key={profile.id} type="button" data-remote-allow=""
                 className={props.profile === profile.id ? "profile-active" : ""}
                 aria-pressed={props.profile === profile.id} disabled={busy}
                 onClick={() => void chooseProfile(profile.id)}>{profile.label}</button>)}
@@ -283,9 +284,9 @@ export function ControlCenter(props: ControlCenterProps) {
             <div className="cc-card-heading"><span className="cc-card-index">02</span><div><h3>Dźwięk</h3><p>Głośność systemowa Windows.</p></div></div>
             {status.windows
               ? <div className="cc-actions cc-volume-actions">
-                <button type="button" disabled={busy} onClick={() => void changeVolume("down")} aria-label="Głośność −">−</button>
-                <button type="button" disabled={busy} onClick={() => void changeVolume("mute")}>Wycisz</button>
-                <button type="button" disabled={busy} onClick={() => void changeVolume("up")} aria-label="Głośność +">+</button>
+                <button type="button" data-remote-allow="" disabled={busy} onClick={() => void changeVolume("down")} aria-label="Głośność −">−</button>
+                <button type="button" data-remote-allow="" disabled={busy} onClick={() => void changeVolume("mute")}>Wycisz</button>
+                <button type="button" data-remote-allow="" disabled={busy} onClick={() => void changeVolume("up")} aria-label="Głośność +">+</button>
               </div>
               : <p>Regulacja głośności wymaga natywnego backendu Windows.</p>}
           </section>
@@ -293,11 +294,11 @@ export function ControlCenter(props: ControlCenterProps) {
           <section className="cc-card cc-card-wide" aria-label="VELORA Ambient">
             <div className="cc-card-heading"><span className="cc-card-index">03</span><div><h3>VELORA Ambient</h3><p>Przyciemnienie ekranu po okresie bezczynności.</p></div></div>
             <div className="cc-actions cc-ambient-actions">
-              <button type="button" aria-pressed={props.ambientSettings.enabled}
+              <button type="button" data-remote-allow="" aria-pressed={props.ambientSettings.enabled}
                 onClick={() => props.onAmbientSettingsChange({ ...props.ambientSettings, enabled: !props.ambientSettings.enabled })}>
                 {props.ambientSettings.enabled ? "Wyłącz Ambient" : "Włącz Ambient"}
               </button>
-              <button type="button" onClick={cycleDelay}>Bezczynność: {delayLabel(props.ambientSettings.idleSeconds)} · zmień</button>
+              <button type="button" data-remote-allow="" onClick={cycleDelay}>Bezczynność: {delayLabel(props.ambientSettings.idleSeconds)} · zmień</button>
             </div>
             <p>{props.mediaPlaying
               ? "Wykryto odtwarzanie Apple Music przez Windows SMTC. Ambient jest wstrzymany."
@@ -319,7 +320,7 @@ export function ControlCenter(props: ControlCenterProps) {
               {status.foregroundProcess && <p>Aktywne okno: {status.foregroundProcess}</p>}
               {status.lastError && <p role="alert">{status.lastError}</p>}
             </div>
-            {statusReadFailed && <button type="button" aria-busy={loading} disabled={loading} onClick={() => void readControlStatus()}>
+            {statusReadFailed && <button type="button" data-remote-allow="" aria-busy={loading} disabled={loading} onClick={() => void readControlStatus()}>
               {loading ? "Odczytuję…" : "Ponów odczyt statusu Windows"}
             </button>}
           </section>
@@ -343,7 +344,7 @@ export function ControlCenter(props: ControlCenterProps) {
 
       <section id="cc-panel-remote" className="cc-panel cc-remote-panel" role="tabpanel"
         aria-labelledby="cc-tab-remote" tabIndex={0} hidden={activePanel !== "remote"}>
-        <div className="cc-card cc-remote-card">
+        <div className="cc-card cc-remote-card" data-remote-admin="">
           <div className="cc-card-heading"><span className="cc-card-index">06</span><div><h3>iPhone Remote</h3><p>Pilot pozostaje wyłączony do czasu ręcznego, bezpiecznego sparowania.</p></div></div>
           <ul className="remote-access-status" aria-label="Stan iPhone Remote">
             <li><span>Serwer LAN</span><strong>{remoteStatusReady ? remoteStatus.enabled ? "włączony" : "wyłączony" : "stan nieznany"}</strong></li>
@@ -413,9 +414,9 @@ export function ControlCenter(props: ControlCenterProps) {
     <footer className="cc-footer">
       <span className="cc-footer-hint">F3 otwiera panel · Esc wraca · ← → przełączają sekcję</span>
       <div>
-        <button type="button" onClick={props.onOpenDiagnostics}>Diagnostyka</button>
-      <button type="button" onClick={props.onShowDesktop}>Pokaż pulpit</button>
-      <button type="button" onClick={props.onReturnToNexus}>Wróć do VELORA</button>
+        <button type="button" data-remote-allow="" onClick={props.onOpenDiagnostics}>Diagnostyka</button>
+      <button type="button" data-remote-allow="" onClick={props.onShowDesktop}>Pokaż pulpit</button>
+      <button type="button" data-remote-allow="" onClick={props.onReturnToNexus}>Wróć do VELORA</button>
       </div>
     </footer>
     <p className="cc-hint">Sterowanie z kanapy: strzałki wybierają · Enter zatwierdza · Escape wraca</p>
