@@ -1,8 +1,8 @@
 # VELORA 1.0 — MSI Acceptance Test Plan
 
 Target: **MSI GP76 Leopard 11UG**, Windows 11 x64, HDMI → **Panasonic TX-49EX610E**.
-Status: **NOT RUN**. Every row is a hardware/manual check; CI results do not
-replace it. Fill the result column with `PASS`, `FAIL` or `BLOCKED` and attach
+Status: **CONDITIONAL GO for a limited test installation**; hardware rows are
+**NOT RUN**. CI results do not replace the MSI checks. Fill the result column with `PASS`, `FAIL` or `BLOCKED` and attach
 evidence (screenshot/log) where useful.
 
 Build under test:
@@ -223,6 +223,24 @@ dedicated profile, close and return Home.
 | No secret leakage in diagnostics/logs | |
 | Known limitations documented | |
 
-**Overall result:** `PASS / FAIL / BLOCKED` — `______________________`
+## Residual risks before MSI (REM-04–REM-10 as assessed in this sprint)
+
+These are accepted for a **limited, trusted-LAN test installation** only. They
+are not release blockers for the quick hardening sprint because each requires a
+protocol/UX/trust redesign that was explicitly out of scope.
+
+| ID | Risk | State | Mitigation / MSI action |
+|---|---|---|---|
+| REM-04 | CA private key and device HMAC tokens share one Credential Manager blob (cert audit R1). | OPEN (High) | Keep the MSI account trusted; do not export the vault; remove/rotate the profile after testing. |
+| REM-05 | Device-wide root CA has no name constraints / EKU scoping (R2). | OPEN (High) | Requires a new profile and manual iOS re-trust; do not widen the SAN or bypass warnings. |
+| REM-06 | Per-start 90-day leaf is bound to one private IPv4; DHCP/VPN changes break the origin (R3). | MITIGATED | Restart the HTTPS server after a network change; never click through a certificate warning. |
+| REM-07 | No programmatic pinning; `caFingerprint` is a human comparison only (R4). | OPEN (High) | Compare the Control Center SHA-256 with the installed profile; test only on the private LAN. |
+| REM-08 | Revocation clears device tokens but not the iOS trust anchor; no CRL/rotation (R5). | OPEN (Medium–High) | Manually remove the profile after tests or loss; rotation is future work. |
+| REM-09 | `trust_confirmed` is a checkbox; the PWA does not perform a signed hello before trusting a stored pairing (R6). | OPEN (Medium) | Pairing stays manual; a real 401 clears the PWA record; command auto-replay remains disabled. |
+| REM-10 | Non-Home commands are acknowledged after the WebView event emit, not after JavaScript execution; a hidden/suspended WebView can make 204 optimistic. | OPEN (Low–Medium) | Keep VELORA foregrounded for remote tests; do not auto-retry side-effecting commands; an ack-aware UI protocol is future work. |
+
+**Overall result:** `CONDITIONAL GO for limited MSI tests / PASS / FAIL` —
+`______________________________________`
+
 
 Tester: `______________________` Date: `______________________`

@@ -24,7 +24,7 @@
 
 | Element | Dlaczego to nie jest uruchomiona integracja |
 | --- | --- |
-| **Rozszerzenie Playnite (A1)** — kompletne źródło C# (`playnite-extension/**`) | **NIE skompilowane ani NIE uruchomione** (macOS; wymaga Windows + .NET Framework 4.6.2 + Playnite.SDK). Wersja `PlayniteSDK` to placeholder do przypięcia. Instrukcja instalacji: `docs/playnite-extension-install.md`. **Realne dane gier nie zostały odczytane.** |
+| **Rozszerzenie Playnite (A1)** — źródło C# (`playnite-extension/**`) | **Zbudowane** przeciwko `PlayniteSDK 6.18.0` (Playnite 10 / net462); DLL powstaje w Windows CI. **Nie załadowane jeszcze w Playnite** — test na MSI (E2). Instrukcja: `docs/playnite-extension-install.md`. **Realne dane gier nie zostały odczytane w CI.** |
 | **Edge Cinema Lifecycle 2.0 (B)** | **Adapter + typowane zdarzenia**, nie `WindowBroker` / `SessionOrchestrator`. Sesja, blokada duplikatów, diagnostyka i bezpieczne *żądanie* zamknięcia są zaimplementowane, ale **wykrycie zamknięcia i faktyczne zamknięcie są delegowane** do przyszłego brokera DeepSeeka. Żaden proces nie jest zabijany, brak HWND/`EnumWindows`/watchera. `App.tsx` nietknięty. |
 | **iPhone Remote 2.0 (C)** | Prymitywy są przetestowane, ale **NIE wpięte** w `public/remote/app.js` ani `remote_access.rs`. Protokół HTTP, format HMAC i odpowiedź `204` bez zmian. Plan 7 kroków: `docs/iphone-remote-reliability-plan.md`. **Wymóg wstępny:** idempotencja serwerowa przed jakimkolwiek retry. |
 | **Model certyfikatów iPhone** | Niezależny audyt (`docs/iphone-remote-cert-audit.md`) wykazał, że bezpieczna poprawka **wymaga zmiany UX + infrastruktury** → dostarczono PLAN + TESTY, **bez prowizorycznego obejścia**. |

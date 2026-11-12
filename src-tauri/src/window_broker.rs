@@ -265,12 +265,15 @@ pub(crate) fn evaluate_restore(
     if foreground.process_id == Some(own_process_id) {
         return RestoreDecision::Allow;
     }
-    if foreground
-        .process_id
-        .is_some_and(|process_id| tracked_processes.contains(&process_id))
+    if reason == RestoreReason::DeviceRequest
+        && foreground
+            .process_id
+            .is_some_and(|process_id| tracked_processes.contains(&process_id))
     {
         // The game/cinema/launcher was started by VELORA. Returning focus to
         // VELORA is part of the same managed session, not a foreign takeover.
+        // Automatic returns stay conservative: a recycled PID must not grant
+        // focus after a session ended.
         return RestoreDecision::Allow;
     }
     if foreground.window_present && foreground.process_name.is_none() {
@@ -1262,6 +1265,19 @@ mod tests {
                 "{process:?} {class:?}"
             );
         }
+        // Even a tracked PID is not sufficient for an automatic return after a
+        // session ended; only the explicit device gesture may use that set.
+        assert_eq!(
+            evaluate_restore(
+                RestoreReason::SessionEnded,
+                Some(OWN_HWND),
+                true,
+                OWN_PID,
+                &HashSet::from([900]),
+                &foreground(Some("Cyberpunk2077.exe"), None, true),
+            ),
+            RestoreDecision::Blocked(RestoreOutcome::BlockedUnsafeForeground)
+        );
     }
 
     #[test]

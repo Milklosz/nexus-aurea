@@ -136,7 +136,7 @@ export function PlayniteLibrary() {
   };
 
   return (
-    <section className="playnite-library" aria-label="Biblioteka Playnite">
+    <section className="playnite-library" aria-label="Biblioteka Playnite" data-remote-allow="">
       <header className="playnite-library-header">
         <span className="playnite-eyebrow">VELORA · GRAND CINEMA</span>
         <h3>Biblioteka gier Playnite</h3>

@@ -19,7 +19,7 @@ const profileNotes: Record<CinemaProfile, string> = {
 };
 
 export function CinemaPanel({ profile, onChange, onDesktop }: Props) {
-  return <section className="cinema-panel" aria-label="Cinema Mode">
+  return <section className="cinema-panel" aria-label="Cinema Mode" data-remote-allow="">
     <h3>Cinema Mode</h3>
     <p>Profil: <strong>{profileLabels[profile]}</strong> · {profileNotes[profile]}</p>
     <div className="launcher-actions" role="group" aria-label="Profile salonowe">

@@ -135,7 +135,16 @@ export default function App() {
     setControlCenterOpen(false);
     setDiagnostics(false);
     navigation.focusApp(0);
-    void returnVeloraHome().catch(() => {
+    void returnVeloraHome().catch((error: unknown) => {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        (error as { code?: unknown }).code === "supersededHome"
+      ) {
+        // A newer launch won the race; do not report a false Windows denial.
+        return;
+      }
       void focusWindowSafely(getCurrentWindow(), () => {
         showToast("Windows zablokował powrót do VELORA. Wróć do aplikacji przez Alt+Tab.");
       });

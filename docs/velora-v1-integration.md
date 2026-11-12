@@ -200,8 +200,9 @@ re-exports them, so a future Scene Engine has one stable contract.
 - **REQUIRES MSI:** real Edge app-window identity, profile persistence,
   DRM/HDCP, 4K/HDR, Panasonic HDMI behavior.
 - **REQUIRES MSI:** DualSense USB/BT, PS+Options, Steam Input coexistence.
-- **BLOCKED:** Playnite C# extension build (Windows + Playnite SDK + .NET
-  Framework 4.6.2). SDK version `6.0.0` is still a placeholder in the csproj.
+- **BUILD VERIFIED / LOAD TEST PENDING:** Playnite exporter compiles against
+  `PlayniteSDK 6.18.0` (net462 / Playnite 10) locally and in Windows CI. Loading
+  it in Playnite and writing a real manifest remains an MSI check (E2).
 - **PARTIAL:** Playnite game launch is implemented against the documented URI,
   but no real Playnite installation was exercised here.
 - **TESTED WITH MOCKS:** Edge window close, PID/HWND reuse, concurrent Home,
