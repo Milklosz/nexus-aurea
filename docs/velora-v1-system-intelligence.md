@@ -3,6 +3,7 @@
 Status: gałąź `feat/velora-v1-system-intelligence`, osobny Draft PR do
 `feat/velora-v1-core`. Bez merge, bez release i bez zmian w PR #13–#16.
 Bazuje na ukończonym rdzeniu VELORA 1.0 z Draft PR #16.
+Draft PR tej gałęzi: [#17](https://github.com/Milklosz/nexus-aurea/pull/17).
 
 Dokument opisuje architekturę, audyt wejściowy, faktycznie działające funkcje,
 ograniczenia wymagające MSI oraz procedurę testów sprzętowych.
