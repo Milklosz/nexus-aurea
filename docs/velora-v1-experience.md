@@ -2,6 +2,7 @@
 
 - Gałąź: `feat/velora-v1-experience`
 - Baza: **Night Build** (`7fd83c6`, PR #13 — **Draft**)
+- Draft PR: [#15](https://github.com/Milklosz/nexus-aurea/pull/15) (baza `feat/velora-night-build-2`)
 - Status: **Draft** — dokument zbiorczy obszarów A–E (bez merge i bez release)
 
 ## Zakres i brak integracji zewnętrznej
@@ -116,23 +117,44 @@ opt-in, retry). Dokumentacja: ten plik oraz sekcja w `README.md`.
 
 ## Wyniki testów (LOKALNIE — macOS)
 
-Stan wyjściowy gałęzi był GREEN. Wyniki lokalne **przed** dodaniem plików
-obszaru E:
+Stan wyjściowy gałęzi (Night Build) był GREEN: **26 plików / 153 testy**,
+`pnpm build` PASS, `cargo test --lib` **18 testów** PASS.
 
-- `pnpm test` → **33 pliki testów / 253 testy — PASS**.
-- `pnpm build` → **PASS** (TypeScript + Vite).
+Wyniki **końcowe** po integracji obszarów A–E (uruchamiane po każdym z 6
+commitów):
+
+- `pnpm test` → **36 plików testów / 277 testów — PASS** (+124 testy wobec
+  baseline'u; w tym 24 testy przekrojowe obszaru E).
+- `pnpm build` → **PASS** (`tsc -b` + Vite, 72 moduły).
 - `cargo test --locked --manifest-path src-tauri/Cargo.toml --lib` →
-  **38 testów — PASS** (macOS).
-- `cargo check` (macOS) → **PASS**.
+  **38 testów — PASS** (18 baseline + 20 nowych testów modułów
+  `edge_cinema`, `autostart`, `playnite_library`).
+- `cargo check --locked --manifest-path src-tauri/Cargo.toml` (macOS) → **PASS**.
+- `git diff --check` → PASS (repo ma mieszane CRLF/LF; sprawdzenie z
+  `git -c core.whitespace=cr-at-eol diff --check`; krok CI jest no-op na
+  czystym checkoutcie).
 
-Po dodaniu plików obszaru E uruchomiono **wyłącznie nowe testy**
-(`experienceAccessibility.test.tsx`, `experienceLaunchErrors.test.ts`,
-`experienceAutostart.test.tsx`): **3 pliki / 24 testy — PASS**, oraz
-`tsc --noEmit -p tsconfig.app.json` → PASS. Pełny `pnpm test` / `pnpm build` /
-`cargo` uruchamia integrator.
+## Wyniki Windows CI (GitHub Actions)
 
-> **Windows CI: do uzupełnienia po pushu.** Nie podajemy tu żadnych wyników z
-> Windows CI, ponieważ nie zostały jeszcze wygenerowane.
+Kod commit `3ef2b9c04afdb71ac6affdd2f93c7a7a8b6a30b7` — oba runy zakończone
+**success**:
+
+| Run | Zdarzenie | macOS | Windows |
+| --- | --- | --- | --- |
+| [43122874422](https://github.com/Milklosz/nexus-aurea/actions/runs/43122874422) | push | PASS | PASS (13m38s) |
+| [43122936710](https://github.com/Milklosz/nexus-aurea/actions/runs/43122936710) | pull_request (PR #15) | PASS | PASS (2m55s) |
+
+`gh pr checks 15` → 4× **pass**, job `Publish GitHub Release` = **skipping**
+(brak tagu `v*`, więc nie powstał release). Windows zweryfikował to, czego
+lokalny macOS nie kompiluje: `Check Rust backend (Windows MSVC)`
+(`cargo check --target x86_64-pc-windows-msvc`) oraz pełny
+`Build Windows x64 NSIS installer`.
+
+Artefakt (30 dni retencji, **nie został zainstalowany na MSI**):
+
+- `VELORA-Windows-x64-3ef2b9c04afdb71ac6affdd2f93c7a7a8b6a30b7`
+- plik: `VELORA_0.9.2_x64-setup.exe` (3,54 MiB)
+- **SHA-256:** `95c1de4dff25dd84b0d210028325d66a59d8b9cd04ec721eb318bf07017c5b78`
 
 ## Testy wymagane na MSI (ręczna lista kontrolna)
 
