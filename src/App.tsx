@@ -23,7 +23,7 @@ import { useWeather } from "./hooks/useWeather";
 import { focusWindowSafely } from "./services/focusWindowSafely";
 import { openStreamingService, streamingServiceErrorMessage } from "./services/openStreamingService";
 import { getControlServiceStatus, setControlGameMode } from "./services/controlService";
-import { launchManagedApp, listenForManagedAppExit, managedAppErrorMessage } from "./services/appManager";
+import { launchManagedApp, listenForLaunchEvent, listenForManagedAppExit, managedAppErrorMessage } from "./services/appManager";
 import { listenForReturnHome, requestSessionTransition, returnVeloraHome, type SessionId } from "./services/sessionOrchestrator";
 import { readCinemaProfile, saveCinemaProfile, type CinemaProfile } from "./services/cinemaMode";
 import {
@@ -373,6 +373,26 @@ export default function App() {
       // the attempt and could show a misleading failure after a success.
       if (exit.shouldFocus) {
         showToast("Playnite został zamknięty. Wrócono do VELORA. Profil Gaming jest gotowy.");
+      }
+    }).then((stopListening) => {
+      if (active) unlisten = stopListening;
+      else stopListening();
+    }).catch(() => {});
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [showToast]);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void listenForLaunchEvent((event) => {
+      if (!active) return;
+      // A successful spawn receipt is not proof that the app window appeared.
+      // Surface only a real terminal failure from the authoritative registry.
+      if (event.session.phase === "failed" && event.session.appId === "edge-cinema") {
+        showToast(event.session.error || "Nie udało się otworzyć okna Edge Cinema.");
       }
     }).then((stopListening) => {
       if (active) unlisten = stopListening;
