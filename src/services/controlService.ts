@@ -1,6 +1,33 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+export type DualSenseConnection = "usb" | "bluetooth" | "unknown";
+export type DualSenseModel = "dualSense" | "dualSenseEdge" | "unknown";
+export type ChordOutcome =
+  | "triggered"
+  | "armed"
+  | "cooldown"
+  | "latched"
+  | "released"
+  | "rejectedWindow"
+  | "ignored";
+
+export type GamepadDeviceInfo = {
+  id: string;
+  model: DualSenseModel;
+  connection: DualSenseConnection;
+  connectedAtMs: number;
+  lastReportAtMs: number | null;
+  reportCount: number;
+  lastChordAtMs: number | null;
+  reconnectCount: number;
+};
+
+export type ChordDiagnostic = {
+  outcome: ChordOutcome;
+  atMs: number;
+};
+
 export type ControlServiceStatus = {
   windows: boolean;
   running: boolean;
@@ -9,7 +36,25 @@ export type ControlServiceStatus = {
   playstationControllerCount: number;
   foregroundProcess: string | null;
   returnHotkeyRegistered: boolean;
+  fallbackHotkey?: string;
+  gamepadHomeRunning?: boolean;
+  gamepadHomeDeviceCount?: number;
+  gamepadHomeLastComboAtMs?: number | null;
+  gamepadHomeLastError?: string | null;
+  gamepadHomeWarning?: string | null;
+  gamepadHomeDevices?: GamepadDeviceInfo[];
+  gamepadHomeDuplicateReports?: number;
+  gamepadHomeReconnects?: number;
+  gamepadHomeLastReportAtMs?: number | null;
+  gamepadHomeLastChord?: ChordDiagnostic | null;
   lastError: string | null;
+};
+
+export type FallbackHotkey = {
+  id: string;
+  label: string;
+  modifiers: number;
+  virtualKey: number;
 };
 
 export type ControlServiceStopReason = "keyboard-emergency" | "device-enumeration-failed" | string;
@@ -22,6 +67,17 @@ export const disabledControlServiceStatus: ControlServiceStatus = {
   playstationControllerCount: 0,
   foregroundProcess: null,
   returnHotkeyRegistered: false,
+  fallbackHotkey: "Ctrl+Alt+N",
+  gamepadHomeRunning: false,
+  gamepadHomeDeviceCount: 0,
+  gamepadHomeLastComboAtMs: null,
+  gamepadHomeLastError: null,
+  gamepadHomeWarning: null,
+  gamepadHomeDevices: [],
+  gamepadHomeDuplicateReports: 0,
+  gamepadHomeReconnects: 0,
+  gamepadHomeLastReportAtMs: null,
+  gamepadHomeLastChord: null,
   lastError: null,
 };
 
@@ -43,6 +99,16 @@ export async function setControlGameMode(enabled: boolean): Promise<ControlServi
 export async function stopControlService(): Promise<ControlServiceStatus> {
   if (!isTauri()) throw new Error("Control Service działa tylko w natywnej aplikacji Windows.");
   return invoke<ControlServiceStatus>("stop_control_service");
+}
+
+export async function getFallbackHotkeyOptions(): Promise<FallbackHotkey[]> {
+  if (!isTauri()) return [];
+  return invoke<FallbackHotkey[]>("get_fallback_hotkey_options");
+}
+
+export async function setFallbackHotkey(id: string): Promise<ControlServiceStatus> {
+  if (!isTauri()) throw new Error("Skrót powrotu działa tylko w natywnej aplikacji Windows.");
+  return invoke<ControlServiceStatus>("set_fallback_hotkey", { id });
 }
 
 export async function listenForControlServiceStatus(

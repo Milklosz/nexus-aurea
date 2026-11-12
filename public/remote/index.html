@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#101116">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="VELORA">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icon.svg">
+  <link rel="stylesheet" href="./style.css">
+  <title>VELORA Remote</title>
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <main class="remote-shell">
+    <header class="remote-header">
+      <div class="brand">VELORA <span>Remote</span></div>
+      <div class="connection-badge" id="connection-state" role="status" aria-live="polite">sprawdzam bezpieczne połączenie…</div>
+    </header>
+
+    <section class="remote-card" aria-labelledby="remote-title">
+      <p class="eyebrow">VELORA · BY MILKLOSH STUDIO · v0.9.2</p>
+      <h1 id="remote-title">VELORA Remote</h1>
+      <p class="connection-copy">Połączony pilot działa wyłącznie przez HTTPS z certyfikatem zaufanym na tym iPhonie.</p>
+
+      <dl class="remote-status-list" aria-label="Stan połączenia">
+        <div><dt>Serwer LAN</dt><dd id="server-state">Sprawdzam…</dd></div>
+        <div><dt>HTTPS</dt><dd id="origin-state">Sprawdzam…</dd></div>
+        <div><dt>Parowanie</dt><dd id="pairing-state">Sprawdzam…</dd></div>
+        <div><dt>Sparowane urządzenia</dt><dd id="paired-count">0</dd></div>
+      </dl>
+
+      <form id="pairing-form" class="pairing-form" autocomplete="off" hidden>
+        <p class="pairing-title">Połącz z VELORA</p>
+        <label for="pairing-code">Jednorazowy kod z Control Center</label>
+        <input id="pairing-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code"
+          pattern="[0-9]{6}" minlength="6" maxlength="6" required>
+        <label for="device-name">Nazwa urządzenia</label>
+        <input id="device-name" name="name" type="text" maxlength="32" value="iPhone" required>
+        <button type="submit" id="pair-button" disabled>Sparuj iPhone'a</button>
+      </form>
+
+      <div class="remote-pad" role="group" aria-label="Nawigacja VELORA">
+        <span></span><button type="button" data-command="up" aria-label="Góra" disabled>↑</button><span></span>
+        <button type="button" data-command="left" aria-label="Lewo" disabled>←</button>
+        <button type="button" data-command="select" aria-label="Wybierz" disabled>OK</button>
+        <button type="button" data-command="right" aria-label="Prawo" disabled>→</button>
+        <span></span><button type="button" data-command="down" aria-label="Dół" disabled>↓</button><span></span>
+      </div>
+
+      <div class="remote-row" role="group" aria-label="Nawigacja główna">
+        <button type="button" data-command="back" aria-label="Wstecz" disabled>Wstecz</button>
+        <button type="button" data-command="home" aria-label="Home" disabled>Home</button>
+        <span aria-hidden="true"></span>
+      </div>
+
+      <div class="remote-row" role="group" aria-label="Głośność">
+        <button type="button" data-command="volume-down" aria-label="Ciszej" disabled>−</button>
+        <button type="button" data-command="mute" aria-label="Wycisz" disabled>Wycisz</button>
+        <button type="button" data-command="volume-up" aria-label="Głośniej" disabled>+</button>
+      </div>
+
+      <div class="profile-row" role="group" aria-label="Profile">
+        <button type="button" data-command="profile-cinema" aria-label="Cinema" disabled>Cinema</button>
+        <button type="button" data-command="profile-gaming" aria-label="Gaming" disabled>Gaming</button>
+        <button type="button" data-command="profile-desktop" aria-label="Desktop" disabled>Desktop</button>
+      </div>
+
+      <p class="remote-note" id="remote-message" role="status" aria-live="polite">Polecenia są wyłączone do czasu bezpiecznego połączenia i parowania.</p>
+      <p class="remote-note">Jeśli Safari pokazuje ostrzeżenie certyfikatu, zatrzymaj się. Nie omijaj weryfikacji TLS. Dodaj ten pilot do ekranu początkowego dopiero po sparowaniu.</p>
+    </section>
+    <footer>Grand Cinema · kremowa typografia · złote akcenty</footer>
+  </main>
+</body>
+</html>

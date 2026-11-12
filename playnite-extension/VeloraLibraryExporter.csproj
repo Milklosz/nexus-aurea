@@ -1,0 +1,75 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    VELORA Playnite Library Exporter — class library, .NET Framework 4.6.2.
+
+    Build on WINDOWS with Visual Studio 2017+ (or MSBuild Build Tools):
+        msbuild VeloraLibraryExporter.csproj /t:Restore /p:Configuration=Release
+        msbuild VeloraLibraryExporter.csproj /p:Configuration=Release
+    Result: bin/Release/VeloraLibraryExporter.dll (we disable appending the TFM
+    to the output path so the location is predictable).
+
+    Then copy extension.yaml + the DLL into the Playnite Extensions folder — see
+    README.md and docs/playnite-extension-install.md.
+
+    STATUS: SOURCE ONLY. This project was NOT compiled or run in the authoring
+    environment (macOS; no Windows / Playnite / .NET Framework 4.6.2 / Playnite.SDK).
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net462</TargetFramework>
+    <OutputType>Library</OutputType>
+    <AssemblyName>VeloraLibraryExporter</AssemblyName>
+    <RootNamespace>VeloraLibraryExporter</RootNamespace>
+    <LangVersion>7.3</LangVersion>
+    <Deterministic>true</Deterministic>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <Configurations>Debug;Release</Configurations>
+    <Platforms>AnyCPU</Platforms>
+  </PropertyGroup>
+
+  <!-- Debug|Release configurations -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <DefineConstants>TRACE</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      ONLY the official Playnite SDK is referenced. We deliberately DO NOT add
+      any non-SDK Playnite assembly reference (Playnite, Playnite.Common, ...).
+
+      Pinned for the Playnite 10 (net462) target: PlayniteSDK 6.18.0 is the
+      latest published 6.x package and targets .NET Framework 4.6.2. Playnite
+      documents that the 10.x release line runs 6.* extensions. Playnite 11
+      moved to .NET 10 / SDK 11, so that runtime requires a separate net10.0
+      build and is not covered by this project.
+
+      ExcludeAssets=runtime: Playnite provides Playnite.SDK.dll itself at runtime,
+      so we must NOT copy a private build of it into the extension output folder
+      (that would cause assembly/version conflicts when Playnite loads the DLL).
+      The compile-time reference is still consumed.
+    -->
+    <PackageReference Include="PlayniteSDK" Version="6.18.0">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+
+    <!-- Reference assemblies keep the net462 build reproducible on every
+         agent, including Windows images without the 4.6.2 developer pack. -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3"
+                      PrivateAssets="All" />
+  </ItemGroup>
+
+  <!-- extension.yaml, README.md and ManifestExample.json are docs/content only;
+       they are not compiled and are not copied into the build output. -->
+
+</Project>

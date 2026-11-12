@@ -70,7 +70,7 @@ describe("Control Service native bridge", () => {
     expect(callback).toHaveBeenCalledWith(activeStatus);
   });
 
-  it("forwards the user-triggered return shortcut to NEXUS", async () => {
+  it("forwards the user-triggered return shortcut to VELORA", async () => {
     const callback = vi.fn();
     await listenForNexusControlReturn(callback);
     expect(mocks.listen.mock.calls[0][0]).toBe("nexus-control-return");

@@ -2,6 +2,8 @@ node_modules/
 dist/
 src-tauri/target/
 src-tauri/gen/
+playnite-extension/bin/
+playnite-extension/obj/
 .DS_Store
 work/
 outputs/

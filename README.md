@@ -1,28 +1,24 @@
-# NEXUS AUREA v0.5.0
+# VELORA by Milklosh Studio — v0.9.2 · Grand Cinema
 
-Projekt React + TypeScript + Tauri oparty bezpośrednio na zatwierdzonym prototypie AUREA · Grand Cinema. Oryginalny plik jest zachowany w `design/aurea-prototype.html`, a arkusz `src/styles.css` został z niego przeniesiony bez zmiany bazowego układu, kolorów ani animacji.
+VELORA is the current product name for the Grand Cinema desktop launcher. The visual style and entertainment layout remain part of Grand Cinema.
 
-## Instalacja na Windows 11
+## Windows installation and data compatibility
 
-NEXUS AUREA jest budowany jako instalator NSIS `.exe` dla Windows x64. Instalator domyślnie instaluje aplikację dla bieżącego użytkownika, bez konieczności instalacji systemowej.
+The Windows build produces one per-user NSIS installer. When it finds the existing NEXUS AUREA installation, the installer updates that program folder in place and keeps the Tauri identifier `pl.nexus.aurea`. This preserves the existing stable profile at `%LOCALAPPDATA%\pl.nexus.aurea`; the identifier and executable filename remain legacy compatibility details.
 
-### Artefakt z GitHub Actions
+The separate Test profile at `%LOCALAPPDATA%\NEXUS-AUREA-Test` is not imported or deleted. The installer does not merge WebView profiles.
 
-1. Otwórz [przebiegi CI](https://github.com/Milklosz/nexus-aurea/actions/workflows/ci.yml) i wybierz ukończony przebieg z gałęzi `main`.
-2. W sekcji **Artifacts** pobierz `NEXUS-AUREA-Windows-x64-<SHA>` i rozpakuj pobrane archiwum ZIP.
-3. Uruchom instalator `NEXUS AUREA_<wersja>_x64-setup.exe` z pobranego artefaktu.
+### GitHub Actions artifact
 
-Artefakt jest tworzony po udanym buildzie Windows przy każdym ukończonym pushu na `main`. GitHub przechowuje go przez 30 dni. Pobranie artefaktu wymaga zalogowania do GitHuba i dostępu do repozytorium.
+1. Open the repository's completed CI run.
+2. Download `VELORA-Windows-x64-<SHA>` and extract the ZIP.
+3. Run the `VELORA_<version>_x64-setup.exe` installer.
 
-### GitHub Release
-
-Tag w formacie `v*` uruchamia pełne CI. Po pomyślnym zakończeniu testów, buildów macOS i Windows oraz przesłaniu instalatora workflow publikuje GitHub Release z plikiem `.exe`. Wydanie pobierzesz z [zakładki Releases](https://github.com/Milklosz/nexus-aurea/releases).
+The workflow builds one Windows installer artifact. It does not create a GitHub Release unless a version tag is pushed.
 
 ### SmartScreen
 
-Instalator nie jest podpisany certyfikatem wydawcy, więc Microsoft Defender SmartScreen może ostrzec, że wydawca jest nieznany. Instaluj tylko plik pobrany z repozytorium NEXUS AUREA. Jeśli standardowy ekran ostrzeżenia pokazuje opcję kontynuacji, użyj jej tylko po sprawdzeniu źródła. Na urządzeniach z aktywnym Smart App Control Windows 11 może zablokować niepodpisany plik bez możliwości uruchomienia go mimo ostrzeżenia; nie wyłączaj zabezpieczeń, aby to obejść. [Microsoft opisuje wpływ podpisu na SmartScreen i Smart App Control](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation).
-
-Windows 11 zwykle ma WebView2 wymagany przez aplikację. Przy pierwszym uruchomieniu aplikacji system może potrzebować połączenia internetowego, aby pobrać brakujący składnik WebView2.
+The installer is not publisher-signed, so Microsoft Defender SmartScreen may show an unknown-publisher warning. Use only a verified installer from this repository. Do not disable Windows security protections to bypass warnings.
 
 ## Uruchomienie developerskie na Macu
 
@@ -106,3 +102,63 @@ Global gamepad button mapping, cursor movement, Windows actions, volume, automat
 Synthetic tests cover the disabled default, Sony HID classification, hotkey bridge state, game-mode shortcut behavior, emergency-stop UI updates, focus restoration after closing diagnostics, controller reconnects, and keyboard traversal across the five dock tiles. They do not prove HID enumeration, global hotkey delivery, HDMI/fullscreen behavior, Steam Input coexistence, or controller mapping on the MSI. These remain manual MSI acceptance checks before any global button mapping is added.
 
 For the first MSI acceptance pass, open diagnostics and start the service manually; confirm USB and Bluetooth pad enumeration, switch to another app and test `Ctrl+Alt+N`, enable game mode and confirm that shortcut is released, then test `Ctrl+Alt+F12` and verify the status returns to disabled. Repeat once with Steam Input active to confirm the prototype observes device metadata without consuming controller reports. No v0.5 installer is to be installed automatically.
+
+## v0.6.0 — App Manager and Cinema Mode
+
+The diagnostics panel includes Cinema, Gaming, and Desktop profiles and a fixed Windows application allowlist for Steam Big Picture, Apple Music, Playnite Fullscreen, Chrome, Edge, and Firefox. Discovery checks known per-user and Program Files locations; Apple Music uses its WindowsApps execution alias. Launch requests use fixed executable paths and fixed arguments. The process diagnostic uses `tasklist` with an exact image-name filter, has a two-second timeout, and does not read window titles or process command lines. Existing applications are reported rather than launched a second time when their process is already visible to that check. NEXUS never terminates an application.
+
+Only a Playnite Fullscreen session started directly by NEXUS is monitored for exit. Fullscreen → Desktop is treated as a Playnite mode handoff, not a session end. Focus is requested only if Windows has returned to the desktop shell itself, Playnite, or NEXUS; if another application (including File Explorer or the taskbar) owns the foreground, VELORA does not steal focus. Details and limitations are documented in [docs/playnite-fullscreen-focus.md](docs/playnite-fullscreen-focus.md). Steam, Apple Music, and browsers may delegate to existing processes, so their lifecycle is reported as unsupported. Windows can still deny foreground activation. Profiles are saved in local WebView storage. Cinema requests NEXUS fullscreen and Desktop requests a decorated window; Gaming only activates the existing Control Service game mode if that service was already explicitly enabled. No service is enabled on startup, and Gaming does not add global controller mapping. No HDR, resolution, HDMI, or audio-device setting is changed.
+
+### v0.6 validation status
+
+- PASS locally: React/TypeScript unit tests, production TypeScript/Vite build, and whitespace checks.
+- CI REQUIRED: Rust unit tests, Windows/MSVC backend check, macOS backend check, and Windows NSIS build.
+- NOT TESTED: Steam/Apple Music/Playnite/browser discovery and launch on the MSI; app window lifecycle and Windows foreground permissions; profile switching with the PlayStation controller on the Panasonic display.
+
+Known v0.5 limitations remain: Control Service detects HID metadata and provides return/emergency keyboard shortcuts, but global controller mapping and system volume control are not implemented. The v0.6 manager does not expose an unrestricted custom executable path, and Playnite focus restoration requires hardware acceptance before it can be considered reliable on the MSI.
+
+## v0.7.0 — NEXUS Music and Windows audio controls
+
+NEXUS Music requests Windows Global System Media Transport Controls (SMTC) sessions and accepts metadata only from a session whose app user model ID matches Apple Music. When available, it reports title, artist, album, playback state, and timeline position, then routes play/pause/next/previous to that Apple Music session. If Windows does not expose the Apple session or denies SMTC access, track fields remain empty and transport controls remain disabled; the explicit fallback opens the installed official Apple Music app. NEXUS never sends media commands to another app's session.
+
+Music Mode presents the available track data in a full-screen AUREA-styled overlay. Background Mode is opt-in and remembered locally; it displays an optional mini-player while the Grand Cinema home screen stays in place. Controller transport is available from the diagnostics panel; the home-screen mini-player also has mouse/keyboard buttons. In Gaming profile NEXUS disables track transport controls while leaving already-playing audio alone. The album art thumbnail is intentionally not read in this prototype, so the UI states that it is unavailable rather than showing sample art.
+
+System audio buttons send standard Windows volume-up, volume-down, and mute keyboard events. They affect the current Windows default output and do not read a numeric volume value, choose an endpoint, pair Bluetooth devices, or change audio settings. If the user selects JBL PartyBox Encore as the Windows default device, these buttons follow that routing. The current device name and Bluetooth latency are not reported by this prototype.
+
+### Apple and Windows integration limits
+
+Microsoft documents SMTC as exposing only sessions that integrate with those APIs, and marks `globalMediaControl` as a capability needed by some session APIs. The current NEXUS build is an unpackaged NSIS desktop installer, so SMTC access can vary by Windows build and package identity; runtime access failures are surfaced and use the official-app fallback. Album-art byte extraction and system-device enumeration are not implemented. See [Microsoft SMTC sessions](https://learn.microsoft.com/en-us/uwp/api/windows.media.control.globalsystemmediatransportcontrolssession), [the SMTC session manager](https://learn.microsoft.com/en-us/uwp/api/windows.media.control.globalsystemmediatransportcontrolssessionmanager), and [Windows app capability declarations](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/app-capability-declarations).
+
+MusicKit / Apple Music API is a future option for catalog and personal-library features, not part of v0.7. Apple requires a signed ES256 developer token; personalized library requests also require a Music User Token. MusicKit on the Web manages subscriber authorization for web apps, but NEXUS has no configured Apple Developer signing key or user authorization flow and does not claim WebView2 playback support. No Apple ID password, private key, token, DRM content, or subscription data is collected by NEXUS. See [Apple Music API](https://developer.apple.com/documentation/AppleMusicAPI), [developer-token requirements](https://developer.apple.com/documentation/AppleMusicAPI/generating-developer-tokens), and [MusicKit user authentication](https://developer.apple.com/documentation/applemusicapi/user-authentication-for-musickit).
+
+`src/services/musicBridge.ts` is the narrow frontend boundary for SMTC status, track transport, and system-volume actions. Future MusicKit, iPhone PWA, iCloud Calendar, and System Manager modules can each add explicit services and native commands behind focused UI entry points. No generic plugin registry or automatic background integration is introduced.
+
+### v0.7 validation status
+
+- PASS locally: React/TypeScript tests, production frontend build, and whitespace checks.
+- CI REQUIRED: Windows and macOS Rust checks, including the native Windows SMTC code, and the Windows NSIS installer artifact.
+- NOT TESTED: Apple Music SMTC metadata/commands, full-screen media presentation, JBL volume routing, Bluetooth latency, PlayStation navigation through Music Mode, Panasonic display rendering, and any Apple Music/MusicKit authentication or playback.
+- NOT IMPLEMENTED: album artwork, lyrics, current endpoint name, endpoint selection, Bluetooth pairing/latency, and an Apple Music-specific MediaKit streaming client.
+
+## VELORA 1.0 — Grand Integration
+
+`integration/velora-v1` is the single integration line for VELORA 1.0. It combines the Night Build, the P1 security fixes, the native core and system-intelligence work, and the Experience/Ecosystem modules. `SessionOrchestrator` is the only authoritative session owner; `LaunchRegistry` and `WindowBroker` remain the only process/window observers. Edge Cinema and Playnite adapters route through them instead of keeping parallel global state machines.
+
+Architecture, contracts, tested guarantees, known limitations and MSI acceptance are documented in [docs/velora-v1-integration.md](docs/velora-v1-integration.md), [docs/velora-v1-integration-tests.md](docs/velora-v1-integration-tests.md) and [docs/velora-v1-msi-acceptance.md](docs/velora-v1-msi-acceptance.md). Physical DualSense, Playnite extension packaging, Edge DRM/HDCP, 4K/HDR and Steam Input coexistence remain manual MSI checks; synthetic CI tests do not prove them.
+
+### Core and System Intelligence
+
+The native core adds a session model (`veloraHome`, `game`, `playnite`, `cinema`, `desktop`, `ambient`), an explicit transition table, HWND-based window tracking, safe focus restoration, a unified Playnite/Steam/game launch registry, and an opt-in DualSense PS + Options return path inside Control Service. The gamepad listener uses passive Windows Raw Input for Sony DualSense reports only; it installs no driver, global hook or emulator, and it does not block game input. When Windows, firmware or Steam Input hides the device or denies foreground activation, `Ctrl+Alt+N` remains the fallback.
+
+System Intelligence adds crash/sleep recovery, idempotent session commands with cancellation, PID-reuse detection, main-window scoring and foreground-denial diagnostics, richer DualSense diagnostics with reconnect handling, a read-only display/audio diagnostics foundation, bounded process/window polling, and a sanitized System Intelligence export. See [docs/velora-v1-core.md](docs/velora-v1-core.md) and [docs/velora-v1-system-intelligence.md](docs/velora-v1-system-intelligence.md). No display, HDR, audio-default or Windows setting is changed automatically.
+
+### Experience and Ecosystem
+
+- Dokument zbiorczy: [docs/velora-v1-experience.md](docs/velora-v1-experience.md) i [docs/velora-v1-ecosystem.md](docs/velora-v1-ecosystem.md); kontrakty: [docs/velora-v1-ecosystem-contracts.md](docs/velora-v1-ecosystem-contracts.md), IPC: [docs/ipc-contract.md](docs/ipc-contract.md).
+- A. Edge Cinema — dedykowane, trwałe okno Microsoft Edge i dokładna allowlista HTTPS, podłączone do `LaunchRegistry`, `WindowBroker` i `SessionOrchestrator`: [docs/edge-cinema-v1.md](docs/edge-cinema-v1.md), [docs/edge-cinema-lifecycle-v2.md](docs/edge-cinema-lifecycle-v2.md).
+- B. Autostart — opcjonalny (opt-in), tylko jeden wpis HKCU Run i tryb awaryjny `--windowed`: [docs/autostart-v1.md](docs/autostart-v1.md), [docs/autostart-recovery-v1.md](docs/autostart-recovery-v1.md).
+- C. Biblioteka Playnite — jawny, tylko do odczytu manifest + źródło rozszerzenia Playnite: [docs/playnite-library-v1.md](docs/playnite-library-v1.md), [docs/playnite-manifest-contract.md](docs/playnite-manifest-contract.md), [docs/playnite-extension-install.md](docs/playnite-extension-install.md). Rozszerzenie C# nie jest kompilowane w CI; wymaga Windows + SDK Playnite.
+- D. AUREA Navigation — nawigacja 2D i stany fokusu wyłącznie wewnątrz UI VELORA: [docs/aurea-navigation-v1.md](docs/aurea-navigation-v1.md).
+- E. iPhone Remote 2.0 — prymitywy niezawodności zaimplementowane po stronie serwera (idempotencja, kolejność, ACK), niezależny audyt certyfikatów i plan: [docs/iphone-remote-cert-audit.md](docs/iphone-remote-cert-audit.md), [docs/iphone-remote-reliability-plan.md](docs/iphone-remote-reliability-plan.md). HMAC, replay protection, walidacja Host/Origin i TLS pozostają nienaruszone.
+- F. Couch-only Application Control — analiza przepływu + typowane akcje i prototyp adaptera: [docs/couch-control-flow.md](docs/couch-control-flow.md).
+- Stabilne kontrakty w `src/contracts/` łączą frontend z backendem bez przepisywania API. **Bez redesignu**, bez zmian w stylistyce/animacjach/docku.

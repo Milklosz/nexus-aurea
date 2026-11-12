@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "NEXUS AUREA",
+  "productName": "VELORA",
   "version": "../package.json",
   "identifier": "pl.nexus.aurea",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "NEXUS AUREA",
+        "title": "VELORA",
         "width": 1600,
         "height": 900,
         "minWidth": 780,
@@ -33,13 +33,20 @@
       "nsis"
     ],
     "category": "Entertainment",
-    "shortDescription": "NEXUS AUREA — Grand Cinema",
+    "shortDescription": "VELORA by Milklosh Studio — Grand Cinema",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "startMenuFolder": "VELORA",
+        "installerHooks": "windows/installer-hooks.nsh"
+      }
+    }
   }
 }

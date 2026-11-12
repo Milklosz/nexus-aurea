@@ -2,15 +2,24 @@ import { describe, expect, it } from "vitest";
 import { isOfficialHttpsUrl, streamingServices } from "../data/streamingServices";
 
 describe("official streaming links", () => {
-  it("contains the five requested services", () => {
-    expect(streamingServices.map((service) => service.name)).toEqual([
+  it("contains official links for the five requested streaming services", () => {
+    const websites = streamingServices.filter((service) => service.kind === "web");
+    expect(websites.map((service) => service.name)).toEqual([
       "Netflix",
       "Disney+",
-      "Max",
+      "HBO Max",
       "Prime Video",
       "YouTube",
     ]);
-    expect(streamingServices.every((service) => isOfficialHttpsUrl(service.href, service.allowedHost))).toBe(true);
+    expect(websites.every((service) => isOfficialHttpsUrl(service.href, service.allowedHost))).toBe(true);
+    expect(websites.find((service) => service.id === "max")?.href).toBe("https://www.hbomax.com/pl/pl");
+  });
+
+  it("adds native Apple Music and Steam launchers to the cinema dock", () => {
+    expect(streamingServices.filter((service) => service.kind === "managed").map((service) => service.id)).toEqual([
+      "appleMusic",
+      "steam",
+    ]);
   });
 
   it.each([

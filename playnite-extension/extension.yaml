@@ -1,0 +1,10 @@
+# Playnite extension manifest.
+# https://api.playnite.link/docs/tutorials/extensions/extensionsManifest.html
+# Id/Name/Author/Version/Module/Type — Type: GenericPlugin (a plugin that only
+# contributes main-menu items and reacts to application start).
+Id: velora-library-exporter
+Name: VELORA Library Exporter
+Author: VELORA
+Version: 1.0.0
+Module: VeloraLibraryExporter.dll
+Type: GenericPlugin

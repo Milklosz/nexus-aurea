@@ -19,6 +19,6 @@
   <rect width="1024" height="1024" rx="208" fill="url(#sun)" />
   <path d="M0 653 173 524l112 79 153-198 146 171 122-115 318 207v356H0Z" fill="#29232c" opacity="0.78" />
   <path d="m0 736 189-139 110 85 174-175 178 188 136-124 237 143v310H0Z" fill="#11141a" />
-  <path d="M331 333v360l362-360v360" fill="none" stroke="url(#gold)" stroke-linecap="square" stroke-linejoin="miter" stroke-width="47" />
+  <path d="M286 316 512 704 738 316" fill="none" stroke="url(#gold)" stroke-linecap="square" stroke-linejoin="miter" stroke-width="52" />
   <path d="M306 765h412" fill="none" stroke="#d2b484" stroke-opacity="0.65" stroke-width="3" />
 </svg>

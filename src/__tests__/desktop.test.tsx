@@ -7,13 +7,14 @@ import { useNavigation } from "../hooks/useNavigation";
 import { useFocusRestoreOnClose } from "../hooks/useFocusRestoreOnClose";
 import { useGamepad } from "../hooks/useGamepad";
 import { gamepadSnapshot } from "../services/gamepadSnapshot";
-import { windowMode } from "../services/windowMode";
+import { minimizeWindowToDesktop, windowMode } from "../services/windowMode";
 import { readFileSync } from "node:fs";
 
 const native = vi.hoisted(() => ({
   setFullscreen: vi.fn(),
   setDecorations: vi.fn(),
   isFullscreen: vi.fn(),
+  minimize: vi.fn(),
   invoke: vi.fn(() => new Promise(() => {})),
   controlStatus: { windows: false, running: false, gameMode: false, controllerCount: 0, playstationControllerCount: 0, foregroundProcess: null, returnHotkeyRegistered: false, lastError: null },
   getControlStatus: vi.fn(() => Promise.resolve(native.controlStatus)),
@@ -21,17 +22,42 @@ const native = vi.hoisted(() => ({
   setControlGameMode: vi.fn(() => Promise.resolve(native.controlStatus)),
   stopControlService: vi.fn(() => Promise.resolve(native.controlStatus)),
 }));
+const musicStatus = {
+  windows: false,
+  bridgeAvailable: false,
+  appleSessionFound: false,
+  title: null,
+  artist: null,
+  album: null,
+  playbackState: null,
+  positionSeconds: null,
+  durationSeconds: null,
+  canTogglePlayPause: false,
+  canNext: false,
+  canPrevious: false,
+  artworkSupported: false,
+  audioDeviceName: null,
+  bluetoothLatencyMs: null,
+  message: "not available",
+} as const;
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => true, invoke: native.invoke }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => native }));
 vi.mock("../services/controlService", () => ({
   disabledControlServiceStatus: native.controlStatus,
   getControlServiceStatus: native.getControlStatus,
+  getFallbackHotkeyOptions: vi.fn(async () => []),
+  setFallbackHotkey: vi.fn(async () => native.controlStatus),
   startControlService: native.startControlService,
   setControlGameMode: native.setControlGameMode,
   stopControlService: native.stopControlService,
   listenForControlServiceStatus: vi.fn(async () => () => {}),
   listenForControlServiceStop: vi.fn(async () => () => {}),
   listenForNexusControlReturn: vi.fn(async () => () => {}),
+}));
+vi.mock("../services/appManager", () => ({
+  emptyAppManagerSnapshot: { windows: false, foregroundProcess: null, apps: [] },
+  getAppManagerStatus: vi.fn(async () => ({ windows: false, foregroundProcess: null, apps: [] })),
+  launchManagedApp: vi.fn(async () => ({ id: "chrome", alreadyRunning: false, focusRestoreSupported: false })),
 }));
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const pad = { connected: true, index: 0, id: "Wireless Controller", mapping: "standard", buttons: [{ pressed: true, value: 1 }], axes: [-0.75, 0.3] } as unknown as Gamepad;
@@ -42,6 +68,10 @@ describe("desktop recovery", () => {
     expect(native.setDecorations).toHaveBeenCalledWith(true);
     expect(native.setFullscreen).toHaveBeenCalledWith(false);
     expect(native.setDecorations.mock.invocationCallOrder[0]).toBeLessThan(native.setFullscreen.mock.invocationCallOrder[0]);
+  });
+  it("minimizes VELORA when showing the Windows desktop", async () => {
+    await minimizeWindowToDesktop();
+    expect(native.minimize).toHaveBeenCalledOnce();
   });
   it("uses one app version and starts fullscreen", () => {
     const json = (path: string) => JSON.parse(readFileSync(path, "utf8"));
@@ -64,7 +94,7 @@ describe("gamepad without hardware", () => {
     Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: vi.fn() });
     vi.stubGlobal("navigator", { getGamepads: () => [null, pad] });
     const close = vi.fn();
-    render(<GamepadDiagnostics profile="auto" onProfileChange={vi.fn()} onLaunch={vi.fn(async () => {})} onClose={close} />);
+    render(<GamepadDiagnostics profile="auto" onProfileChange={vi.fn()} cinemaProfile="cinema" onCinemaProfileChange={vi.fn()} onShowDesktop={vi.fn()} musicStatus={musicStatus} musicBackgroundMode={false} onMusicBackgroundModeChange={vi.fn()} onMusicRefresh={vi.fn(async () => {})} onMusicControl={vi.fn(async () => {})} onSystemVolume={vi.fn(async () => {})} onOpenAppleMusic={vi.fn(async () => {})} onClose={close} />);
     expect(screen.getByText(/Połączone: 1/)).toBeTruthy();
     expect(screen.getByText(/B0: 1.00/).getAttribute("data-pressed")).toBe("true");
     expect(screen.getByText(/A0: -0.750/)).toBeTruthy();
@@ -75,7 +105,7 @@ describe("gamepad without hardware", () => {
     Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: vi.fn(function(this: HTMLDialogElement) { this.setAttribute("open", ""); }) });
     Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: vi.fn() });
     vi.stubGlobal("navigator", {});
-    render(<GamepadDiagnostics profile="auto" onProfileChange={vi.fn()} onLaunch={vi.fn(async () => {})} onClose={() => {}} />);
+    render(<GamepadDiagnostics profile="auto" onProfileChange={vi.fn()} cinemaProfile="cinema" onCinemaProfileChange={vi.fn()} onShowDesktop={vi.fn()} musicStatus={musicStatus} musicBackgroundMode={false} onMusicBackgroundModeChange={vi.fn()} onMusicRefresh={vi.fn(async () => {})} onMusicControl={vi.fn(async () => {})} onSystemVolume={vi.fn(async () => {})} onOpenAppleMusic={vi.fn(async () => {})} onClose={() => {}} />);
     expect(screen.getByText(/Gamepad API niedostępne/)).toBeTruthy();
   });
   it("moves relative to selection and wraps", () => {
@@ -118,6 +148,29 @@ describe("gamepad without hardware", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close diagnostics" }));
     await waitFor(() => expect(document.activeElement?.textContent).toBe("Selected dock item"));
   });
+  it("does not restore home focus while handing off to another modal", () => {
+    const restore = vi.fn();
+    const requestFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
+    function FocusHandoffHarness() {
+      const [controlCenterOpen, setControlCenterOpen] = useState(false);
+      const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+      useFocusRestoreOnClose(controlCenterOpen, restore, !diagnosticsOpen);
+      return <>
+        <button onClick={() => setControlCenterOpen(true)}>Open Control Center</button>
+        {controlCenterOpen && <button onClick={() => { setControlCenterOpen(false); setDiagnosticsOpen(true); }}>Open diagnostics</button>}
+        {diagnosticsOpen && <div role="dialog"><button>Diagnostic action</button></div>}
+      </>;
+    }
+    render(<FocusHandoffHarness />);
+    fireEvent.click(screen.getByRole("button", { name: "Open Control Center" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open diagnostics" }));
+    expect(screen.getByRole("button", { name: "Diagnostic action" })).toBeTruthy();
+    expect(restore).not.toHaveBeenCalled();
+    expect(requestFrame).not.toHaveBeenCalled();
+  });
   it("does not poll while diagnostics disable navigation", () => {
     const getGamepads = vi.fn(() => [pad]);
     vi.stubGlobal("navigator", { getGamepads });
@@ -128,6 +181,62 @@ describe("gamepad without hardware", () => {
       options: vi.fn(),
     }, false));
     expect(getGamepads).not.toHaveBeenCalled();
+  });
+  it("pauses and resets controller state while input is suspended", () => {
+    let suspended = false;
+    let now = 0;
+    let currentPad = { ...pad, buttons: [], axes: [0] } as unknown as Gamepad;
+    let scheduledFrame: FrameRequestCallback | undefined;
+    const getGamepads = vi.fn(() => [currentPad]);
+    const actions = { move: vi.fn(), confirm: vi.fn(), back: vi.fn(), options: vi.fn() };
+    vi.stubGlobal("navigator", { getGamepads });
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      scheduledFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    const poll = () => {
+      const callback = scheduledFrame;
+      scheduledFrame = undefined;
+      act(() => callback?.(now));
+    };
+
+    const { rerender } = renderHook(
+      ({ shouldSuspend }) => useGamepad(actions, true, "standard", () => shouldSuspend),
+      { initialProps: { shouldSuspend: false } },
+    );
+
+    poll();
+    currentPad = { ...currentPad, axes: [-0.75] };
+    now = 41;
+    poll();
+    now = 82;
+    poll();
+    expect(actions.move).toHaveBeenCalledTimes(1);
+
+    suspended = true;
+    rerender({ shouldSuspend: suspended });
+    now = 500;
+    poll();
+    expect(getGamepads).toHaveBeenCalledTimes(3);
+
+    suspended = false;
+    rerender({ shouldSuspend: suspended });
+    now = 1000;
+    poll();
+    expect(actions.move).toHaveBeenCalledTimes(1);
+
+    currentPad = { ...currentPad, axes: [0] };
+    now = 1010;
+    poll();
+    currentPad = { ...currentPad, axes: [-0.75] };
+    now = 1020;
+    poll();
+    now = 1061;
+    poll();
+    expect(actions.move).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -9,7 +9,7 @@ export function StatusBar({ time, now, weatherLabel, weatherTitle }: StatusBarPr
   return (
     <header className="topbar">
       <div className="brand">
-        <span className="wordmark">N E X U S</span>
+        <span className="wordmark">V E L O R A</span>
         <span className="brand-line" />
         <span className="edition">ENTERTAINMENT OS</span>
       </div>
