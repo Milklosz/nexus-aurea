@@ -1,6 +1,8 @@
-type AmbientScreenProps = { now: Date };
+import { useClock } from "../hooks/useClock";
 
-export function AmbientScreen({ now }: AmbientScreenProps) {
+/** Subscribes to the clock itself so App does not re-render every second. */
+export function AmbientScreen() {
+  const { now } = useClock();
   const date = new Intl.DateTimeFormat("pl-PL", {
     weekday: "long",
     day: "numeric",
