@@ -504,10 +504,21 @@ mod windows {
         autostart_command_value, registry_add_arguments, registry_delete_arguments,
         registry_query_arguments, run_value_name, AutostartStatus, SAFE_MODE_FLAG,
     };
+    use std::path::PathBuf;
     use std::process::Command;
 
+    /// Prefer the absolute system reg.exe so a user-writable working directory
+    /// cannot shadow it through the Windows executable search order.
+    fn reg_executable() -> PathBuf {
+        std::env::var_os("SystemRoot")
+            .map(PathBuf::from)
+            .map(|root| root.join("System32").join("reg.exe"))
+            .filter(|path| path.is_file())
+            .unwrap_or_else(|| PathBuf::from("reg.exe"))
+    }
+
     fn run_reg(arguments: Vec<String>) -> std::io::Result<std::process::Output> {
-        Command::new("reg.exe").args(&arguments).output()
+        Command::new(reg_executable()).args(&arguments).output()
     }
 
     fn value_line(output: &std::process::Output) -> Option<String> {
