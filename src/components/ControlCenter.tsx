@@ -5,6 +5,8 @@ import type { AmbientSettings } from "../services/ambient";
 import { nextAmbientDelay, AMBIENT_IDLE_OPTIONS } from "../services/ambient";
 import type { SystemVolumeAction } from "../services/musicBridge";
 import { GamingHub } from "./GamingHub";
+import { AutostartPanel } from "./AutostartPanel";
+import { PlayniteLibrary } from "./PlayniteLibrary";
 import {
   beginRemotePairing,
   disabledRemoteAccessStatus,
@@ -321,6 +323,7 @@ export function ControlCenter(props: ControlCenterProps) {
               {loading ? "Odczytuję…" : "Ponów odczyt statusu Windows"}
             </button>}
           </section>
+          <AutostartPanel />
         </div>
         {error && <p className="cc-feedback cc-error" role="alert">{error}</p>}
         {notice && <p className="cc-feedback" role="status">{notice}</p>}
@@ -332,6 +335,10 @@ export function ControlCenter(props: ControlCenterProps) {
           <div className="cc-card-heading"><span className="cc-card-index">05</span><div><h3>Gaming Hub</h3><p>Gry i launchery zainstalowane na tym komputerze.</p></div></div>
           <GamingHub onActivateGaming={() => props.onProfileChange("gaming")} />
         </div>
+        <section className="cc-card cc-playnite-card" aria-label="Biblioteka gier Playnite">
+          <div className="cc-card-heading"><span className="cc-card-index">08</span><div><h3>Biblioteka gier</h3><p>Okładki, ulubione i ostatnio grane z bezpiecznego źródła Playnite.</p></div></div>
+          <PlayniteLibrary />
+        </section>
       </section>
 
       <section id="cc-panel-remote" className="cc-panel cc-remote-panel" role="tabpanel"

@@ -95,7 +95,9 @@ export default function App() {
     [runServiceLaunch, showToast],
   );
   const activateSelected = useCallback(() => void openService(activeServiceRef.current), [openService]);
-  const navigation = useNavigation(streamingServices.length, activateSelected, showMenu);
+  // Rejestruje dock jako siatkę AUREA dla 2D poleceń iPhone Remote; bez `columns`
+  // klawiatura zachowuje dotychczasowe skróty (ArrowUp -> Control Center).
+  const navigation = useNavigation(streamingServices.length, activateSelected, showMenu, { gridId: "home-dock" });
   const closeControlCenter = useCallback(() => setControlCenterOpen(false), []);
   const toggleControlCenter = useCallback(() => {
     if (controlCenterOpen) {
