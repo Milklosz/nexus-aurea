@@ -1,4 +1,5 @@
 import { GamepadDiagnostics } from "./components/GamepadDiagnostics";
+import { VirtualKeyboard } from "./components/VirtualKeyboard";
 import { ControlCenter } from "./components/ControlCenter";
 import { AmbientScreen } from "./components/AmbientScreen";
 import { useAmbient } from "./hooks/useAmbient";
@@ -17,7 +18,10 @@ import { useControllerOwnershipSuspension } from "./hooks/useControllerOwnership
 import { isTextEntryTarget, useNavigation } from "./hooks/useNavigation";
 import { useFocusRestoreOnClose } from "./hooks/useFocusRestoreOnClose";
 import { useLaunchGuard } from "./hooks/useLaunchGuard";
+import { useVirtualKeyboard } from "./hooks/useVirtualKeyboard";
 import { getDialogNavigationControls, shouldUseNativeDialogArrowKey } from "./services/dialogNavigation";
+import { isKeyboardTextTarget } from "./services/virtualKeyboard";
+import { availableHomeZones, DOCK_ZONE, homeZoneOf, homeZoneTarget, nextHomeZone, stepMiniPlayer } from "./services/homeZones";
 import { useToast } from "./hooks/useToast";
 import { useWeather } from "./hooks/useWeather";
 import { openStreamingService, streamingServiceErrorMessage } from "./services/openStreamingService";
@@ -120,6 +124,18 @@ export default function App() {
   // Rejestruje dock jako siatkę AUREA dla 2D poleceń iPhone Remote; bez `columns`
   // klawiatura zachowuje dotychczasowe skróty (ArrowUp -> Control Center).
   const navigation = useNavigation(streamingServices.length, activateSelected, showMenu, { gridId: "home-dock" });
+  // The on-screen keyboard only writes into VELORA's own text fields. Its functions are
+  // stable, so the listeners below do not re-subscribe on every render.
+  const keyboard = useVirtualKeyboard({ fallbackFocus: () => navigation.focusApp(activeServiceRef.current) });
+  const {
+    isOpen: keyboardOpen,
+    open: openKeyboard,
+    move: moveKeyboard,
+    activate: activateKeyboard,
+    cancel: cancelKeyboard,
+    closeForHome: closeKeyboardForHome,
+    handleKeyDown: keyboardKeyDown,
+  } = keyboard;
   const closeControlCenter = useCallback(() => setControlCenterOpen(false), []);
   const toggleControlCenter = useCallback(() => {
     if (controlCenterOpen) {
@@ -130,6 +146,9 @@ export default function App() {
     setControlCenterOpen(true);
   }, [closeControlCenter, controlCenterOpen]);
   const returnToNexus = useCallback(() => {
+    // Every Home path (pad chord, iPhone remote, Control Center) leaves the on-screen
+    // keyboard first, without handing focus back to the field being left.
+    closeKeyboardForHome();
     setControlCenterOpen(false);
     setDiagnostics(false);
     navigation.focusApp(0);
@@ -149,7 +168,7 @@ export default function App() {
       // native restore result in velora-return-home.
       showToast("VELORA nie mogła wrócić do ekranu głównego. Użyj skrótu powrotu albo Alt+Tab.");
     });
-  }, [navigation.focusApp, showToast]);
+  }, [closeKeyboardForHome, navigation.focusApp, showToast]);
   const openDiagnosticsFromCenter = useCallback(() => {
     setControlCenterOpen(false);
     setDiagnostics(true);
@@ -162,8 +181,14 @@ export default function App() {
   useFocusRestoreOnClose(controlCenterOpen, restoreSelectedFocus, !diagnostics);
   const closeDiagnostics = useCallback(() => setDiagnostics(false), []);
   const moveControllerFocus = useCallback((delta: -1 | 1) => {
+    if (keyboardOpen()) {
+      moveKeyboard(delta < 0 ? "left" : "right");
+      return;
+    }
     const dialog = document.querySelector("dialog[open]");
     if (!dialog) {
+      // Inside the Background Mode player Left/Right walk its buttons; elsewhere they move along the dock.
+      if (stepMiniPlayer(delta, document.activeElement)) return;
       navigation.moveApp(delta);
       return;
     }
@@ -173,19 +198,49 @@ export default function App() {
       ? (delta > 0 ? 0 : controls.length - 1)
       : (index + delta + controls.length) % controls.length;
     controls[nextIndex]?.focus({ preventScroll: true });
-  }, [navigation.moveApp]);
+  }, [keyboardOpen, moveKeyboard, navigation.moveApp]);
+  // Up/Down. Keyboard: moves between rows. Dialog: steps through the controls like
+  // Left/Right. Home screen: moves between the zones (Control Center, Background Mode
+  // player, dock, Diagnostics), so every visible control can be reached with the pad.
+  const moveControllerVertical = useCallback((delta: -1 | 1) => {
+    if (keyboardOpen()) {
+      moveKeyboard(delta < 0 ? "up" : "down");
+      return;
+    }
+    if (document.querySelector("dialog[open]")) {
+      moveControllerFocus(delta);
+      return;
+    }
+    // Home screen: Control Center, Background Mode player, dock, Diagnostics (top to bottom).
+    const current = homeZoneOf(document.activeElement);
+    const target = nextHomeZone(current, availableHomeZones(), delta);
+    if (target === current) return;
+    if (target === DOCK_ZONE) navigation.focusApp(activeServiceRef.current);
+    else homeZoneTarget(target)?.focus({ preventScroll: true });
+  }, [keyboardOpen, moveControllerFocus, moveKeyboard, navigation.focusApp]);
   const confirmControllerFocus = useCallback(() => {
-    const dialog = document.querySelector("dialog[open]");
+    if (keyboardOpen()) {
+      activateKeyboard();
+      return;
+    }
     const active = document.activeElement;
+    // Confirm on one of VELORA's own text fields opens the on-screen keyboard.
+    if (isKeyboardTextTarget(active) && openKeyboard(active)) return;
+    const dialog = document.querySelector("dialog[open]");
     if (dialog && active instanceof HTMLElement && dialog.contains(active)) {
       active.click();
       return;
     }
     activateSelected();
-  }, [activateSelected]);
+  }, [activateKeyboard, activateSelected, keyboardOpen, openKeyboard]);
   // The paired remote must not reach administrative dialog controls through a
   // generic active.click(). Dialog actions require an explicit allow marker.
   const confirmRemoteFocus = useCallback(() => {
+    if (keyboardOpen()) {
+      // The paired remote does not type into VELORA's fields; it can still go Back.
+      showToast("Klawiatura VELORA obsługuje się padem albo klawiaturą komputera.");
+      return;
+    }
     const dialog = document.querySelector("dialog[open]");
     const active = document.activeElement;
     if (dialog && active instanceof HTMLElement && dialog.contains(active)) {
@@ -197,8 +252,12 @@ export default function App() {
       return;
     }
     activateSelected();
-  }, [activateSelected, showToast]);
+  }, [activateSelected, keyboardOpen, showToast]);
   const backControllerFocus = useCallback(() => {
+    if (keyboardOpen()) {
+      cancelKeyboard();
+      return;
+    }
     if (controlCenterOpen) {
       closeControlCenter();
       return;
@@ -208,7 +267,7 @@ export default function App() {
       return;
     }
     navigation.focusApp(0);
-  }, [closeControlCenter, closeDiagnostics, controlCenterOpen, diagnostics, navigation.focusApp]);
+  }, [cancelKeyboard, closeControlCenter, closeDiagnostics, controlCenterOpen, diagnostics, keyboardOpen, navigation.focusApp]);
   const updateControllerProfile = useCallback((profile: ControllerProfile) => {
     setControllerProfile(profile);
     try {
@@ -292,12 +351,23 @@ export default function App() {
   );
   useGamepad({
     move: moveControllerFocus,
+    moveY: moveControllerVertical,
     confirm: confirmControllerFocus,
     back: backControllerFocus,
-    options: toggleControlCenter,
+    // Options is ignored while the keyboard is open, so no panel opens underneath it.
+    options: () => {
+      if (!keyboardOpen()) toggleControlCenter();
+    },
+    // Pad Home (PS + Options chord) ends exactly where the remote Home command ends.
+    home: returnToNexus,
   }, !ambient.active && !ambient.controllerSuppressed, controllerProfile, shouldSuspendControllerInput);
   useEffect(() => {
     const recover = (event: KeyboardEvent) => {
+      // While the on-screen keyboard is open it owns the keys, including Escape and Backspace.
+      if (keyboardOpen()) {
+        keyboardKeyDown(event);
+        return;
+      }
       const openDialog = document.querySelector("dialog[open]");
       if (event.key === "Escape" && openDialog) {
         event.preventDefault();
@@ -335,12 +405,13 @@ export default function App() {
       if (event.key === "F3") { setDiagnostics(false); setControlCenterOpen(true); }
     };
     const restore = () => {
-      if (!diagnostics) navigation.focusApp(activeServiceRef.current);
+      // Returning to the window must not pull focus out of an open keyboard.
+      if (!diagnostics && !keyboardOpen()) navigation.focusApp(activeServiceRef.current);
     };
     window.addEventListener("keydown", recover);
     window.addEventListener("focus", restore);
     return () => { window.removeEventListener("keydown", recover); window.removeEventListener("focus", restore); };
-  }, [closeControlCenter, closeDiagnostics, controlCenterOpen, diagnostics, moveControllerFocus, navigation.focusApp, showMenu, showToast]);
+  }, [closeControlCenter, closeDiagnostics, controlCenterOpen, diagnostics, keyboardKeyDown, keyboardOpen, moveControllerFocus, navigation.focusApp, showMenu, showToast]);
 
   useEffect(() => {
     let active = true;
@@ -348,6 +419,13 @@ export default function App() {
     void listenForRemoteCommand((command) => {
       if (!active) return;
       dispatchRemoteCommand(command, {
+        // Up/Down take the same vertical path as the pad (keyboard rows, dialog steps,
+        // home zones) instead of falling back to Left/Right while a dialog is open.
+        navigateDirection: (direction) => {
+          if (direction === "up") moveControllerVertical(-1);
+          else if (direction === "down") moveControllerVertical(1);
+          else moveControllerFocus(direction === "left" ? -1 : 1);
+        },
         navigate: moveControllerFocus,
         select: confirmControllerFocus,
         selectRemote: confirmRemoteFocus,
@@ -366,7 +444,7 @@ export default function App() {
       active = false;
       unlisten?.();
     };
-  }, [backControllerFocus, changeCinemaProfile, confirmControllerFocus, confirmRemoteFocus, handleSystemVolume, moveControllerFocus, returnToNexus, showToast]);
+  }, [backControllerFocus, changeCinemaProfile, confirmControllerFocus, confirmRemoteFocus, handleSystemVolume, moveControllerFocus, moveControllerVertical, returnToNexus, showToast]);
 
   useEffect(() => {
     let active = true;
@@ -502,6 +580,7 @@ export default function App() {
         onOpenAppleMusic={openAppleMusic}
         onClose={closeDiagnostics}
       />}
+      <VirtualKeyboard controller={keyboard} />
       <Toast message={message} />
     </main>
   );
