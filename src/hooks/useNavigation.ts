@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { registerAureaGrid, resolveGridIndex, unregisterAureaGrid, type AureaGrid } from "../services/aureaNavigation";
+import { intentFromKeyboard } from "../services/navIntent";
 
 export function isTextEntryTarget(target: EventTarget | null): target is HTMLElement {
   return target instanceof HTMLElement && (
@@ -59,10 +60,23 @@ export function useNavigation(
       if (document.querySelector("dialog[open]")) return;
       const target = event.target;
       if (isTextEntryTarget(target)) return;
-      // Leave OS and browser shortcuts (Ctrl+X, Alt+Left, Meta+…) to the platform.
-      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      // Key-to-intent rules (modifiers, auto-repeat) live in navIntent.ts.
+      const intent = intentFromKeyboard(event);
+      if (!intent) return;
 
-      if (event.key === "ArrowUp") {
+      if (intent.kind === "select") {
+        event.preventDefault();
+        activateRef.current();
+        return;
+      }
+      if (intent.kind === "menu") {
+        menuRef.current();
+        return;
+      }
+      if (intent.kind !== "move") return;
+
+      const direction = intent.direction;
+      if (direction === "up") {
         if (columns !== undefined) {
           event.preventDefault();
           focusApp(resolveGridIndex(activeIndexRef.current, "up", columns, count));
@@ -73,26 +87,19 @@ export function useNavigation(
             quickSettings.focus({ preventScroll: true });
           }
         }
-      } else if (event.key === "ArrowDown" && (
-        columns !== undefined ||
-        (target instanceof HTMLElement && target.closest(".quick-settings-trigger"))
-      )) {
-        event.preventDefault();
-        focusApp(columns !== undefined
-          ? resolveGridIndex(activeIndexRef.current, "down", columns, count)
-          : activeIndexRef.current);
-      } else if (event.key === "ArrowRight") {
+      } else if (direction === "down") {
+        if (columns !== undefined || (target instanceof HTMLElement && target.closest(".quick-settings-trigger"))) {
+          event.preventDefault();
+          focusApp(columns !== undefined
+            ? resolveGridIndex(activeIndexRef.current, "down", columns, count)
+            : activeIndexRef.current);
+        }
+      } else if (direction === "right") {
         event.preventDefault();
         focusApp(activeIndexRef.current + 1);
-      } else if (event.key === "ArrowLeft") {
+      } else {
         event.preventDefault();
         focusApp(activeIndexRef.current - 1);
-      } else if (event.key.toLowerCase() === "x") {
-        // One activation per physical press: holding the key must not launch repeatedly.
-        event.preventDefault();
-        if (!event.repeat) activateRef.current();
-      } else if (event.key === "F2") {
-        if (!event.repeat) menuRef.current();
       }
     };
 
