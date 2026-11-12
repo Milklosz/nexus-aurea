@@ -7,7 +7,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::process_table::{self, ProcessIdentity, ProcessTable};
 use crate::session_orchestrator::{self, SessionContext, SessionId, TransitionCause};
-use crate::window_broker::{self, ForegroundWindow, RestoreReason, RestoreResult, TrackedWindow};
+use crate::window_broker::{self, ForegroundWindow, RestoreResult, TrackedWindow};
 
 pub(crate) const LAUNCH_EVENT: &str = "velora-launch-event";
 pub(crate) const LAUNCH_ERROR_EVENT: &str = "velora-launch-error";
@@ -250,6 +250,10 @@ struct TrackedLaunch {
     watch: LaunchWatch,
     absent_since_ms: Option<u64>,
     window_absent_since_ms: Option<u64>,
+    /// Creation time of every process this launch owned while it was observed.
+    /// Handed to the focus restore when the launch ends, so only the ended
+    /// session's own processes (and never a recycled PID) can receive focus.
+    known_identities: HashMap<u32, u64>,
 }
 
 #[derive(Default)]
@@ -504,6 +508,29 @@ fn advance(
             .is_some_and(|process_id| window_pids.contains(&process_id)),
     };
 
+    // Remember the creation time of each process this launch owns while it is
+    // still observed. The focus grant for an ended launch is keyed on these
+    // identities, so a later PID reuse cannot inherit it. Matches only count as
+    // owned when the watch is scoped to the root's descendants: an image-name
+    // match across the whole machine could name the user's unrelated windows.
+    // The root is always owned, because this launch started or attached to it.
+    let mut owned_now: Vec<u32> = if tracked.watch.descendants_only {
+        window_pids.iter().copied().collect()
+    } else {
+        Vec::new()
+    };
+    if !tracked.watch.root_reused {
+        owned_now.extend(tracked.watch.root_process_id);
+    }
+    for process_id in owned_now {
+        if let Some(identity) = observation.identities.get(&process_id) {
+            tracked
+                .known_identities
+                .entry(process_id)
+                .or_insert(identity.created_at_100ns);
+        }
+    }
+
     let mut process_ids = window_pids.into_iter().collect::<Vec<_>>();
     process_ids.sort_unstable();
     tracked.session.process_ids = process_ids;
@@ -754,6 +781,7 @@ impl LaunchRegistry {
                 watch,
                 absent_since_ms: None,
                 window_absent_since_ms: None,
+                known_identities: HashMap::new(),
             });
             state.retain_recent();
             state.last_error = None;
@@ -822,7 +850,7 @@ impl LaunchRegistry {
                 let previous_process_ids = tracked.session.process_ids.clone();
                 if let Some(event) = advance(tracked, &observation) {
                     if event.session.phase == LaunchPhase::Ended {
-                        finished.push(event.session.clone());
+                        finished.push((event.session.clone(), tracked.known_identities.clone()));
                     } else if event.session.phase == LaunchPhase::Failed {
                         failed.push(event.session.id.clone());
                     }
@@ -874,10 +902,10 @@ impl LaunchRegistry {
             session_orchestrator::finish_launch_session_inner(app, &launch_id);
         }
 
-        for session in finished {
+        for (session, owners) in finished {
             let owns_session = session_orchestrator::launch_owns_session(app, &session.id);
             let restore = if owns_session {
-                Some(window_broker::restore_velora(app, RestoreReason::SessionEnded))
+                Some(window_broker::restore_velora_after_session_end(app, &owners))
             } else {
                 None
             };
@@ -1223,6 +1251,7 @@ mod tests {
             watch: watch(),
             absent_since_ms: None,
             window_absent_since_ms: None,
+            known_identities: HashMap::new(),
         }
     }
 
@@ -1457,6 +1486,7 @@ mod tests {
             watch,
             absent_since_ms: None,
             window_absent_since_ms: None,
+            known_identities: HashMap::new(),
         };
         let event = advance(
             &mut session,
@@ -1535,6 +1565,7 @@ mod tests {
             watch,
             absent_since_ms: None,
             window_absent_since_ms: None,
+            known_identities: HashMap::new(),
         };
         let observation = observation(
             vec![(300, 1, "msedge.exe"), (301, 300, "msedge.exe")],
@@ -1590,6 +1621,7 @@ mod tests {
             watch,
             absent_since_ms: None,
             window_absent_since_ms: None,
+            known_identities: HashMap::new(),
         };
         // The browser process still exists, but its visible app window is gone.
         assert!(advance(
@@ -1650,6 +1682,7 @@ mod tests {
             watch,
             absent_since_ms: None,
             window_absent_since_ms: None,
+            known_identities: HashMap::new(),
         };
         assert!(advance(
             &mut session,
@@ -1737,6 +1770,7 @@ mod tests {
             watch,
             absent_since_ms: None,
             window_absent_since_ms: None,
+            known_identities: HashMap::new(),
         };
         advance(
             &mut session,
@@ -1863,6 +1897,7 @@ mod tests {
             watch,
             absent_since_ms: None,
             window_absent_since_ms: None,
+            known_identities: HashMap::new(),
         };
         let first_identity = ProcessIdentity {
             process_id: 100,
@@ -2010,5 +2045,205 @@ mod tests {
         apply_baseline(&mut watch, &table, &[]);
         assert!(watch.baseline_process_ids.is_empty());
         assert!(watch.baseline_window_ids.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod session_owner_tests {
+    use super::{advance, LaunchKind, LaunchPhase, LaunchSession, LaunchWatch, Observation, TrackedLaunch, EXIT_GRACE_MS};
+    use crate::process_table::{ProcessIdentity, ProcessTable};
+    use crate::window_broker::ForegroundWindow;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    const STEAM_PID: u32 = 900;
+    const GAME_PID: u32 = 901;
+
+    /// A Steam game watch: the Steam client is the root, the game is a
+    /// descendant, and the root does not count as running by itself.
+    fn steam_game_launch() -> TrackedLaunch {
+        TrackedLaunch {
+            session: LaunchSession {
+                id: "game-1".into(),
+                kind: LaunchKind::Game,
+                display_name: "Test game".into(),
+                app_id: Some("123".into()),
+                phase: LaunchPhase::Requested,
+                process_ids: Vec::new(),
+                foreground: false,
+                window_id: None,
+                started_at_ms: 1_000,
+                updated_at_ms: 1_000,
+                error: None,
+                restore: None,
+                session_revision: None,
+                pid_reuse_detected: false,
+                attention: None,
+            },
+            watch: LaunchWatch::new(
+                LaunchKind::Game,
+                "Test game",
+                Some("123".into()),
+                Vec::new(),
+                Some(STEAM_PID),
+                true,
+                false,
+                Vec::new(),
+                false,
+                None,
+            ),
+            absent_since_ms: None,
+            window_absent_since_ms: None,
+            known_identities: HashMap::new(),
+        }
+    }
+
+    fn observe(
+        processes: Vec<(u32, u32, &str)>,
+        identities: &[(u32, u64)],
+        at_ms: u64,
+    ) -> Observation {
+        Observation {
+            table: Arc::new(ProcessTable::from_entries(processes)),
+            windows: Vec::new(),
+            foreground: ForegroundWindow::default(),
+            identities: identities
+                .iter()
+                .map(|(process_id, created_at_100ns)| {
+                    (
+                        *process_id,
+                        ProcessIdentity {
+                            process_id: *process_id,
+                            created_at_100ns: *created_at_100ns,
+                        },
+                    )
+                })
+                .collect(),
+            at_ms,
+        }
+    }
+
+    #[test]
+    fn an_ended_game_launch_keeps_the_identities_of_its_client_and_its_game() {
+        let mut launch = steam_game_launch();
+        advance(
+            &mut launch,
+            &observe(
+                vec![(STEAM_PID, 1, "steam.exe"), (GAME_PID, STEAM_PID, "Game.exe")],
+                &[(STEAM_PID, 7_000), (GAME_PID, 8_000)],
+                2_000,
+            ),
+        );
+        assert_eq!(launch.session.phase, LaunchPhase::ProcessStarted);
+
+        // The game exits; the Steam client stays in front. The launch ends only
+        // after the exit grace window, and it still remembers both identities.
+        advance(
+            &mut launch,
+            &observe(vec![(STEAM_PID, 1, "steam.exe")], &[(STEAM_PID, 7_000)], 3_000),
+        );
+        advance(
+            &mut launch,
+            &observe(
+                vec![(STEAM_PID, 1, "steam.exe")],
+                &[(STEAM_PID, 7_000)],
+                3_000 + EXIT_GRACE_MS,
+            ),
+        );
+        assert_eq!(launch.session.phase, LaunchPhase::Ended);
+        assert_eq!(launch.known_identities.get(&STEAM_PID), Some(&7_000));
+        assert_eq!(launch.known_identities.get(&GAME_PID), Some(&8_000));
+    }
+
+    #[test]
+    fn a_recycled_root_pid_is_never_recorded_as_an_owner_of_the_ended_launch() {
+        let mut launch = steam_game_launch();
+        advance(
+            &mut launch,
+            &observe(
+                vec![(STEAM_PID, 1, "steam.exe"), (GAME_PID, STEAM_PID, "Game.exe")],
+                &[(STEAM_PID, 7_000), (GAME_PID, 8_000)],
+                2_000,
+            ),
+        );
+        // PID 900 now belongs to an unrelated process with a new creation time.
+        advance(
+            &mut launch,
+            &observe(
+                vec![(STEAM_PID, 1, "chrome.exe"), (GAME_PID, STEAM_PID, "Game.exe")],
+                &[(STEAM_PID, 9_999), (GAME_PID, 8_000)],
+                3_000,
+            ),
+        );
+        assert!(launch.watch.root_reused, "the reused root must be detected");
+        assert_eq!(
+            launch.known_identities.get(&STEAM_PID),
+            Some(&7_000),
+            "only the original root identity is ever handed to the focus policy"
+        );
+        assert!(!launch.known_identities.values().any(|created| *created == 9_999));
+    }
+
+    #[test]
+    fn an_image_name_match_across_the_machine_is_never_recorded_as_owned() {
+        // A managed Chrome watch matches every chrome.exe on the machine. The
+        // user's own browser windows must never become owners of the launch.
+        let mut launch = TrackedLaunch {
+            watch: LaunchWatch::new(
+                LaunchKind::ManagedApp,
+                "Chrome",
+                Some("chrome".into()),
+                vec!["chrome.exe".into()],
+                None,
+                false,
+                false,
+                Vec::new(),
+                true,
+                None,
+            ),
+            ..steam_game_launch()
+        };
+        advance(
+            &mut launch,
+            &observe(
+                vec![(5_000, 1, "chrome.exe"), (5_001, 5_000, "chrome.exe")],
+                &[(5_000, 1_234), (5_001, 1_235)],
+                2_000,
+            ),
+        );
+        assert!(
+            launch.known_identities.is_empty(),
+            "foreign browser processes must never be recorded"
+        );
+    }
+
+    #[test]
+    fn a_root_the_launch_attached_to_is_owned_even_without_descendant_scope() {
+        // Attaching to an already-running Playnite owns that process as the root.
+        let mut launch = TrackedLaunch {
+            watch: LaunchWatch::new(
+                LaunchKind::Playnite,
+                "Playnite Fullscreen",
+                Some("playniteFullscreen".into()),
+                vec!["Playnite.FullscreenApp.exe".into()],
+                Some(700),
+                false,
+                true,
+                Vec::new(),
+                true,
+                None,
+            ),
+            ..steam_game_launch()
+        };
+        advance(
+            &mut launch,
+            &observe(
+                vec![(700, 1, "Playnite.FullscreenApp.exe")],
+                &[(700, 42)],
+                2_000,
+            ),
+        );
+        assert_eq!(launch.known_identities.get(&700), Some(&42));
+        assert_eq!(launch.known_identities.len(), 1);
     }
 }

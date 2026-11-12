@@ -11,6 +11,8 @@ use tauri::Emitter;
 #[cfg(target_os = "windows")]
 use crate::launch_registry::{self, LaunchKind, LaunchWatch};
 #[cfg(target_os = "windows")]
+use crate::window_broker;
+#[cfg(target_os = "windows")]
 use crate::process_table;
 #[cfg(target_os = "windows")]
 use crate::session_orchestrator::SessionId;
@@ -268,6 +270,15 @@ pub(crate) fn launch_managed_app_blocking(app: AppHandle, id: String) -> Result<
         } else {
             None
         };
+        // A single-instance client (Steam, Playnite) may hand the request to a
+        // process that is already running. Record it now, before the spawn. Other
+        // apps (browsers) are never granted a pre-existing user process.
+        let existing_process_id = match spec.id {
+            "steamBigPicture" | "playniteFullscreen" => {
+                launch_registry::find_process_id(spec.process_name)
+            }
+            _ => None,
+        };
         let mut command = Command::new(executable);
         match spec.id {
             "steamBigPicture" => { command.arg("steam://open/bigpicture"); }
@@ -277,6 +288,10 @@ pub(crate) fn launch_managed_app_blocking(app: AppHandle, id: String) -> Result<
         let child = command.spawn().map_err(|error| format!("Windows nie uruchomił aplikacji {}: {error}", spec.name))?;
         let child_id = child.id();
         drop(child);
+        // Hand the foreground to the spawned process and to an already-running
+        // client it may forward the request to. Only the foreground process can
+        // grant this, and VELORA is foreground because the user just launched it.
+        window_broker::grant_foreground_handoff(&[child_id, existing_process_id.unwrap_or(0)]);
         let watch = managed_app_watch(spec, child_id, steam_pid_before);
         if let Err(error) = launch_registry::track_launch(&app, watch) {
             let _ = app.emit("velora-launch-error", error);
@@ -399,6 +414,9 @@ fn launch_managed_game_blocking(app: AppHandle, id: String) -> Result<ManagedGam
             .map_err(|error| format!("Steam nie uruchomił gry {}: {error}", game.name))?;
         let child_id = child.id();
         drop(child);
+        // The Steam client that receives `-applaunch` owns the game window, so
+        // it needs the same hand-off as the short-lived steam.exe stub.
+        window_broker::grant_foreground_handoff(&[steam_process_id.unwrap_or(0), child_id]);
         if watch.root_process_id.is_none() {
             watch.root_process_id = Some(child_id);
         }

@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
 use crate::launch_registry::{self, LaunchKind, LaunchPhase, LaunchSession, LaunchWatch};
+#[cfg(target_os = "windows")]
+use crate::window_broker;
 use crate::session_orchestrator::SessionId;
 
 #[cfg(target_os = "windows")]
@@ -482,6 +484,10 @@ pub fn launch_edge_cinema(app: AppHandle, url: String) -> Result<EdgeCinemaRecei
                             .to_string(),
                     );
                 }
+                // VELORA is foreground because the user clicked this tile. Let
+                // the adopted Edge window come forward instead of staying behind
+                // the fullscreen launcher.
+                window_broker::grant_foreground_handoff(&[marker.process_id]);
                 let watch = edge_watch(Some(marker.process_id));
                 let launch = launch_registry::track_launch(&app, watch)?;
                 let _ = store_marker(&app, &launch.id, marker.process_id, &marker.url);
@@ -514,6 +520,10 @@ pub fn launch_edge_cinema(app: AppHandle, url: String) -> Result<EdgeCinemaRecei
         let child_id = child.id();
         drop(child);
         watch.root_process_id = Some(child_id);
+        // Explicit AllowSetForegroundWindow hand-off while VELORA still holds
+        // the foreground, so the browser window it creates is allowed to come
+        // forward. A no-op if VELORA is not foreground (reported, not forced).
+        window_broker::grant_foreground_handoff(&[child_id]);
 
         let launch = launch_registry::track_launch(&app, watch)?;
         // A marker failure must not fail an otherwise successful launch.

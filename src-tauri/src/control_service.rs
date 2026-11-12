@@ -70,6 +70,31 @@ pub(crate) fn input_isolation_warning(
     })
 }
 
+/// Appends a Steam checklist to the isolation warning while the Steam client
+/// runs. It stays a hint: Steam Input, not VELORA, decides whether the
+/// PlayStation button reaches VELORA or opens Steam.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn steam_input_hint(warning: String, steam_running: bool) -> String {
+    if !steam_running {
+        return warning;
+    }
+    format!(
+        "{warning} Steam działa: jeśli przycisk PS otwiera Steam, w Steam → Ustawienia → Kontroler wyłącz „Guide button focuses Steam” (nazwa w angielskim interfejsie; w innym języku może brzmieć inaczej)."
+    )
+}
+
+/// Windowed recovery for the emergency shortcut. The main window leaves
+/// fullscreen and regains its frame, so the taskbar and Alt+Tab work even when a
+/// managed application holds the foreground. Window-state changes do not need
+/// foreground rights, so this does not depend on the Windows focus policy.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn windowed_recovery(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_fullscreen(false);
+        let _ = window.set_decorations(true);
+    }
+}
+
 pub(crate) fn default_fallback_hotkey() -> FallbackHotkey {
     fallback_hotkey_preset("ctrlAltN").expect("default shortcut preset")
 }
@@ -804,6 +829,7 @@ mod windows {
                     }
                     EMERGENCY_HOTKEY_ID => {
                         enabled.store(false, Ordering::Release);
+                        super::windowed_recovery(&app);
                         let _ = app.emit("control-service-stopped", "keyboard-emergency");
                         break;
                     }
@@ -839,7 +865,13 @@ mod windows {
                                 gamepad_started_at
                                     .map(|started| started.elapsed().as_millis() as u64)
                                     .unwrap_or(0),
-                            );
+                            )
+                            .map(|warning| {
+                                // Only look for Steam while the warning is active.
+                                let steam_running =
+                                    crate::launch_registry::find_process_id("steam.exe").is_some();
+                                super::steam_input_hint(warning, steam_running)
+                            });
                         }
                         status.last_error = None;
                         write_status(&latest, status.clone());
@@ -1094,5 +1126,27 @@ mod tests {
         assert!(super::is_playstation_controller(0x054c, 0x01, 0x05));
         assert!(!super::is_playstation_controller(0x045e, 0x01, 0x05));
         assert!(!super::is_playstation_controller(0x054c, 0x01, 0x02));
+    }
+}
+
+#[cfg(test)]
+mod steam_input_tests {
+    use super::{input_isolation_warning, steam_input_hint, INPUT_ISOLATION_AFTER_MS};
+
+    #[test]
+    fn the_isolation_warning_is_unchanged_when_steam_is_not_running() {
+        let warning = input_isolation_warning(1, 0, INPUT_ISOLATION_AFTER_MS).unwrap();
+        assert_eq!(steam_input_hint(warning.clone(), false), warning);
+    }
+
+    #[test]
+    fn a_running_steam_client_adds_the_guide_button_checklist_without_a_root_cause() {
+        let warning = input_isolation_warning(1, 0, INPUT_ISOLATION_AFTER_MS).unwrap();
+        let hinted = steam_input_hint(warning.clone(), true);
+        assert!(hinted.starts_with(&warning), "the original warning stays first");
+        assert!(hinted.contains("Steam"));
+        assert!(hinted.contains("Guide button focuses Steam"));
+        // The hint is a checklist, not a verdict on which layer consumed the device.
+        assert!(!hinted.contains("na pewno"), "never claim certainty about the cause");
     }
 }
