@@ -783,11 +783,24 @@ mod windows {
                 }
                 match message.w_param as i32 {
                     RETURN_HOTKEY_ID if !observed_game_mode && return_key_registered => {
-                        let _ = crate::session_orchestrator::return_home(
-                            &app,
+                        // The local fallback is an explicit user gesture, so it
+                        // may request focus. Dispatch must never block the
+                        // message pump that also handles WM_INPUT and F12.
+                        let queued = crate::session_orchestrator::request_return_home(
+                            app.clone(),
                             crate::session_orchestrator::TransitionCause::ControlService,
+                            crate::session_orchestrator::HomeRequestSource::ExplicitUser,
+                            |_| {},
                         );
-                        let _ = app.emit("nexus-control-return", ());
+                        if queued {
+                            let _ = app.emit("nexus-control-return", ());
+                        } else {
+                            status.last_error = Some(
+                                "Kolejka powrotu do Home jest zajęta; spróbuj ponownie.".into(),
+                            );
+                            write_status(&latest, status.clone());
+                            publish_status(&app, &status);
+                        }
                     }
                     EMERGENCY_HOTKEY_ID => {
                         enabled.store(false, Ordering::Release);
@@ -1027,6 +1040,17 @@ mod tests {
             assert!(source.contains(&format!("pub async fn {command}")));
         }
         assert!(source.contains("tauri::async_runtime::spawn_blocking"));
+    }
+
+    #[test]
+    fn return_hotkey_is_dispatched_to_the_home_worker_not_run_inline() {
+        let source = include_str!("control_service.rs");
+        let forbidden = ["session_orchestrator::", "return_home("].concat();
+        assert!(
+            !source.contains(&forbidden),
+            "the message pump must never call the blocking Home transaction directly"
+        );
+        assert!(source.contains("request_return_home"));
     }
 
     #[test]

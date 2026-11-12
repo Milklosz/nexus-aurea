@@ -1,9 +1,11 @@
 # iPhone Remote 2.0 — reliability integration PLAN (partially applied)
 
-> **Status integracji (VELORA 1.0):** serwerowa idempotencja **WDROŻONA** jako
-> bounded in-memory receipt log: dokładny duplikat `(deviceId, sequence,
-> command)` otrzymuje 204 bez drugiego skutku, a ta sama sekwencja z inną
-> komendą jest odrzucana. Retry po stronie PWA pozostaje **WYŁĄCZONY**.
+> **Status integracji (VELORA 1.0 final hardening):** serwerowa idempotencja
+> **WDROŻONA** jako bounded in-memory receipt log + rezerwacja sekwencji przed
+> skutkiem, serializowana bramką komend. Dokładny duplikat otrzymuje 204 bez
+> drugiego skutku; duplikat równoległy czeka, a nie jest klasyfikowany jako
+> atak; przerwane/wykonane-nieudanie polecenie zwraca 409 (bez rozparowania)
+> albo wraca do puli retry. Retry po stronie PWA pozostaje **WYŁĄCZONY**.
 > Aktualny stan: [docs/velora-v1-integration.md](./velora-v1-integration.md).
 >
 > **Status pierwotny: PLAN + tested prototypes only.** This PR delivers pure, unit-tested
@@ -15,21 +17,21 @@ events table) and `src/contracts/events.ts` (`VELORA_EVENTS`,
 `RemoteCommandEnvelope`, `RemoteCommandAckPayload`, `RemoteState`).
 
 ## PREREQUISITE (hard blocker — BEFORE any client retry)
-`authenticate_command` in `src-tauri/src/remote_access.rs` persists
-`device.last_sequence = sequence; save_vault(&vault)` **BEFORE**
-`app.emit("nexus-remote-command", ...)`. A command whose `emit()`/HTTP response
-is lost has therefore **already burned its sequence number**. Consequences:
+The final hardening changed the server order deliberately: the sequence is
+still reserved **before** the side effect (so two parallel requests cannot
+execute the same signed command), but the whole reservation + execution +
+receipt transaction is serialized by `command_gate`. An exact duplicate waits
+for the first result and then receives 204 from the receipt, without a second
+side effect. A failed execution rolls the reservation back (retry allowed); an
+interrupted attempt without a receipt returns 409 Ambiguous, which keeps the
+iPhone paired instead of triggering the PWA's 401 unpair path. HTTP response
+loss remains safe for an exact retry.
 
-- Retrying with a **new** sequence = a genuinely different command → double
-  action (e.g. volume up applied twice).
-- Retrying with the **same** `(sequence, signature)` = rejected by
-  `sequence_is_fresh` as a replay.
-
-So **blind retry / auto-replay on reconnect is UNSAFE**. Client retry becomes
-admissible **only after** a server-side idempotency store keyed
-`(deviceId, sequence)` returns the cached result for a repeated command.
-Today `shouldReplayOnReconnect()` returns `false` for every state and
-`RemoteCommandQueue` has no reconnect hook — by design.
+**Blind auto-replay on reconnect is still UNSAFE** because a client retry that
+increments the sequence is a genuinely different command. `shouldReplayOnReconnect()`
+returns `false` for every state and `RemoteCommandQueue` has no reconnect hook —
+by design. Client retry remains out of scope until an ack-aware transport is
+implemented.
 
 ## Dependency graph
 

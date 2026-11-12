@@ -122,7 +122,7 @@ export function ControlServicePanel() {
     }
   };
 
-  return <section className="control-service" aria-label="VELORA Control Service">
+  return <section className="control-service" aria-label="VELORA Control Service" data-remote-admin="">
     <h3>VELORA Control Service · prototyp Windows</h3>
     {!status.windows
       ? <p>Ta funkcja wymaga natywnej aplikacji VELORA w Windows.</p>

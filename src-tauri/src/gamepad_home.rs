@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
 #[cfg(target_os = "windows")]
-use crate::session_orchestrator::{self, TransitionCause};
+use crate::session_orchestrator::{self, HomeRequestSource, TransitionCause};
 
 pub(crate) const GAMEPAD_HOME_EVENT: &str = "velora-gamepad-home";
 pub(crate) const WM_INPUT_MESSAGE: u32 = 0x00ff;
@@ -705,7 +705,7 @@ pub(crate) struct GamepadHomeRuntime {
     device_paths: HashMap<usize, Option<String>>,
     last_combo_at_ms: Option<u64>,
     last_chord: Option<ChordDiagnostic>,
-    last_error: Option<String>,
+    last_error: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 #[cfg(target_os = "windows")]
@@ -723,7 +723,7 @@ impl GamepadHomeRuntime {
             device_paths: HashMap::new(),
             last_combo_at_ms: None,
             last_chord: None,
-            last_error: None,
+            last_error: std::sync::Arc::new(std::sync::Mutex::new(None)),
         })
     }
 
@@ -793,14 +793,47 @@ impl GamepadHomeRuntime {
                 self.last_combo_at_ms = Some(at_ms);
                 self.bookkeeping.note_chord(device, at_ms);
                 triggered = true;
-                let result = session_orchestrator::return_home(app, TransitionCause::GamepadHome);
-                self.last_error = result.as_ref().err().map(|error| error.message.clone());
-                let event = GamepadHomeEvent {
-                    at_ms,
-                    status: self.status(true),
-                    restore: result.ok(),
-                };
-                let _ = app.emit(GAMEPAD_HOME_EVENT, event);
+                let status = self.status(true);
+                let app_for_worker = app.clone();
+                let error_slot = std::sync::Arc::clone(&self.last_error);
+                *error_slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+                let queued = session_orchestrator::request_return_home(
+                    app_for_worker.clone(),
+                    TransitionCause::GamepadHome,
+                    HomeRequestSource::Device,
+                    move |result| {
+                        let mut status = status;
+                        match &result {
+                            Ok(_) => {
+                                *error_slot
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+                            }
+                            Err(error) => {
+                                status.last_error = Some(error.message.clone());
+                                *error_slot
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                                    Some(error.message.clone());
+                            }
+                        }
+                        let event = GamepadHomeEvent {
+                            at_ms,
+                            status,
+                            restore: result.ok(),
+                        };
+                        let _ = app_for_worker.emit(GAMEPAD_HOME_EVENT, event);
+                    },
+                );
+                if !queued {
+                    *self
+                        .last_error
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                        Some("Kolejka powrotu do Home jest zajęta; spróbuj ponownie.".into());
+                }
             }
         }
         triggered
@@ -830,7 +863,11 @@ impl GamepadHomeRuntime {
             running,
             device_count: devices.len(),
             last_combo_at_ms: self.last_combo_at_ms,
-            last_error: self.last_error.clone(),
+            last_error: self
+                .last_error
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
             fallback: Some(
                 "Gdy DualSense nie jest widoczny lub Windows odmówi fokusu, użyj skonfigurowanego skrótu powrotu."
                     .into(),
@@ -1920,5 +1957,17 @@ mod tests {
         assert!(!serialized.contains(r"\\?\"));
         assert!(!serialized.contains("VID_054C"));
         assert!(!serialized.contains("PID_0DF2"));
+    }
+
+    #[test]
+    fn dualsense_home_is_dispatched_and_never_blocks_the_raw_input_pump() {
+        let source = include_str!("gamepad_home.rs");
+        let forbidden = ["session_orchestrator::", "return_home("].concat();
+        assert!(
+            !source.contains(&forbidden),
+            "WM_INPUT handling must not run the blocking Home transaction inline"
+        );
+        assert!(source.contains("request_return_home"));
+        assert!(source.contains("HomeRequestSource::Device"));
     }
 }

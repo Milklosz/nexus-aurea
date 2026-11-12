@@ -23,6 +23,7 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using Playnite.SDK;
+using Playnite.SDK.Events;
 using Playnite.SDK.Models;
 using Playnite.SDK.Plugins;
 
@@ -65,7 +66,7 @@ namespace VeloraLibraryExporter
         }
 
         // ---- Best-effort export on startup ----------------------------------
-        public override void OnApplicationStarted(OnApplicationStartedArgs args)
+        public override void OnApplicationStarted(OnApplicationStartedEventArgs args)
         {
             try
             {

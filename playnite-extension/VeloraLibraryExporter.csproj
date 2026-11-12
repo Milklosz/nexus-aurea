@@ -48,19 +48,25 @@
       ONLY the official Playnite SDK is referenced. We deliberately DO NOT add
       any non-SDK Playnite assembly reference (Playnite, Playnite.Common, ...).
 
-      IMPORTANT — pin / confirm on Windows: the exact PlayniteSDK package version
-      MUST match the Playnite 10/11 installation you target. "6.0.0" below is a
-      PLACEHOLDER; verify the version shipped with / used by your Playnite (or on
-      nuget.org) and PIN it before building on Windows.
+      Pinned for the Playnite 10 (net462) target: PlayniteSDK 6.18.0 is the
+      latest published 6.x package and targets .NET Framework 4.6.2. Playnite
+      documents that the 10.x release line runs 6.* extensions. Playnite 11
+      moved to .NET 10 / SDK 11, so that runtime requires a separate net10.0
+      build and is not covered by this project.
 
       ExcludeAssets=runtime: Playnite provides Playnite.SDK.dll itself at runtime,
       so we must NOT copy a private build of it into the extension output folder
       (that would cause assembly/version conflicts when Playnite loads the DLL).
       The compile-time reference is still consumed.
     -->
-    <PackageReference Include="PlayniteSDK" Version="6.0.0">
+    <PackageReference Include="PlayniteSDK" Version="6.18.0">
       <ExcludeAssets>runtime</ExcludeAssets>
     </PackageReference>
+
+    <!-- Reference assemblies keep the net462 build reproducible on every
+         agent, including Windows images without the 4.6.2 developer pack. -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3"
+                      PrivateAssets="All" />
   </ItemGroup>
 
   <!-- extension.yaml, README.md and ManifestExample.json are docs/content only;

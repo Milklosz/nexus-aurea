@@ -1,17 +1,11 @@
-//! VELORA iPhone Remote 2.0 — MODULE C reliability PRIMITIVES (PROTOTYPE).
+//! VELORA iPhone Remote 2.0 — reliability primitives.
 //!
-//! This module is a set of PURE, self-contained reliability primitives plus
-//! their unit tests. It is NOT wired into `remote_access.rs` / the HTTPS server
-//! and does NOT change the existing protocol or security code. It deliberately
-//! uses ONLY `std` (no new crates, no `serde`, no Windows/tauri APIs) so the
-//! `#[cfg(test)]` tests compile and run on macOS as well as Windows.
-//!
-//! Integration (queue / ack / idempotency / reconnect into the PWA and the
-//! axum server) is a PLAN only — see docs/iphone-remote-reliability-plan.md.
-//!
-//! This module registers no Tauri commands and no invoke handlers.
-//! `sequence_is_fresh` below is a MIRROR of the real server predicate; the real
-//! one in `remote_access.rs` is left untouched.
+//! Pure, self-contained reliability primitives plus their unit tests. The
+//! sequence/receipt classifier is used by the real HTTPS server in
+//! `remote_access.rs`; the reconnect/queue helpers remain a plan for the PWA
+//! (see docs/iphone-remote-reliability-plan.md). This module deliberately uses
+//! only `std` (no new crates, no `serde`, no Windows/tauri APIs) so its tests
+//! compile and run on macOS as well as Windows.
 
 use std::collections::VecDeque;
 
@@ -294,6 +288,11 @@ pub enum ReplayDecision {
     /// Exact duplicate of an already executed command: acknowledge without a
     /// second side effect.
     AcknowledgeReplay,
+    /// The sequence equals `last_sequence` but no completed receipt exists.
+    /// The previous attempt may have been interrupted. Do not execute and do
+    /// not treat it as an authentication failure; the client keeps its pairing
+    /// and can send a fresh sequence.
+    Ambiguous,
     /// Older sequence, or the same sequence for a different command: reject.
     RejectReplay,
 }
@@ -315,7 +314,9 @@ pub fn classify_replay(
         {
             ReplayDecision::AcknowledgeReplay
         }
-        _ => ReplayDecision::RejectReplay,
+        Some(_) => ReplayDecision::RejectReplay,
+        None if observed_sequence == last_sequence => ReplayDecision::Ambiguous,
+        None => ReplayDecision::RejectReplay,
     }
 }
 
@@ -551,11 +552,83 @@ mod tests {
         );
         assert_eq!(
             classify_replay(7, None, 7, "home"),
-            ReplayDecision::RejectReplay,
-            "no receipt means a consumed sequence cannot be re-executed"
+            ReplayDecision::Ambiguous,
+            "a reserved sequence without a completed receipt is interrupted work, not proof of replay"
+        );
+        assert_eq!(
+            classify_replay(7, None, 6, "home"),
+            ReplayDecision::RejectReplay
         );
         assert_eq!(
             classify_replay(7, Some(&receipt), 6, "home"),
+            ReplayDecision::RejectReplay
+        );
+    }
+
+    #[test]
+    fn interrupted_or_failed_execution_can_retry_or_move_on_without_unpairing() {
+        // Reservation advanced last_sequence before the side effect. If the
+        // side effect failed and the reservation was rolled back, the same
+        // signed command is a fresh Execute again.
+        assert_eq!(
+            classify_replay(7, None, 7, "home"),
+            ReplayDecision::Ambiguous,
+            "even without rollback, the client must not be treated as unpaired"
+        );
+        assert_eq!(
+            classify_replay(6, None, 7, "home"),
+            ReplayDecision::Execute,
+            "rollback to the previous sequence allows a clean retry"
+        );
+        // A lost response after a successful execution is acknowledged without
+        // a second side effect.
+        let mut log = CommandReceiptLog::default();
+        let receipt = log.record("device-a", 8, "home");
+        assert_eq!(
+            classify_replay(8, Some(&receipt), 8, "home"),
+            ReplayDecision::AcknowledgeReplay
+        );
+    }
+
+    #[test]
+    fn parallel_duplicate_lost_response_retry_and_restart_are_safe() {
+        // Simulates the real server transaction: reserve (last=8), execute,
+        // then record a receipt. The per-device gate serializes requests.
+        let mut ledger = CommandReceiptLog::default();
+        let last_sequence = 8;
+        // A parallel duplicate that slips through before the receipt is
+        // recorded is "Ambiguous", never a replay rejection (which would make
+        // the PWA drop its pairing). It also never executes again.
+        assert_eq!(
+            classify_replay(last_sequence, ledger.lookup("device-a", 8), 8, "home"),
+            ReplayDecision::Ambiguous
+        );
+        // The first attempt completes and records the receipt.
+        let receipt = ledger.record("device-a", 8, "home");
+        // Lost response -> the client retries the exact signed command.
+        assert_eq!(
+            classify_replay(last_sequence, Some(&receipt), 8, "home"),
+            ReplayDecision::AcknowledgeReplay
+        );
+        // A different command cannot reuse the sequence.
+        assert_eq!(
+            classify_replay(last_sequence, Some(&receipt), 8, "volume-up"),
+            ReplayDecision::RejectReplay
+        );
+        // Restart: receipts are in-memory only, but last_sequence survives.
+        // The same old request becomes Ambiguous (409), not 401, so the phone
+        // keeps its pairing and can continue with a fresh sequence.
+        assert_eq!(
+            classify_replay(last_sequence, None, 8, "home"),
+            ReplayDecision::Ambiguous
+        );
+        assert_eq!(
+            classify_replay(last_sequence, None, 9, "home"),
+            ReplayDecision::Execute
+        );
+        // A truly stale sequence with no receipt is still rejected.
+        assert_eq!(
+            classify_replay(last_sequence, None, 7, "home"),
             ReplayDecision::RejectReplay
         );
     }

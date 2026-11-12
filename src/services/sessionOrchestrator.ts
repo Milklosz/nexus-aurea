@@ -44,7 +44,8 @@ export type SessionErrorCode =
   | "staleRevision"
   | "expiredCommand"
   | "invalidCommand"
-  | "cancelled";
+  | "cancelled"
+  | "supersededHome";
 
 export type SessionError = {
   code: SessionErrorCode;
@@ -74,7 +75,7 @@ export type RestoreResult = {
     | "blockedByWindows"
     | "windowUnavailable"
     | "unsupportedPlatform";
-  reason: "userRequest" | "sessionEnded" | "manual";
+  reason: "userRequest" | "deviceRequest" | "sessionEnded" | "manual";
   ownWindow: number | null;
   foregroundBefore: {
     hwnd: number | null;

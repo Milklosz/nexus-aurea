@@ -103,9 +103,10 @@ Playnite:
   (`Playnite.FullscreenApp.exe` and `Playnite.DesktopApp.exe` are one group);
 - VELORA never opens or edits Playnite's database and never copies tokens.
 
-The C# exporter remains **SOURCE ONLY**. It is not compiled in CI and no
-Windows/Playnite SDK build has been performed. That is a blocker for claiming
-extension functionality, not something the Rust manifest parser can prove.
+The C# exporter is pinned to `PlayniteSDK 6.18.0` for Playnite 10 (`net462`).
+It compiles locally with 0 warnings/errors and the Windows CI job rebuilds and
+uploads `VeloraLibraryExporter.dll`. Loading it in Playnite and writing a real
+manifest is still a manual MSI check (E2); compilation is not runtime proof.
 
 ## 4. iPhone Remote
 
@@ -118,17 +119,23 @@ P1 behavior is preserved:
 - pairing timeout and `confirmedByServer` on the PWA;
 - no false success, no `no-cors`, no certificate bypass, no secrets in logs.
 
-New server-side idempotency:
+Server-side idempotency and failure semantics (final hardening):
 
-- successful executions are recorded in a bounded in-memory receipt log;
+- the sequence is reserved before the side effect, but the whole transaction
+  (authentication → reservation → execution → receipt) is serialized;
+- a parallel duplicate waits, then receives `204` from the receipt; it never
+  executes the signed command twice;
 - a duplicate request with the same device, sequence and command is answered
   `204` without a second side effect;
 - the same sequence with a different command is rejected;
-- a missing receipt (for example after restart) is rejected, never executed;
+- an interrupted sequence without a receipt is `409 Ambiguous` (the phone keeps
+  its pairing and may use a fresh sequence), never executed twice;
+- a failed execution rolls the reservation back and returns a conflict;
 - receipts are not persisted and contain no token, signature or body;
 - the PWA still never auto-retries a command with side effects;
-- `Home` performs the native `return_home` transition before the `204`, so a
-  hidden or busy WebView cannot turn a real Home request into a false success.
+- `Home` performs the native `return_home` transition before the `204` with a
+  conservative device focus policy, so a hidden WebView cannot fake success and
+  a foreign foreground app is not stolen.
 
 ## 5. DualSense and couch control
 

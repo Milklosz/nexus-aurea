@@ -101,6 +101,17 @@ pub fn registry_query_arguments() -> Vec<String> {
     ]
 }
 
+/// Safe, stable message for a failed registry write. Raw `reg.exe` stderr can
+/// contain user paths or localized system text; it never crosses the IPC
+/// boundary. Only a numeric exit code is retained for diagnostics.
+pub fn registry_failure_message(enabled: bool, exit_code: Option<i32>) -> String {
+    let action = if enabled { "włączyć" } else { "wyłączyć" };
+    match exit_code {
+        Some(code) => format!("Nie udało się {action} autostartu VELORA (kod reg.exe {code})."),
+        None => format!("Nie udało się {action} autostartu VELORA."),
+    }
+}
+
 #[tauri::command]
 pub fn get_autostart_status() -> AutostartStatus {
     #[cfg(target_os = "windows")]
@@ -502,7 +513,8 @@ pub fn get_autostart_recovery() -> AutostartRecoveryReport {
 mod windows {
     use super::{
         autostart_command_value, registry_add_arguments, registry_delete_arguments,
-        registry_query_arguments, run_value_name, AutostartStatus, SAFE_MODE_FLAG,
+        registry_failure_message, registry_query_arguments, run_value_name, AutostartStatus,
+        SAFE_MODE_FLAG,
     };
     use std::path::PathBuf;
     use std::process::Command;
@@ -585,12 +597,14 @@ mod windows {
                     }
                 }
             }
-            Err(cause) => AutostartStatus {
+            Err(_cause) => AutostartStatus {
                 windows: true,
                 supported: true,
                 enabled: false,
                 windowed: false,
-                last_error: Some(format!("Nie udało się odczytać wpisu autostartu: {}", cause)),
+                last_error: Some(
+                    "Nie udało się odczytać wpisu autostartu VELORA.".to_string(),
+                ),
             },
         }
     }
@@ -607,21 +621,11 @@ mod windows {
             registry_delete_arguments()
         };
 
-        let output = run_reg(arguments)
-            .map_err(|cause| format!("Nie udało się uruchomić reg.exe: {}", cause))?;
+        let output = run_reg(arguments).map_err(|_| {
+            "Nie udało się uruchomić reg.exe.".to_string()
+        })?;
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let detail = stderr.trim();
-            let detail = if detail.is_empty() {
-                "reg.exe zwrócił błąd"
-            } else {
-                detail
-            };
-            return Err(if enabled {
-                format!("Nie udało się włączyć autostartu VELORA: {}", detail)
-            } else {
-                format!("Nie udało się wyłączyć autostartu VELORA: {}", detail)
-            });
+            return Err(registry_failure_message(enabled, output.status.code()));
         }
 
         // Nigdy nie zgłaszamy sukcesu bez potwierdzenia rzeczywistego stanu.
@@ -665,6 +669,22 @@ mod tests {
             autostart_command_value(exe, true),
             format!("\"{}\" {}", exe, SAFE_MODE_FLAG)
         );
+    }
+
+    #[test]
+    fn registry_failures_never_forward_raw_stderr_or_user_paths() {
+        for enabled in [true, false] {
+            for code in [None, Some(5)] {
+                let message = registry_failure_message(enabled, code);
+                assert!(!message.contains(r"C:\Users"));
+                assert!(!message.contains("stderr"));
+                assert!(!message.contains('\n'));
+                assert!(!message.contains('\r'));
+                if let Some(code) = code {
+                    assert!(message.contains(&code.to_string()));
+                }
+            }
+        }
     }
 
     #[test]

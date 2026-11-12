@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::sync::mpsc::{self, SyncSender};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
@@ -47,6 +48,15 @@ pub enum TransitionCause {
     Launch,
     ProcessExit,
     System,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HomeRequestSource {
+    /// Local UI or the local keyboard fallback: the user is physically here.
+    ExplicitUser,
+    /// DualSense chord or paired iPhone: explicit intent, but potentially
+    /// remote; never steal focus from a foreign foreground application.
+    Device,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,6 +146,9 @@ pub enum SessionErrorCode {
     InvalidCommand,
     /// The operation was cancelled before it completed.
     Cancelled,
+    /// A queued Home request was overtaken by a newer session transition.
+    /// It must not pull a freshly launched game back into VELORA Home.
+    SupersededHome,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -212,6 +225,49 @@ pub(crate) fn allowed_targets(from: SessionId) -> &'static [SessionId] {
 
 pub(crate) fn transition_is_allowed(from: SessionId, target: SessionId) -> bool {
     from == target || allowed_targets(from).contains(&target)
+}
+
+/// Plans the shortest explicit path to `target`. Leaving states (`Desktop`,
+/// `Ambient`) must pass through Home. Returning the whole plan lets the launch
+/// registry validate both steps before it mutates either state machine.
+pub(crate) fn transition_steps(
+    from: SessionId,
+    target: SessionId,
+) -> Result<Vec<SessionId>, String> {
+    if from == target || transition_is_allowed(from, target) {
+        return Ok(vec![target]);
+    }
+    if from != SessionId::VeloraHome && transition_is_allowed(SessionId::VeloraHome, target) {
+        return Ok(vec![SessionId::VeloraHome, target]);
+    }
+    Err(format!(
+        "Przejście sesji {} → {} nie jest dozwolone.",
+        from.as_str(),
+        target.as_str()
+    ))
+}
+
+/// True when another transition completed after the caller captured its
+/// request. A Home press that waited behind a launch must not restore focus.
+pub(crate) fn home_request_is_superseded(
+    request: &SessionSnapshot,
+    current: &SessionSnapshot,
+) -> bool {
+    if current.current == SessionId::VeloraHome {
+        return false;
+    }
+    let request_launch = request
+        .context
+        .as_ref()
+        .and_then(|context| context.launch_id.as_deref());
+    let current_launch = current
+        .context
+        .as_ref()
+        .and_then(|context| context.launch_id.as_deref());
+    current.current != request.current
+        || current.revision != request.revision
+        || current.transitioned_at_ms != request.transitioned_at_ms
+        || current_launch != request_launch
 }
 
 #[derive(Clone, Debug)]
@@ -304,6 +360,9 @@ impl SessionMachine {
         self.previous = Some(from);
         self.current = target;
         self.revision = self.revision.saturating_add(1);
+        // A real transition acknowledges the one-shot startup recovery notice.
+        // Keeping it forever would surface stale "last recovery" on every view.
+        self.recovery = None;
         if let Some(context) = context.as_mut() {
             context.session_revision = Some(self.revision);
             self.context = Some(context.clone());
@@ -396,9 +455,10 @@ pub struct SessionOrchestrator {
     machine: Mutex<SessionMachine>,
     operations: Mutex<OperationRegistry>,
     last_persist_error: Mutex<Option<String>>,
-    /// Serializes the whole Home transaction (transition + one focus restore)
-    /// so simultaneous gamepad/remote/UI Home commands cannot duplicate it.
-    home_gate: Mutex<()>,
+    /// Serializes the whole session transaction (transition + one focus
+    /// restore / launch registration) so a stale Home cannot overtake a newly
+    /// started game and launch fallbacks cannot interleave with Home.
+    transaction_gate: Mutex<()>,
     last_home: Mutex<Option<HomeCompletion>>,
 }
 
@@ -415,13 +475,19 @@ impl Default for SessionOrchestrator {
             machine: Mutex::new(SessionMachine::default()),
             operations: Mutex::new(OperationRegistry::default()),
             last_persist_error: Mutex::new(None),
-            home_gate: Mutex::new(()),
+            transaction_gate: Mutex::new(()),
             last_home: Mutex::new(None),
         }
     }
 }
 
 impl SessionOrchestrator {
+    pub(crate) fn lock_transaction(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.transaction_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn persist(&self, app: &AppHandle, snapshot: &SessionSnapshot) {
         let error = session_store::save(app, snapshot, false).err();
         *self
@@ -503,6 +569,7 @@ fn apply_transition_command(
     request: &TransitionRequest,
 ) -> Result<SessionSnapshot, SessionError> {
     let orchestrator = app.state::<SessionOrchestrator>();
+    let _gate = orchestrator.lock_transaction();
     let result = {
         let mut machine = orchestrator
             .machine
@@ -649,6 +716,14 @@ pub(crate) fn launch_owns_session(app: &AppHandle, launch_id: &str) -> bool {
 /// superseded launch must not pull a newer session back to VELORA Home.
 pub(crate) fn finish_launch_session(app: &AppHandle, launch_id: &str) {
     let orchestrator = app.state::<SessionOrchestrator>();
+    let _gate = orchestrator.lock_transaction();
+    finish_launch_session_inner(app, launch_id);
+}
+
+/// Same as [`finish_launch_session`] for callers that already hold the session
+/// transaction gate.
+pub(crate) fn finish_launch_session_inner(app: &AppHandle, launch_id: &str) {
+    let orchestrator = app.state::<SessionOrchestrator>();
     let snapshot = {
         let mut machine = orchestrator
             .machine
@@ -702,42 +777,68 @@ pub(crate) fn reconcile_orphaned_launch(app: &AppHandle) -> bool {
     ) {
         return false;
     }
-    {
-        let orchestrator = app.state::<SessionOrchestrator>();
+    let orchestrator = app.state::<SessionOrchestrator>();
+    let _gate = orchestrator.lock_transaction();
+    if !launch_owns_session(app, &launch_id) {
+        return false;
+    }
+    let previous = current_snapshot(app);
+    finish_launch_session_inner(app, &launch_id);
+    let snapshot = {
         let mut machine = orchestrator
             .machine
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if machine
-            .context
-            .as_ref()
-            .and_then(|context| context.launch_id.as_deref())
-            != Some(launch_id.as_str())
-        {
-            return false;
-        }
         machine.recovery = Some(SessionRecovery {
             recovered_at_ms: now_ms(),
-            previous_session: machine.current,
-            previous_revision: machine.revision,
+            previous_session: previous.current,
+            previous_revision: previous.revision,
             reason: RecoveryReason::OrphanedLaunch,
             message: "Kontekst uruchomienia nie istnieje już w rejestrze; sesja wróciła do Home."
                 .into(),
         });
-    }
-    finish_launch_session(app, &launch_id);
+        machine.snapshot()
+    };
+    orchestrator.persist(app, &snapshot);
     true
 }
 
 pub(crate) fn return_home(
     app: &AppHandle,
     cause: TransitionCause,
+    source: HomeRequestSource,
+) -> Result<ReturnHomeResult, SessionError> {
+    // Capture the observed revision before waiting for the transaction gate.
+    // If a launch transition completes while this request is queued, the Home
+    // is stale and must not pull the new game back to VELORA.
+    let request_snapshot = current_snapshot(app);
+    return_home_observed(app, cause, source, request_snapshot)
+}
+
+fn return_home_observed(
+    app: &AppHandle,
+    cause: TransitionCause,
+    source: HomeRequestSource,
+    request_snapshot: SessionSnapshot,
 ) -> Result<ReturnHomeResult, SessionError> {
     let orchestrator = app.state::<SessionOrchestrator>();
-    let _gate = orchestrator
-        .home_gate
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _gate = orchestrator.lock_transaction();
+
+    let current = current_snapshot(app);
+    if home_request_is_superseded(&request_snapshot, &current) {
+        let error = SessionError {
+            code: SessionErrorCode::SupersededHome,
+            message:
+                "Żądanie Home zostało zastąpione przez nowszą sesję. VELORA nie przejęła fokusu."
+                    .into(),
+            from: current.current,
+            target: SessionId::VeloraHome,
+            current_revision: current.revision,
+            allowed_targets: current.allowed_targets.clone(),
+        };
+        let _ = app.emit(SESSION_ERROR_EVENT, error.clone());
+        return Err(error);
+    }
 
     // Repeated Home from a gamepad chord, remote and UI at the same moment is
     // one intent. Reuse the completed result only while VELORA is still in the
@@ -766,6 +867,28 @@ pub(crate) fn return_home(
             RETURN_HOME_TIMEOUT_MS,
         );
 
+    // Claim the operation before the irreversible transition. A cancel that
+    // arrives after this point returns `None` instead of falsely reporting
+    // that a Home which already happened was cancelled.
+    let committed = orchestrator
+        .operations
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .commit(&operation.id);
+    if !committed {
+        let machine = orchestrator
+            .machine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let error = machine.error(
+            SessionErrorCode::Cancelled,
+            "Operacja powrotu do Home została anulowana przed rozpoczęciem.",
+            SessionId::VeloraHome,
+        );
+        let _ = app.emit(SESSION_ERROR_EVENT, error.clone());
+        return Err(error);
+    }
+
     if let Err(error) = apply_transition(app, SessionId::VeloraHome, cause, None) {
         let _ = orchestrator
             .operations
@@ -775,32 +898,11 @@ pub(crate) fn return_home(
         return Err(error);
     }
 
-    let cancelled = orchestrator
-        .operations
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .is_cancelled(&operation.id);
-    if cancelled {
-        let _ = orchestrator
-            .operations
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .finish(&operation.id, now_ms(), false);
-        let machine = orchestrator
-            .machine
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut error = machine.error(
-            SessionErrorCode::Cancelled,
-            "Sesja wróciła do Home, ale przywracanie okna zostało anulowane.",
-            SessionId::VeloraHome,
-        );
-        error.current_revision = machine.revision;
-        let _ = app.emit(SESSION_ERROR_EVENT, error.clone());
-        return Err(error);
-    }
-
-    let restore = window_broker::restore_velora(app, RestoreReason::UserRequest);
+    let restore_reason = match source {
+        HomeRequestSource::ExplicitUser => RestoreReason::UserRequest,
+        HomeRequestSource::Device => RestoreReason::DeviceRequest,
+    };
+    let restore = window_broker::restore_velora(app, restore_reason);
     // The restore can take up to ~100 ms. Re-read the authoritative snapshot
     // so a concurrent transition is not overwritten by a stale event payload.
     let session = current_snapshot(app);
@@ -846,6 +948,65 @@ fn home_completion_is_reusable(
         && now.saturating_sub(completion.at_ms) <= HOME_DEDUPE_MS
 }
 
+type HomeJob = (
+    AppHandle,
+    TransitionCause,
+    HomeRequestSource,
+    SessionSnapshot,
+    Box<dyn FnOnce(Result<ReturnHomeResult, SessionError>) + Send>,
+);
+
+static HOME_WORKER: Mutex<Option<SyncSender<HomeJob>>> = Mutex::new(None);
+
+fn home_worker() -> Option<SyncSender<HomeJob>> {
+    let mut slot = HOME_WORKER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(sender) = slot.as_ref() {
+        return Some(sender.clone());
+    }
+    let (sender, receiver) = mpsc::sync_channel::<HomeJob>(8);
+    let spawned = std::thread::Builder::new()
+        .name("velora-home-worker".into())
+        .spawn(move || {
+            while let Ok((app, cause, source, requested, on_complete)) = receiver.recv() {
+                on_complete(return_home_observed(&app, cause, source, requested));
+            }
+        });
+    if spawned.is_err() {
+        return None;
+    }
+    *slot = Some(sender.clone());
+    Some(sender)
+}
+
+/// Queues a Home transaction on a dedicated worker. The Control Service message
+/// pump must keep processing WM_INPUT and the emergency shortcut while the
+/// restore is in flight. Returns false when the bounded queue is full.
+pub(crate) fn request_return_home<F>(
+    app: AppHandle,
+    cause: TransitionCause,
+    source: HomeRequestSource,
+    on_complete: F,
+) -> bool
+where
+    F: FnOnce(Result<ReturnHomeResult, SessionError>) + Send + 'static,
+{
+    let Some(sender) = home_worker() else {
+        return false;
+    };
+    let requested = current_snapshot(&app);
+    sender
+        .try_send((
+            app,
+            cause,
+            source,
+            requested,
+            Box::new(on_complete),
+        ))
+        .is_ok()
+}
+
 #[tauri::command]
 pub fn get_session_state(app: AppHandle) -> SessionSnapshot {
     current_snapshot(&app)
@@ -878,19 +1039,24 @@ pub async fn request_session_transition(
 
 #[tauri::command]
 pub async fn return_velora_home(app: AppHandle) -> Result<ReturnHomeResult, SessionError> {
-    tauri::async_runtime::spawn_blocking(move || return_home(&app, TransitionCause::User))
-        .await
-        .unwrap_or_else(|_| {
-            Err(internal_error(SessionId::VeloraHome, SessionId::VeloraHome))
-        })
+    tauri::async_runtime::spawn_blocking(move || {
+        return_home(
+            &app,
+            TransitionCause::User,
+            HomeRequestSource::ExplicitUser,
+        )
+    })
+    .await
+    .unwrap_or_else(|_| Err(internal_error(SessionId::VeloraHome, SessionId::VeloraHome)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        allowed_targets, apply_persisted_recovery, transition_is_allowed, SessionChangedEvent,
-        SessionContext, SessionErrorCode, SessionId, SessionMachine, TransitionCause,
-        TransitionRequest, COMMAND_TTL_MS,
+        allowed_targets, apply_persisted_recovery, home_request_is_superseded,
+        transition_is_allowed, transition_steps, SessionChangedEvent, SessionContext,
+        SessionErrorCode, SessionId, SessionMachine, TransitionCause, TransitionRequest,
+        COMMAND_TTL_MS,
     };
     use crate::session_store::PersistedSession;
     use serde_json::json;
@@ -1291,6 +1457,84 @@ mod tests {
                 assert!(transition_is_allowed(from, *target));
             }
         }
+    }
+
+    #[test]
+    fn launch_transition_plan_is_explicit_and_never_ignores_an_invalid_step() {
+        assert_eq!(
+            transition_steps(SessionId::VeloraHome, SessionId::Cinema).unwrap(),
+            vec![SessionId::Cinema]
+        );
+        assert_eq!(
+            transition_steps(SessionId::Game, SessionId::Cinema).unwrap(),
+            vec![SessionId::Cinema]
+        );
+        assert_eq!(
+            transition_steps(SessionId::Desktop, SessionId::Game).unwrap(),
+            vec![SessionId::VeloraHome, SessionId::Game]
+        );
+        assert_eq!(
+            transition_steps(SessionId::Ambient, SessionId::Playnite).unwrap(),
+            vec![SessionId::VeloraHome, SessionId::Playnite]
+        );
+        assert!(transition_steps(SessionId::Desktop, SessionId::Desktop).is_ok());
+        assert!(transition_steps(SessionId::VeloraHome, SessionId::VeloraHome).is_ok());
+    }
+
+    #[test]
+    fn a_home_request_queued_behind_a_launch_is_superseded() {
+        let request = {
+            let mut state = machine();
+            state
+                .transition_at(SessionId::Game, TransitionCause::Launch, None, 100)
+                .unwrap();
+            state.snapshot()
+        };
+        let launched_again = {
+            let mut state = machine();
+            state
+                .transition_at(SessionId::Game, TransitionCause::Launch, None, 100)
+                .unwrap();
+            state
+                .transition_at(SessionId::Cinema, TransitionCause::Launch, None, 200)
+                .unwrap();
+            state.snapshot()
+        };
+        assert!(home_request_is_superseded(&request, &launched_again));
+        assert!(!home_request_is_superseded(&request, &request));
+
+        let mut home = launched_again.clone();
+        home.current = SessionId::VeloraHome;
+        assert!(!home_request_is_superseded(&request, &home));
+
+        // A second launch into the same Game session keeps the revision but
+        // replaces the launch context. That is still a newer session.
+        let mut same_target_new_launch = request.clone();
+        same_target_new_launch.context = Some(SessionContext::for_launch(
+            "game-2",
+            Some("1091500"),
+            None,
+        ));
+        assert!(home_request_is_superseded(
+            &request,
+            &same_target_new_launch
+        ));
+    }
+
+    #[test]
+    fn a_real_transition_clears_one_shot_startup_recovery() {
+        let mut state = machine();
+        state.recovery = Some(super::SessionRecovery {
+            recovered_at_ms: 1,
+            previous_session: SessionId::Game,
+            previous_revision: 4,
+            reason: super::RecoveryReason::UnexpectedExit,
+            message: "Poprzednia sesja zakończyła się nieoczekiwanie.".into(),
+        });
+        state
+            .transition_at(SessionId::Cinema, TransitionCause::User, None, 10)
+            .unwrap();
+        assert!(state.snapshot().recovery.is_none());
     }
 
     #[test]

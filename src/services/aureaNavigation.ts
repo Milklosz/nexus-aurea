@@ -56,6 +56,12 @@ export function resolveGridIndex(
   if (!Number.isFinite(columns) || columns <= 0) return clamped;
 
   const colCount = Math.max(1, Math.trunc(columns));
+  // A single-row grid has no vertical neighbour. Moving up/down must leave the
+  // selection where it is instead of jumping to the first/last item (remote
+  // Up/Down on the one-row AUREA dock).
+  if ((direction === "up" || direction === "down") && colCount >= count) {
+    return clamped;
+  }
   const rowStart = Math.floor(clamped / colCount) * colCount;
   const rowEnd = Math.min(rowStart + colCount - 1, count - 1);
 

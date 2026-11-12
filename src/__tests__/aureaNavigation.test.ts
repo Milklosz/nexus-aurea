@@ -22,6 +22,20 @@ afterEach(() => {
 });
 
 describe("resolveGridIndex — pure 2D row movement", () => {
+  it("keeps up/down in place on a single-row dock", () => {
+    for (const index of [0, 1, 2, 3]) {
+      expect(resolveGridIndex(index, "up", 4, 4)).toBe(index);
+      expect(resolveGridIndex(index, "down", 4, 4)).toBe(index);
+    }
+    // Left/right still move within the row and clamp at both boundaries.
+    expect(resolveGridIndex(0, "left", 4, 4)).toBe(0);
+    expect(resolveGridIndex(0, "right", 4, 4)).toBe(1);
+    expect(resolveGridIndex(3, "right", 4, 4)).toBe(3);
+    expect(resolveGridIndex(3, "left", 4, 4)).toBe(2);
+    // Explicit columns >= count is also a single row.
+    expect(resolveGridIndex(2, "down", 99, 4)).toBe(2);
+  });
+
   it("moves up/down a full row (columns)", () => {
     expect(resolveGridIndex(1, "down", 3, 6)).toBe(4);
     expect(resolveGridIndex(4, "up", 3, 6)).toBe(1);

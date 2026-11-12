@@ -82,7 +82,7 @@ export function GamepadDiagnostics({
     <p>{supported ? "Gamepad API dostępne" : "Gamepad API niedostępne"} · Połączone: {pads.length} · Fokus VELORA: {focused ? "aktywny" : "nieaktywny"}</p>
     <p>Naciśnij przycisk pada, gdy VELORA ma fokus. Windows może wykrywać urządzenie, zanim udostępni je Gamepad API.</p>
     <p>← / → lub lewy analog porusza fokusem. ✕ wybiera, ◯ wraca, Options otwiera Control Center. F2 otwiera diagnostykę. Przytrzymanie kierunku powtarza ruch.</p>
-    <button type="button" onClick={cycleProfile}>Mapowanie: {profileLabels[profile]} · zmień</button>
+    <button type="button" data-remote-allow="" onClick={cycleProfile}>Mapowanie: {profileLabels[profile]} · zmień</button>
     {pads.map(pad => {
       const resolvedProfile = resolveControllerProfile(pad, profile);
       const confirmButton = resolvedProfile === "playstation" ? 1 : 0;
@@ -111,6 +111,6 @@ export function GamepadDiagnostics({
     />
     <ControlServicePanel />
     <SystemDiagnosticsPanel />
-    <button type="button" onClick={onClose} autoFocus>Zamknij (Esc / ◯)</button>
+    <button type="button" data-remote-allow="" onClick={onClose} autoFocus>Zamknij (Esc / ◯)</button>
   </dialog>;
 }
