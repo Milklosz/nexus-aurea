@@ -93,7 +93,8 @@ Playnite:
 - `get_playnite_library` reads only the explicit manifest
   `%LOCALAPPDATA%\VELORA\Playnite\velora-library-manifest.json`;
 - `launch_playnite_game` validates the GUID and requires the canonical
-  `playnite://playnite/start/<guid>` URI;
+  `playnite://playnite/start/<guid>` URI; games not marked `installed` are
+  rejected with a clear message instead of guessing a launcher;
 - the URI is opened through the Windows shell, never through a raw executable
   path or stored launcher arguments;
 - if Playnite is already running, the session attaches to its process; if it is

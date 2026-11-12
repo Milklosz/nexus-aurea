@@ -709,10 +709,15 @@ pub(crate) fn reconcile_edge_marker(app: &AppHandle) {
         {
             return;
         }
-        let url = existing
+        let url = match existing
             .filter(|marker| marker.launch_id == active.id)
             .map(|marker| marker.url)
-            .unwrap_or_else(|| ALLOWED_STREAMING_URLS[0].to_string());
+        {
+            Some(url) => url,
+            // Without a marker URL, do not invent a service. The launch stays
+            // valid; only the read-only URL projection remains unknown.
+            None => return,
+        };
         let _ = store_marker(app, &active.id, process_id, &url);
     }
     #[cfg(not(target_os = "windows"))]

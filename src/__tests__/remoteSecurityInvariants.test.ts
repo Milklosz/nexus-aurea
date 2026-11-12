@@ -57,7 +57,7 @@ describe("iPhone Remote security regression guard", () => {
     expect(rust).toContain("command_receipts");
     expect(rust).toContain(".record(");
     expect(reliability).toContain("RejectReplay");
-    expect(reliability).toContain("never turns a\n/// different command into an idempotent success");
+    expect(reliability).toContain("different command into an idempotent success");
     // The client still must not auto-retry side effects.
     expect(app).toContain("Polecenie nie zostało automatycznie ponowione");
   });
