@@ -8,8 +8,7 @@
   ${If} $INSTDIR == "$LOCALAPPDATA\NEXUS AUREA"
     DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\NEXUS AUREA"
     Delete "$SMPROGRAMS\NEXUS AUREA.lnk"
-    ${If} ${FileExists} "$SMPROGRAMS\Startup\NEXUS AUREA.lnk"
-      Rename "$SMPROGRAMS\Startup\NEXUS AUREA.lnk" "$SMPROGRAMS\Startup\VELORA.lnk"
-    ${EndIf}
+    ; Autostart is managed exclusively by the opt-in HKCU Run value written by
+    ; VELORA. The installer must not rename or create Startup-folder shortcuts.
   ${EndIf}
 !macroend

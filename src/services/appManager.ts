@@ -43,6 +43,26 @@ export type LaunchReceipt = {
   focusRestoreSupported: boolean;
 };
 
+export type ManagedAppExit = {
+  id: string;
+  foregroundProcess: string | null;
+  shouldFocus: boolean;
+};
+
+export type LaunchEventPayload = {
+  previousPhase: string;
+  atMs: number;
+  session: {
+    id: string;
+    kind: string;
+    displayName: string;
+    appId: string | null;
+    phase: string;
+    error: string | null;
+    attention: string | null;
+  };
+};
+
 export type ManagedAppId = "steamBigPicture" | "appleMusic" | "playniteFullscreen" | "chrome" | "edge" | "firefox";
 
 function userFacingManagedAppError(message: string): string {
@@ -97,7 +117,40 @@ export async function launchManagedGame(id: string): Promise<{ id: string; launc
   return invoke<{ id: string; launched: boolean }>("launch_managed_game", { id });
 }
 
-export async function listenForManagedAppExit(callback: (id: string) => void): Promise<() => void> {
+export async function listenForManagedAppExit(callback: (exit: ManagedAppExit) => void): Promise<() => void> {
   if (!isTauri()) return () => {};
-  return listen<string>("managed-app-exited", event => callback(event.payload));
+  return listen<ManagedAppExit>("managed-app-exited", event => {
+    const exit = event.payload;
+    if (
+      typeof exit?.id === "string"
+      && typeof exit.shouldFocus === "boolean"
+      && (exit?.foregroundProcess === null || typeof exit.foregroundProcess === "string")
+    ) {
+      callback(exit);
+    }
+  });
+}
+
+/** Native LaunchRegistry phase events, used only for truthful failure notices. */
+export async function listenForLaunchEvent(
+  callback: (event: LaunchEventPayload) => void,
+): Promise<() => void> {
+  if (!isTauri()) return () => {};
+  return listen<LaunchEventPayload>("velora-launch-event", event => {
+    const payload = event.payload;
+    const session = payload?.session;
+    if (
+      !session
+      || typeof session.id !== "string"
+      || typeof session.kind !== "string"
+      || typeof session.displayName !== "string"
+      || (session.appId !== null && typeof session.appId !== "string")
+      || typeof session.phase !== "string"
+      || (session.error !== null && typeof session.error !== "string")
+      || (session.attention !== null && typeof session.attention !== "string")
+    ) {
+      return;
+    }
+    callback(payload);
+  });
 }

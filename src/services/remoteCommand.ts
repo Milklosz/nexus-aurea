@@ -1,5 +1,6 @@
 import type { CinemaProfile } from "./cinemaMode";
 import type { SystemVolumeAction } from "./musicBridge";
+import { moveAureaFocus, type NavigationDirection } from "./aureaNavigation";
 
 export type RemoteCommand =
   | "up" | "down" | "left" | "right" | "select" | "back" | "home"
@@ -13,17 +14,47 @@ export type RemoteCommandHandlers = {
   home: () => void;
   volume: (action: SystemVolumeAction) => void;
   profile: (profile: CinemaProfile) => void;
+  /** Optional: full 2D direction handler (takes precedence over grid/fallback). */
+  navigateDirection?: (direction: NavigationDirection) => void;
 };
+
+/**
+ * Direction commands prefer an explicit `navigateDirection` handler, then try
+ * the registered AUREA 2D grid (`moveAureaFocus`), and finally fall back to the
+ * original linear `navigate(-1 | 1)`. With no grid registered (or no DOM),
+ * `moveAureaFocus` returns false and the legacy path is used unchanged.
+ */
+function navigateDirectionCommand(
+  direction: NavigationDirection,
+  delta: -1 | 1,
+  handlers: RemoteCommandHandlers,
+): void {
+  if (handlers.navigateDirection) {
+    handlers.navigateDirection(direction);
+    return;
+  }
+  // Gdy otwarty jest dialog (Control Center / Diagnostyka), nawigacja należy do
+  // jego kontrolek — nie przejmujemy fokusu zarejestrowaną siatką 2D.
+  const dialogOpen = typeof document !== "undefined"
+    && typeof document.querySelector === "function"
+    && Boolean(document.querySelector("dialog[open]"));
+  if (!dialogOpen && moveAureaFocus(direction)) return;
+  handlers.navigate(delta);
+}
 
 export function dispatchRemoteCommand(command: RemoteCommand, handlers: RemoteCommandHandlers): void {
   switch (command) {
     case "up":
+      navigateDirectionCommand("up", -1, handlers);
+      break;
     case "left":
-      handlers.navigate(-1);
+      navigateDirectionCommand("left", -1, handlers);
       break;
     case "down":
+      navigateDirectionCommand("down", 1, handlers);
+      break;
     case "right":
-      handlers.navigate(1);
+      navigateDirectionCommand("right", 1, handlers);
       break;
     case "select":
       handlers.select();

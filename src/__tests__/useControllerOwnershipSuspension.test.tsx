@@ -23,6 +23,8 @@ vi.mock("../services/controlService", () => ({
     lastError: null,
   },
   getControlServiceStatus: mocks.getStatus,
+  getFallbackHotkeyOptions: vi.fn(async () => []),
+  setFallbackHotkey: vi.fn(async () => ({} as never)),
   listenForControlServiceStatus: vi.fn(async (callback: (status: ControlServiceStatus) => void) => {
     mocks.onStatus = callback;
     return () => { mocks.onStatus = null; };

@@ -33,9 +33,11 @@ describe("safe window focus request", () => {
     expect(onBlocked).toHaveBeenCalledOnce();
   });
 
-  it("grants only the Tauri capability required to unminimize the VELORA window", () => {
+  it("grants the Tauri capabilities required to minimize and restore the VELORA window", () => {
     const capability = JSON.parse(readFileSync("src-tauri/capabilities/default.json", "utf8"));
 
+    expect(capability.permissions).toContain("core:window:allow-minimize");
     expect(capability.permissions).toContain("core:window:allow-unminimize");
+    expect(capability.permissions).toContain("core:window:allow-set-focus");
   });
 });
