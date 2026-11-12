@@ -92,3 +92,8 @@ export function dispatchNavIntent(intent: NavIntent, handlers: NavIntentHandlers
       break;
   }
 }
+
+/** Entry point for the DualSense hook: one raw controller action in, one handler call out. */
+export function dispatchControllerAction(action: ControllerAction, handlers: NavIntentHandlers): void {
+  dispatchNavIntent(intentFromController(action), handlers);
+}

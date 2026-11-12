@@ -1,6 +1,7 @@
 import type { CinemaProfile } from "./cinemaMode";
 import type { SystemVolumeAction } from "./musicBridge";
 import { moveAureaFocus, type NavigationDirection } from "./aureaNavigation";
+import { dispatchNavIntent, intentFromRemote } from "./navIntent";
 
 export type RemoteCommand =
   | "up" | "down" | "left" | "right" | "select" | "back" | "home"
@@ -45,28 +46,24 @@ function navigateDirectionCommand(
 }
 
 export function dispatchRemoteCommand(command: RemoteCommand, handlers: RemoteCommandHandlers): void {
+  // Navigation and lifecycle commands go through the shared intent model.
+  const intent = intentFromRemote(command);
+  if (intent) {
+    dispatchNavIntent(intent, {
+      move: (direction) => navigateDirectionCommand(
+        direction,
+        direction === "up" || direction === "left" ? -1 : 1,
+        handlers,
+      ),
+      select: () => (handlers.selectRemote ?? handlers.select)(),
+      back: () => handlers.back(),
+      // The pilot has no menu command; intentFromRemote never yields "menu".
+      menu: () => {},
+      home: () => handlers.home(),
+    });
+    return;
+  }
   switch (command) {
-    case "up":
-      navigateDirectionCommand("up", -1, handlers);
-      break;
-    case "left":
-      navigateDirectionCommand("left", -1, handlers);
-      break;
-    case "down":
-      navigateDirectionCommand("down", 1, handlers);
-      break;
-    case "right":
-      navigateDirectionCommand("right", 1, handlers);
-      break;
-    case "select":
-      (handlers.selectRemote ?? handlers.select)();
-      break;
-    case "back":
-      handlers.back();
-      break;
-    case "home":
-      handlers.home();
-      break;
     case "volume-up":
       handlers.volume("up");
       break;

@@ -5,14 +5,15 @@ import { useAmbient } from "./hooks/useAmbient";
 import { readAmbientSettings, saveAmbientSettings, type AmbientSettings } from "./services/ambient";
 import { useAppVersion } from "./hooks/useAppVersion";
 import { minimizeWindowToDesktop, windowMode } from "./services/windowMode";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppDock } from "./components/AppDock";
 import { HeroPanel } from "./components/HeroPanel";
 import { StatusBar } from "./components/StatusBar";
 import { Toast } from "./components/Toast";
 import { streamingServices } from "./data/streamingServices";
 import { useClock } from "./hooks/useClock";
-import { useGamepad } from "./hooks/useGamepad";
+import { useGamepad, type ControllerActions } from "./hooks/useGamepad";
+import { dispatchControllerAction, type NavIntentHandlers } from "./services/navIntent";
 import { useControllerOwnershipSuspension } from "./hooks/useControllerOwnershipSuspension";
 import { isTextEntryTarget, useNavigation } from "./hooks/useNavigation";
 import { useFocusRestoreOnClose } from "./hooks/useFocusRestoreOnClose";
@@ -290,12 +291,22 @@ export default function App() {
     () => ambient.controllerSuppressedRef.current || suspendForForegroundOwner(),
     [ambient.controllerSuppressedRef, suspendForForegroundOwner],
   );
-  useGamepad({
-    move: moveControllerFocus,
-    confirm: confirmControllerFocus,
+  // DualSense actions become shared navigation intents; the handlers below are the
+  // only place that decides what each intent does on the home screen and in dialogs.
+  const controllerIntentHandlers = useMemo<NavIntentHandlers>(() => ({
+    move: (direction) => moveControllerFocus(direction === "left" || direction === "up" ? -1 : 1),
+    select: confirmControllerFocus,
     back: backControllerFocus,
-    options: toggleControlCenter,
-  }, !ambient.active && !ambient.controllerSuppressed, controllerProfile, shouldSuspendControllerInput);
+    menu: toggleControlCenter,
+    home: returnToNexus,
+  }), [backControllerFocus, confirmControllerFocus, moveControllerFocus, returnToNexus, toggleControlCenter]);
+  const controllerActions = useMemo<ControllerActions>(() => ({
+    move: (delta) => dispatchControllerAction({ type: "move", delta }, controllerIntentHandlers),
+    confirm: () => dispatchControllerAction({ type: "confirm" }, controllerIntentHandlers),
+    back: () => dispatchControllerAction({ type: "back" }, controllerIntentHandlers),
+    options: () => dispatchControllerAction({ type: "options" }, controllerIntentHandlers),
+  }), [controllerIntentHandlers]);
+  useGamepad(controllerActions, !ambient.active && !ambient.controllerSuppressed, controllerProfile, shouldSuspendControllerInput);
   useEffect(() => {
     const recover = (event: KeyboardEvent) => {
       const openDialog = document.querySelector("dialog[open]");
