@@ -56,6 +56,8 @@ describe("iPhone Remote security regression guard", () => {
     expect(rust).toContain("ReplayDecision::AcknowledgeReplay");
     expect(rust).toContain("command_receipts");
     expect(rust).toContain(".record(");
+    expect(rust).toContain("request.command == RemoteCommand::Home");
+    expect(rust).toContain("crate::session_orchestrator::return_home");
     expect(reliability).toContain("RejectReplay");
     expect(reliability).toContain("different command into an idempotent success");
     // The client still must not auto-retry side effects.

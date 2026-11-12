@@ -885,7 +885,39 @@ async fn send_command(
         // without invoking the side effect a second time.
         return StatusCode::NO_CONTENT.into_response();
     }
+
+    // Home is the one command with a fully native, session-authoritative
+    // action. Perform it before the HTTP acknowledgement so a hidden or busy
+    // WebView cannot turn a real Home request into a false success.
+    let native_home = if request.command == RemoteCommand::Home {
+        let app = context.app.clone();
+        let home = tauri::async_runtime::spawn_blocking(move || {
+            crate::session_orchestrator::return_home(
+                &app,
+                crate::session_orchestrator::TransitionCause::ControlService,
+            )
+        })
+        .await;
+        match home {
+            Ok(Ok(_)) => true,
+            Ok(Err(_)) => return StatusCode::CONFLICT.into_response(),
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        }
+    } else {
+        false
+    };
+
     if context.app.emit("nexus-remote-command", request.command.clone()).is_err() {
+        // The native Home transition already happened; report it truthfully
+        // even if the WebView notification failed.
+        if native_home {
+            lock(&context.remote.inner.command_receipts).record(
+                &request.device_id,
+                request.sequence,
+                request.command.as_str(),
+            );
+            return StatusCode::NO_CONTENT.into_response();
+        }
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     lock(&context.remote.inner.command_receipts).record(

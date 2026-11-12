@@ -126,7 +126,9 @@ New server-side idempotency:
 - the same sequence with a different command is rejected;
 - a missing receipt (for example after restart) is rejected, never executed;
 - receipts are not persisted and contain no token, signature or body;
-- the PWA still never auto-retries a command with side effects.
+- the PWA still never auto-retries a command with side effects;
+- `Home` performs the native `return_home` transition before the `204`, so a
+  hidden or busy WebView cannot turn a real Home request into a false success.
 
 ## 5. DualSense and couch control
 
@@ -198,6 +200,10 @@ re-exports them, so a future Scene Engine has one stable contract.
   remote duplicate ACK, restart recovery, sleep/wake.
 - **NOT GUARANTEED:** 4K/HDR/HDCP in streaming services; VELORA reports and
   observes only.
+- **DELIBERATE:** Home from an active external session returns VELORA to Home
+  without closing the game/Edge process. Edge Cinema remains open and a second
+  launch is rejected as a duplicate; the user can Alt+Tab back. VELORA never
+  kills or closes an external window without a confirmed close request.
 - **NOT IMPLEMENTED:** new frontend redesign, Scene Engine actuation, automatic
   display/audio changes.
 

@@ -113,7 +113,7 @@ dedicated profile, close and return Home.
 | H2 | Install trust | Install profile on iPhone and manually trust it. | Safari accepts the VELORA HTTPS origin. | |
 | H3 | Pairing | Generate a one-time code and pair. | Pairing succeeds only after server confirmation; `confirmedByServer` is true. | |
 | H4 | Pairing timeout | Generate a code and wait > 60 s. | Code expires; pairing rejected; no false success. | |
-| H5 | Navigation | Use arrows/select/back/home. | UI responds once per command; Home returns to VELORA. | |
+| H5 | Navigation | Use arrows/select/back/home. | UI responds once per command; Home returns to VELORA without killing the external game/Edge process; a second Edge launch is reported as a duplicate until that window is closed. | |
 | H6 | Duplicate command | Send the same signed command twice (retry/duplicate). | Exact duplicate gets 204 ACK with no second side effect. | |
 | H7 | Replay/different command | Reuse a sequence with a different command. | Rejected (401); no execution. | |
 | H8 | Network loss | Disable Wi-Fi during a command. | PWA reports no automatic retry; no false success. | |
