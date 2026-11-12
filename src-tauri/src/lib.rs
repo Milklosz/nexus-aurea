@@ -21,10 +21,14 @@ mod remote_reliability;
 mod session_monitor;
 mod session_orchestrator;
 mod session_store;
+mod single_instance;
 mod window_broker;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if !single_instance::claim_or_activate_existing() {
+        return;
+    }
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(control_service::ControlService::default())
