@@ -59,6 +59,8 @@ export function useNavigation(
       if (document.querySelector("dialog[open]")) return;
       const target = event.target;
       if (isTextEntryTarget(target)) return;
+      // Leave OS and browser shortcuts (Ctrl+X, Alt+Left, Meta+…) to the platform.
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
 
       if (event.key === "ArrowUp") {
         if (columns !== undefined) {
@@ -86,10 +88,11 @@ export function useNavigation(
         event.preventDefault();
         focusApp(activeIndexRef.current - 1);
       } else if (event.key.toLowerCase() === "x") {
+        // One activation per physical press: holding the key must not launch repeatedly.
         event.preventDefault();
-        activateRef.current();
+        if (!event.repeat) activateRef.current();
       } else if (event.key === "F2") {
-        menuRef.current();
+        if (!event.repeat) menuRef.current();
       }
     };
 
