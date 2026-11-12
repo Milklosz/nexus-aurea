@@ -36,7 +36,7 @@ const MAX_GENERATED_AT_LEN: usize = 64;
  * ------------------------------------------------------------------------- */
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VeloraLibraryManifest {
     pub schema_version: i64,
     pub kind: String,
@@ -48,14 +48,14 @@ pub struct VeloraLibraryManifest {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ManifestExtension {
     pub id: String,
     pub version: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ManifestGame {
     pub id: String,
     pub name: String,
@@ -72,7 +72,7 @@ pub struct ManifestGame {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ManifestLaunch {
     pub kind: String,
     pub uri: String,
@@ -871,6 +871,24 @@ mod tests {
             parse(&value),
             Err(ManifestError::DuplicateGameId(_))
         ));
+    }
+
+    #[test]
+    fn unknown_fields_are_rejected_at_every_level() {
+        let mut root = valid_value();
+        root["unexpected"] = serde_json::json!(true);
+        assert!(matches!(parse(&root), Err(ManifestError::InvalidJson)));
+
+        let value = with_game_field("unexpected", serde_json::json!("x"));
+        assert!(matches!(parse(&value), Err(ManifestError::InvalidJson)));
+
+        let mut value = valid_value();
+        value["extension"]["unexpected"] = serde_json::json!("x");
+        assert!(matches!(parse(&value), Err(ManifestError::InvalidJson)));
+
+        let mut value = valid_value();
+        value["games"][0]["launch"]["unexpected"] = serde_json::json!("x");
+        assert!(matches!(parse(&value), Err(ManifestError::InvalidJson)));
     }
 
     #[test]
