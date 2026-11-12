@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { gamepadSnapshot } from "../services/gamepadSnapshot";
 import { ControlServicePanel } from "./ControlServicePanel";
+import { SystemDiagnosticsPanel } from "./SystemDiagnosticsPanel";
 import { AppManagerPanel } from "./AppManagerPanel";
 import { CinemaPanel } from "./CinemaPanel";
 import { MusicPanel } from "./MusicPanel";
@@ -109,6 +110,7 @@ export function GamepadDiagnostics({
       onOpenAppleMusic={onOpenAppleMusic}
     />
     <ControlServicePanel />
+    <SystemDiagnosticsPanel />
     <button type="button" onClick={onClose} autoFocus>Zamknij (Esc / ◯)</button>
   </dialog>;
 }

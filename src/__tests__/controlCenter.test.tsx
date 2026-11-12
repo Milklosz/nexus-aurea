@@ -26,6 +26,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../services/controlService", () => ({
   disabledControlServiceStatus: { windows: false, running: false, gameMode: false, controllerCount: 0, playstationControllerCount: 0, foregroundProcess: null, returnHotkeyRegistered: false, lastError: null },
   getControlServiceStatus: mocks.getStatus,
+  getFallbackHotkeyOptions: vi.fn(async () => []),
+  setFallbackHotkey: vi.fn(async () => ({} as never)),
 }));
 vi.mock("../services/remoteAccess", () => ({
   disabledRemoteAccessStatus: mocks.remoteStatus,

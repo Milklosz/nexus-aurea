@@ -45,6 +45,8 @@ vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => native }));
 vi.mock("../services/controlService", () => ({
   disabledControlServiceStatus: native.controlStatus,
   getControlServiceStatus: native.getControlStatus,
+  getFallbackHotkeyOptions: vi.fn(async () => []),
+  setFallbackHotkey: vi.fn(async () => native.controlStatus),
   startControlService: native.startControlService,
   setControlGameMode: native.setControlGameMode,
   stopControlService: native.stopControlService,

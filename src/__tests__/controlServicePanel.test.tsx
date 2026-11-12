@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   start: vi.fn(async () => mocks.status!),
   setGameMode: vi.fn(async (_enabled: boolean) => mocks.status!),
   stop: vi.fn(async () => mocks.status!),
+  setFallbackHotkey: vi.fn(async (_id: string) => mocks.status!),
   onStatus: null as ((status: ControlServiceStatus) => void) | null,
   onStop: null as ((reason: string) => void) | null,
   listenStatus: vi.fn(async (callback: (status: ControlServiceStatus) => void) => {
@@ -34,6 +35,11 @@ vi.mock("../services/controlService", () => ({
     lastError: null,
   },
   getControlServiceStatus: mocks.getStatus,
+  getFallbackHotkeyOptions: vi.fn(async () => [
+    { id: "ctrlAltN", label: "Ctrl+Alt+N", modifiers: 16387, virtualKey: 78 },
+    { id: "ctrlShiftN", label: "Ctrl+Shift+N", modifiers: 16390, virtualKey: 78 },
+  ]),
+  setFallbackHotkey: mocks.setFallbackHotkey,
   startControlService: mocks.start,
   setControlGameMode: mocks.setGameMode,
   stopControlService: mocks.stop,
