@@ -20,7 +20,8 @@
         "minHeight": 650,
         "resizable": true,
         "decorations": false,
-        "fullscreen": true
+        "fullscreen": true,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-gpu-compositing"
       }
     ],
     "security": {
