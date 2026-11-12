@@ -257,11 +257,13 @@ fn open_playnite_uri(uri: &str) -> Result<(), String> {
 
     let operation = HSTRING::from("open");
     let file = HSTRING::from(uri);
+    let operation = PCWSTR(operation.as_ptr());
+    let file = PCWSTR(file.as_ptr());
     let result = unsafe {
         ShellExecuteW(
             None,
-            Some(PCWSTR(operation.as_ptr())),
-            PCWSTR(file.as_ptr()),
+            operation,
+            file,
             PCWSTR::null(),
             PCWSTR::null(),
             SW_SHOWNORMAL,
