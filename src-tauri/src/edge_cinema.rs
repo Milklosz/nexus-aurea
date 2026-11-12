@@ -5,7 +5,6 @@
 //! after a VELORA restart can be adopted instead of opening a second window.
 
 use serde::{Deserialize, Serialize};
-use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
 use crate::launch_registry::{self, LaunchKind, LaunchPhase, LaunchSession, LaunchWatch};
@@ -122,13 +121,6 @@ struct EdgeSessionMarker {
     process_id: u32,
     process_created_at_100ns: u64,
     url: String,
-}
-
-fn now_seconds() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0)
 }
 
 fn sanitize_error(message: &str) -> String {
@@ -404,13 +396,6 @@ fn emit_session(app: &AppHandle, session: EdgeCinemaSession) {
     );
 }
 
-#[cfg(target_os = "windows")]
-fn current_url_for_launch(app: &AppHandle, launch_id: &str) -> Option<String> {
-    current_marker(app)
-        .filter(|marker| marker.launch_id == launch_id)
-        .map(|marker| marker.url)
-}
-
 fn current_session(app: &AppHandle) -> EdgeCinemaSession {
     #[cfg(target_os = "windows")]
     {
@@ -430,7 +415,6 @@ fn current_session(app: &AppHandle) -> EdgeCinemaSession {
                 .map(|marker| marker.url.clone());
             return session_from_launch(&launch, url, profile);
         }
-        let _ = idle_session();
         idle_session()
     }
     #[cfg(not(target_os = "windows"))]
