@@ -9,6 +9,8 @@ use tauri::State;
 #[cfg(windows)]
 use axum::http::StatusCode;
 
+use crate::remote_reliability::{classify_replay, CommandReceiptLog, ReplayDecision};
+
 #[cfg(windows)]
 const REMOTE_PORT: u16 = 47862;
 const PAIRING_TTL: Duration = Duration::from_secs(60);
@@ -120,6 +122,9 @@ struct RemoteInner {
     vault_loaded: Mutex<bool>,
     pair_attempts: Mutex<HashMap<IpAddr, RateBucket>>,
     command_attempts: Mutex<HashMap<String, RateBucket>>,
+    /// Successful command receipts for exact duplicate acknowledgement. Bounded
+    /// and in-memory; never contains a token or signature.
+    command_receipts: Mutex<CommandReceiptLog>,
 }
 
 #[derive(Clone, Default)]
@@ -584,7 +589,7 @@ impl RemoteAccess {
         sequence: u64,
         command: &RemoteCommand,
         signature: &[u8],
-    ) -> Result<(), StatusCode> {
+    ) -> Result<ReplayDecision, StatusCode> {
         use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 
         if !lock(&self.inner.status).enabled {
@@ -596,9 +601,7 @@ impl RemoteAccess {
             return Err(StatusCode::UNAUTHORIZED);
         };
         let token_bytes = URL_SAFE_NO_PAD.decode(&device.token).map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-        if !verify_command_signature(&token_bytes, device_id, sequence, command, signature)
-            || !sequence_is_fresh(device.last_sequence, sequence)
-        {
+        if !verify_command_signature(&token_bytes, device_id, sequence, command, signature) {
             return Err(StatusCode::UNAUTHORIZED);
         }
         if !allow_rate(
@@ -610,9 +613,24 @@ impl RemoteAccess {
         ) {
             return Err(StatusCode::TOO_MANY_REQUESTS);
         }
-        device.last_sequence = sequence;
-        save_vault(&vault).map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-        Ok(())
+        let decision = {
+            let receipts = lock(&self.inner.command_receipts);
+            classify_replay(
+                device.last_sequence,
+                receipts.lookup(device_id, sequence),
+                sequence,
+                command.as_str(),
+            )
+        };
+        match decision {
+            ReplayDecision::Execute => {
+                device.last_sequence = sequence;
+                save_vault(&vault).map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+                Ok(ReplayDecision::Execute)
+            }
+            ReplayDecision::AcknowledgeReplay => Ok(ReplayDecision::AcknowledgeReplay),
+            ReplayDecision::RejectReplay => Err(StatusCode::UNAUTHORIZED),
+        }
     }
 }
 
@@ -853,12 +871,28 @@ async fn send_command(
     let Ok(signature) = URL_SAFE_NO_PAD.decode(&request.signature) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    if let Err(status) = context.remote.authenticate_command(&request.device_id, request.sequence, &request.command, &signature) {
-        return status.into_response();
+    let decision = match context.remote.authenticate_command(
+        &request.device_id,
+        request.sequence,
+        &request.command,
+        &signature,
+    ) {
+        Ok(decision) => decision,
+        Err(status) => return status.into_response(),
+    };
+    if decision == ReplayDecision::AcknowledgeReplay {
+        // The exact signed command already executed. Acknowledge the replay
+        // without invoking the side effect a second time.
+        return StatusCode::NO_CONTENT.into_response();
     }
-    if context.app.emit("nexus-remote-command", request.command).is_err() {
+    if context.app.emit("nexus-remote-command", request.command.clone()).is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
+    lock(&context.remote.inner.command_receipts).record(
+        &request.device_id,
+        request.sequence,
+        request.command.as_str(),
+    );
     StatusCode::NO_CONTENT.into_response()
 }
 

@@ -1,0 +1,63 @@
+/* Kilka drobnych stylów karty Autostart — kolory dziedziczone z :root. */
+.autostart-panel .autostart-status {
+  margin: 0 0 0.6rem;
+  color: var(--cream);
+  font-weight: 600;
+}
+
+.autostart-panel .autostart-consent,
+.autostart-panel .autostart-explainer,
+.autostart-panel .autostart-session-note {
+  margin: 0 0 0.55rem;
+}
+
+.autostart-panel .autostart-consent,
+.autostart-panel .autostart-explainer {
+  color: var(--muted);
+}
+
+.autostart-panel .autostart-session-note {
+  color: var(--gold);
+}
+
+.autostart-panel code {
+  color: var(--gold);
+  font-size: 0.9em;
+}
+
+.autostart-panel .autostart-actions {
+  align-items: center;
+  margin: 0.4rem 0 0.8rem;
+}
+
+.autostart-panel .autostart-safe-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--cream);
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.autostart-panel .autostart-safe-mode input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--gold);
+}
+
+.autostart-panel .autostart-safe-mode input:disabled {
+  cursor: not-allowed;
+}
+
+/* Pusty region live jest poza ekranem, ale pozostaje w drzewie a11y. */
+.autostart-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

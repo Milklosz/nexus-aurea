@@ -322,14 +322,28 @@ fn windows_denied_result(
     }
 }
 
-#[cfg(target_os = "windows")]
 fn window_is_valid(window: u64) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        return src_window_is_valid(window);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window;
+        false
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn src_window_is_valid(window: u64) -> bool {
     native::is_window_valid(window)
 }
 
-#[cfg(not(target_os = "windows"))]
-fn window_is_valid(_window: u64) -> bool {
-    false
+/// Whether a previously observed HWND still exists. Used by Edge Cinema to
+/// distinguish "window moved to another virtual desktop / cloaked" from
+/// "window actually closed".
+pub(crate) fn is_window_alive(window: u64) -> bool {
+    window != 0 && window_is_valid(window)
 }
 
 #[cfg(target_os = "windows")]
@@ -640,6 +654,53 @@ pub(crate) fn release_process(app: &AppHandle, process_id: u32) {
     app.state::<WindowBroker>().release_process(process_id);
 }
 
+/// Ask a tracked, externally managed application window to close with WM_CLOSE.
+/// This never terminates a process and refuses VELORA's own window or a window
+/// whose PID is not currently tracked by the launch registry.
+pub(crate) fn close_tracked_window(app: &AppHandle, window: u64) -> Result<(), String> {
+    if window == 0 {
+        return Err("Nie wskazano okna do zamknięcia.".into());
+    }
+    let broker = app.state::<WindowBroker>();
+    let (own_window, tracked_processes) = {
+        let state = broker
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (
+            state.own_window,
+            state.tracked_processes.iter().copied().collect::<HashSet<_>>(),
+        )
+    };
+    if own_window == Some(window) {
+        return Err("VELORA nie zamyka własnego okna tą operacją.".into());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if !native::is_window_valid(window) {
+            return Err("Okno aplikacji już nie istnieje.".into());
+        }
+        let Some(process_id) = native::window_process_id(window) else {
+            return Err("Nie można ustalić procesu okna aplikacji.".into());
+        };
+        if process_id == std::process::id() || !tracked_processes.contains(&process_id) {
+            return Err("Okno nie należy do sesji uruchomionej przez VELORA.".into());
+        }
+        if native::request_close(window) {
+            Ok(())
+        } else {
+            Err("Windows nie przyjął żądania zamknięcia okna.".into())
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = tracked_processes;
+        Err("Zamykanie okien jest dostępne tylko w natywnej aplikacji Windows.".into())
+    }
+}
+
 pub(crate) fn windows_for_processes(
     app: &AppHandle,
     process_ids: &HashSet<u32>,
@@ -829,6 +890,7 @@ mod native {
         fn GetWindow(window: Hwnd, command: u32) -> Hwnd;
         fn ShowWindowAsync(window: Hwnd, command: i32) -> i32;
         fn SetForegroundWindow(window: Hwnd) -> i32;
+        fn PostMessageW(window: Hwnd, message: u32, wparam: usize, lparam: isize) -> i32;
         fn FlashWindowEx(info: *mut FlashInfo) -> i32;
     }
 
@@ -1058,8 +1120,15 @@ mod native {
         Some(process_id)
     }
 
-    pub(super) fn request_foreground(own_window: u64, reason: RestoreReason) -> RestoreResult {
-        let foreground_before = foreground().unwrap_or_default();
+    pub(super) fn request_close(window: u64) -> bool {
+        const WM_CLOSE: u32 = 0x0010;
+        if !is_window_valid(window) {
+            return false;
+        }
+        unsafe { PostMessageW(hwnd(window), WM_CLOSE, 0, 0) != 0 }
+    }
+
+    pub(super) fn request_foreground(own_window: u64, reason: RestoreReason) -> RestoreResult {        let foreground_before = foreground().unwrap_or_default();
         let window = hwnd(own_window);
         if unsafe { IsIconic(window) } != 0 {
             unsafe { ShowWindowAsync(window, SW_RESTORE) };

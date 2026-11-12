@@ -60,6 +60,7 @@ pub(crate) fn start(app: AppHandle) {
                     let active_launches = crate::launch_registry::handle_system_resume(&app, at_ms);
                     crate::window_broker::handle_system_resume(&app);
                     crate::session_orchestrator::reconcile_orphaned_launch(&app);
+                    crate::edge_cinema::reconcile_edge_marker(&app);
                     let event = SystemResumeEvent {
                         at_ms,
                         gap_ms: elapsed.as_millis().min(u128::from(u64::MAX)) as u64,
@@ -70,6 +71,7 @@ pub(crate) fn start(app: AppHandle) {
                     last_orphan_check = Instant::now();
                 } else if last_orphan_check.elapsed() >= ORPHAN_CHECK_INTERVAL {
                     crate::session_orchestrator::reconcile_orphaned_launch(&app);
+                    crate::edge_cinema::reconcile_edge_marker(&app);
                     last_orphan_check = Instant::now();
                 }
             }

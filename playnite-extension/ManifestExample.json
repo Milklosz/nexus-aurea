@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "kind": "velora.playnite.library-manifest",
+  "generatedAt": "2026-11-12T00:00:00Z",
+  "extension": {
+    "id": "velora-library-exporter",
+    "version": "1.0.0"
+  },
+  "source": "playnite-api",
+  "readOnly": true,
+  "games": [
+    {
+      "id": "64f78cd1-0b00-4271-a9e1-89abc55f66cc",
+      "name": "Example Game",
+      "cover": "data:image/png;base64,iVBORw0KGgo=",
+      "source": "Steam",
+      "lastPlayed": "2026-11-10T18:22:00Z",
+      "favorite": true,
+      "installed": true,
+      "playCount": 12,
+      "playtimeSeconds": 36000,
+      "launch": {
+        "kind": "playnite-uri",
+        "uri": "playnite://playnite/start/64f78cd1-0b00-4271-a9e1-89abc55f66cc"
+      }
+    },
+    {
+      "id": "a1b2c3d4-1111-2222-3333-444455556666",
+      "name": "Another Game (not installed)",
+      "cover": null,
+      "source": "manual",
+      "lastPlayed": null,
+      "favorite": false,
+      "installed": false,
+      "playCount": 0,
+      "playtimeSeconds": 0,
+      "launch": null
+    }
+  ]
+}

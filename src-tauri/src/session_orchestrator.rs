@@ -173,6 +173,9 @@ pub struct TransitionRequest {
 pub(crate) const COMMAND_TTL_MS: u64 = 10_000;
 const MAX_APPLIED_COMMANDS: usize = 64;
 const MAX_COMMAND_ID_LEN: usize = 128;
+/// A second Home request inside this window is the same user intent, not a new
+/// operation. It must not restore focus twice or emit a duplicate event.
+const HOME_DEDUPE_MS: u64 = 750;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -393,6 +396,17 @@ pub struct SessionOrchestrator {
     machine: Mutex<SessionMachine>,
     operations: Mutex<OperationRegistry>,
     last_persist_error: Mutex<Option<String>>,
+    /// Serializes the whole Home transaction (transition + one focus restore)
+    /// so simultaneous gamepad/remote/UI Home commands cannot duplicate it.
+    home_gate: Mutex<()>,
+    last_home: Mutex<Option<HomeCompletion>>,
+}
+
+#[derive(Clone)]
+struct HomeCompletion {
+    revision: u64,
+    at_ms: u64,
+    result: ReturnHomeResult,
 }
 
 impl Default for SessionOrchestrator {
@@ -401,6 +415,8 @@ impl Default for SessionOrchestrator {
             machine: Mutex::new(SessionMachine::default()),
             operations: Mutex::new(OperationRegistry::default()),
             last_persist_error: Mutex::new(None),
+            home_gate: Mutex::new(()),
+            last_home: Mutex::new(None),
         }
     }
 }
@@ -718,6 +734,28 @@ pub(crate) fn return_home(
     cause: TransitionCause,
 ) -> Result<ReturnHomeResult, SessionError> {
     let orchestrator = app.state::<SessionOrchestrator>();
+    let _gate = orchestrator
+        .home_gate
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    // Repeated Home from a gamepad chord, remote and UI at the same moment is
+    // one intent. Reuse the completed result only while VELORA is still in the
+    // same Home revision; a newer session always produces a new operation.
+    let now = now_ms();
+    {
+        let cached = orchestrator
+            .last_home
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(completion) = cached.as_ref() {
+            let current = current_snapshot(app);
+            if home_completion_is_reusable(Some(completion), &current, now) {
+                return Ok(completion.result.clone());
+            }
+        }
+    }
+
     let operation = orchestrator
         .operations
         .lock()
@@ -778,12 +816,34 @@ pub(crate) fn return_home(
         restore: restore.clone(),
     };
     let _ = app.emit(RETURN_HOME_EVENT, event);
-    Ok(ReturnHomeResult {
+    let result = ReturnHomeResult {
         session,
         restore,
         operation_id: operation.id,
         timed_out,
-    })
+    };
+    *orchestrator
+        .last_home
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(HomeCompletion {
+        revision: result.session.revision,
+        at_ms: now_ms(),
+        result: result.clone(),
+    });
+    Ok(result)
+}
+
+fn home_completion_is_reusable(
+    completion: Option<&HomeCompletion>,
+    current: &SessionSnapshot,
+    now: u64,
+) -> bool {
+    let Some(completion) = completion else {
+        return false;
+    };
+    current.current == SessionId::VeloraHome
+        && completion.revision == current.revision
+        && now.saturating_sub(completion.at_ms) <= HOME_DEDUPE_MS
 }
 
 #[tauri::command]
@@ -912,6 +972,7 @@ mod tests {
             (SessionId::Playnite, SessionId::Game),
             (SessionId::Cinema, SessionId::Game),
             (SessionId::Game, SessionId::Cinema),
+            (SessionId::Playnite, SessionId::Desktop),
         ] {
             assert!(transition_is_allowed(from, target));
             let mut state = machine();
@@ -925,6 +986,59 @@ mod tests {
             assert_eq!(snapshot.previous, Some(from));
             assert_eq!(snapshot.transitioned_at_ms, 20);
         }
+    }
+
+    #[test]
+    fn cinema_session_is_owned_by_one_launch_context_and_returns_home_on_exit() {
+        let mut state = machine();
+        let context = SessionContext::for_launch("cinema-1", Some("edge-cinema"), Some(4242));
+        let (entered, event) = state
+            .transition_at(
+                SessionId::Cinema,
+                TransitionCause::Launch,
+                Some(context),
+                1_000,
+            )
+            .unwrap();
+        assert_eq!(entered.current, SessionId::Cinema);
+        assert_eq!(
+            entered.context.as_ref().and_then(|context| context.launch_id.as_deref()),
+            Some("cinema-1")
+        );
+        assert_eq!(
+            entered.context.as_ref().and_then(|context| context.session_revision),
+            Some(entered.revision)
+        );
+        assert_eq!(event.unwrap().cause, TransitionCause::Launch);
+
+        let (ended, event) = state
+            .transition_at(
+                SessionId::VeloraHome,
+                TransitionCause::ProcessExit,
+                None,
+                2_000,
+            )
+            .unwrap();
+        assert_eq!(ended.current, SessionId::VeloraHome);
+        assert_eq!(ended.previous, Some(SessionId::Cinema));
+        assert_eq!(ended.context, None);
+        assert_eq!(ended.revision, entered.revision + 1);
+        assert_eq!(event.unwrap().cause, TransitionCause::ProcessExit);
+    }
+
+    #[test]
+    fn game_launch_and_exit_do_not_regress_the_session_revision() {
+        let mut state = machine();
+        let context = SessionContext::for_launch("game-1", Some("1091500"), Some(900));
+        let (entered, _) = state
+            .transition_at(SessionId::Game, TransitionCause::Launch, Some(context), 10)
+            .unwrap();
+        let (returned, _) = state
+            .transition_at(SessionId::VeloraHome, TransitionCause::ProcessExit, None, 20)
+            .unwrap();
+        assert_eq!(returned.revision, entered.revision + 1);
+        assert_eq!(returned.current, SessionId::VeloraHome);
+        assert!(returned.context.is_none());
     }
 
     #[test]
@@ -1177,5 +1291,59 @@ mod tests {
                 assert!(transition_is_allowed(from, *target));
             }
         }
+    }
+
+    #[test]
+    fn concurrent_home_requests_reuse_only_the_same_home_revision_within_the_window() {
+        use crate::window_broker::{ForegroundWindow, RestoreOutcome, RestoreReason, RestoreResult};
+        let snapshot = machine().snapshot();
+        let restore = RestoreResult {
+            attempted: false,
+            restored: true,
+            outcome: RestoreOutcome::AlreadyFocused,
+            reason: RestoreReason::UserRequest,
+            own_window: Some(10),
+            foreground_before: ForegroundWindow::default(),
+            foreground_after: ForegroundWindow::default(),
+            error_code: None,
+            denial: None,
+            message: "VELORA ma już fokus.".into(),
+        };
+        let result = super::ReturnHomeResult {
+            session: snapshot.clone(),
+            restore,
+            operation_id: "op-1".into(),
+            timed_out: false,
+        };
+        let completion = super::HomeCompletion {
+            revision: snapshot.revision,
+            at_ms: 1_000,
+            result,
+        };
+        assert!(super::home_completion_is_reusable(
+            Some(&completion),
+            &snapshot,
+            1_000 + super::HOME_DEDUPE_MS
+        ));
+        assert!(!super::home_completion_is_reusable(
+            Some(&completion),
+            &snapshot,
+            1_000 + super::HOME_DEDUPE_MS + 1
+        ));
+        let mut newer = snapshot.clone();
+        newer.revision = newer.revision.saturating_add(1);
+        assert!(!super::home_completion_is_reusable(
+            Some(&completion),
+            &newer,
+            1_100
+        ));
+        let mut game = snapshot.clone();
+        game.current = SessionId::Game;
+        assert!(!super::home_completion_is_reusable(
+            Some(&completion),
+            &game,
+            1_100
+        ));
+        assert!(!super::home_completion_is_reusable(None, &snapshot, 1_100));
     }
 }

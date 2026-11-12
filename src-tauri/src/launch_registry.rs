@@ -25,6 +25,7 @@ pub enum LaunchKind {
     Playnite,
     Steam,
     Game,
+    Cinema,
     ManagedApp,
 }
 
@@ -46,7 +47,7 @@ impl LaunchPhase {
         matches!(self, Self::Ended | Self::Failed | Self::Cancelled)
     }
 
-    fn is_active(self) -> bool {
+    pub(crate) fn is_active(self) -> bool {
         !self.is_terminal()
     }
 }
@@ -105,6 +106,15 @@ pub(crate) struct LaunchWatch {
     pub excluded_image_names: Vec<String>,
     pub ignore_baseline_windows: bool,
     pub session_target: Option<SessionId>,
+    /// End an active launch when the application window disappears even if a
+    /// background process lingers (Edge Cinema keeps helper processes alive).
+    pub end_on_window_gone: bool,
+    /// Count a window owned by the root process itself. Edge Cinema needs this;
+    /// Steam's root launcher must not widen the window set by default.
+    pub include_root_window: bool,
+    /// Time allowed for the first process to appear. Defaults to 60 s; Edge
+    /// Cinema can use a shorter window because a failed app launch is visible.
+    pub start_timeout_ms: u64,
     baseline_process_ids: HashSet<u32>,
     baseline_window_ids: HashSet<u64>,
     baseline_captured: bool,
@@ -137,6 +147,9 @@ impl LaunchWatch {
             excluded_image_names,
             ignore_baseline_windows,
             session_target,
+            end_on_window_gone: false,
+            include_root_window: false,
+            start_timeout_ms: START_TIMEOUT_MS,
             baseline_process_ids: HashSet::new(),
             baseline_window_ids: HashSet::new(),
             baseline_captured: false,
@@ -144,6 +157,28 @@ impl LaunchWatch {
             root_identity: None,
             root_reused: false,
         }
+    }
+
+    /// Opt in to window-close session completion. A lingering Edge browser
+    /// process must not keep VELORA in a Cinema session after its window closed.
+    pub(crate) fn detect_window_close(mut self) -> Self {
+        self.end_on_window_gone = true;
+        self
+    }
+
+    /// Count the root process's own window as the application window. Only use
+    /// this when the launch root is the real app process (Edge Cinema), not a
+    /// launcher that owns unrelated windows (Steam).
+    pub(crate) fn include_root_window(mut self) -> Self {
+        self.include_root_window = true;
+        self
+    }
+
+    /// Shorten the process-start deadline for app windows whose failure should
+    /// return the user to Home quickly.
+    pub(crate) fn with_start_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.start_timeout_ms = timeout_ms;
+        self
     }
 }
 
@@ -214,6 +249,7 @@ struct TrackedLaunch {
     session: LaunchSession,
     watch: LaunchWatch,
     absent_since_ms: Option<u64>,
+    window_absent_since_ms: Option<u64>,
 }
 
 #[derive(Default)]
@@ -288,6 +324,7 @@ fn next_launch_id(kind: LaunchKind) -> String {
         LaunchKind::Playnite => "playnite",
         LaunchKind::Steam => "steam",
         LaunchKind::Game => "game",
+        LaunchKind::Cinema => "cinema",
         LaunchKind::ManagedApp => "app",
     };
     format!(
@@ -308,6 +345,7 @@ fn same_launch_group(
         LaunchKind::Steam | LaunchKind::Game => {
             matches!(existing_kind, LaunchKind::Steam | LaunchKind::Game)
         }
+        LaunchKind::Cinema => existing_kind == LaunchKind::Cinema,
         LaunchKind::ManagedApp => {
             new_app_id.is_some() && existing_app_id == new_app_id
         }
@@ -318,6 +356,7 @@ fn session_target_for(kind: LaunchKind, explicit: Option<SessionId>) -> Option<S
     explicit.or(match kind {
         LaunchKind::Playnite => Some(SessionId::Playnite),
         LaunchKind::Steam | LaunchKind::Game => Some(SessionId::Game),
+        LaunchKind::Cinema => Some(SessionId::Cinema),
         LaunchKind::ManagedApp => None,
     })
 }
@@ -383,11 +422,21 @@ fn set_phase(
     })
 }
 
+/// A window-close terminal condition requires: no enumerated window, no
+/// foreground match, and the last known HWND no longer exists. This avoids
+/// ending a session when a window is merely cloaked or on another desktop.
+fn window_close_is_terminal(
+    no_window: bool,
+    foreground_matches: bool,
+    last_window_alive: bool,
+) -> bool {
+    no_window && !foreground_matches && !last_window_alive
+}
+
 fn advance(
     tracked: &mut TrackedLaunch,
     observation: &Observation,
-) -> Option<LaunchEvent> {
-    if tracked.session.phase.is_terminal() {
+) -> Option<LaunchEvent> {    if tracked.session.phase.is_terminal() {
         return None;
     }
     // A recycled PID is a different process. Detect it before matching
@@ -411,10 +460,22 @@ fn advance(
     }
     let matching = matching_pids(&observation.table, &tracked.watch);
     let process_running = process_is_running(&observation.table, &tracked.watch, &matching);
+    // A launch may own its root process window directly (Steam Big Picture,
+    // Edge Cinema). `matching_pids` is descendant-only for those watches, so
+    // the root must be included explicitly or its window would never count.
+    let mut window_pids = matching.clone();
+    if tracked.watch.include_root_window
+        && tracked.watch.root_counts_as_running
+        && !tracked.watch.root_reused
+    {
+        if let Some(root) = tracked.watch.root_process_id {
+            window_pids.insert(root);
+        }
+    }
     let windows = observation
         .windows
         .iter()
-        .filter(|window| matching.contains(&window.process_id))
+        .filter(|window| window_pids.contains(&window.process_id))
         .filter(|window| {
             // Ignore a window whose PID now belongs to a newer process instance.
             match (
@@ -432,16 +493,18 @@ fn advance(
                 || !tracked.watch.baseline_window_ids.contains(&window.hwnd)
         })
         .collect::<Vec<_>>();
-    let foreground_matches = observation
-        .foreground
-        .process_id
-        .is_some_and(|process_id| matching.contains(&process_id))
-        || observation
+    // Match foreground by HWND only when Windows reports one. A PID alone is
+    // not sufficient because Windows reuses PIDs and an unrelated process could
+    // inherit the number while the old HWND is gone.
+    let foreground_matches = match observation.foreground.hwnd {
+        Some(hwnd) => windows.iter().any(|window| window.hwnd == hwnd),
+        None => observation
             .foreground
-            .hwnd
-            .is_some_and(|hwnd| windows.iter().any(|window| window.hwnd == hwnd));
+            .process_id
+            .is_some_and(|process_id| window_pids.contains(&process_id)),
+    };
 
-    let mut process_ids = matching.into_iter().collect::<Vec<_>>();
+    let mut process_ids = window_pids.into_iter().collect::<Vec<_>>();
     process_ids.sort_unstable();
     tracked.session.process_ids = process_ids;
     tracked.session.foreground = foreground_matches;
@@ -451,12 +514,52 @@ fn advance(
         .or_else(|| windows.first())
         .map(|window| window.hwnd);
 
+    // Edge Cinema may keep helper/browser processes alive after the visible app
+    // window closes. For launches that opt in, a missing window is a terminal
+    // condition even while a background process still exists. A known HWND that
+    // still exists (cloaked/other virtual desktop) is not "closed".
+    if tracked.watch.end_on_window_gone && process_running {
+        let last_window_alive = tracked
+            .session
+            .window_id
+            .is_some_and(crate::window_broker::is_window_alive);
+        if window_close_is_terminal(
+            windows.is_empty(),
+            foreground_matches,
+            last_window_alive,
+        ) && matches!(
+            tracked.session.phase,
+            LaunchPhase::ProcessStarted
+                | LaunchPhase::WindowAppeared
+                | LaunchPhase::SessionActive
+        ) {
+            let absent_since = *tracked
+                .window_absent_since_ms
+                .get_or_insert(observation.at_ms);
+            let timeout = if tracked.session.phase == LaunchPhase::ProcessStarted {
+                tracked.watch.start_timeout_ms
+            } else {
+                EXIT_GRACE_MS
+            };
+            if observation.at_ms.saturating_sub(absent_since) >= timeout {
+                tracked.session.attention = Some(
+                    "Okno aplikacji zniknęło; sesja zakończona bezpiecznie.".into(),
+                );
+                return set_phase(tracked, LaunchPhase::Ended, observation.at_ms, None);
+            }
+        } else {
+            tracked.window_absent_since_ms = None;
+        }
+    } else {
+        tracked.window_absent_since_ms = None;
+    }
+
     let next = match tracked.session.phase {
         LaunchPhase::Requested => {
             if process_running {
                 Some(LaunchPhase::ProcessStarted)
             } else if observation.at_ms.saturating_sub(tracked.session.started_at_ms)
-                >= START_TIMEOUT_MS
+                >= tracked.watch.start_timeout_ms
             {
                 return set_phase(
                     tracked,
@@ -615,6 +718,7 @@ impl LaunchRegistry {
                 session: session.clone(),
                 watch,
                 absent_since_ms: None,
+                window_absent_since_ms: None,
             });
             state.retain_recent();
             state.last_error = None;
@@ -963,6 +1067,47 @@ pub(crate) fn is_launch_active(app: &AppHandle, launch_id: &str) -> bool {
         .any(|tracked| tracked.session.id == launch_id && tracked.session.phase.is_active())
 }
 
+/// Latest tracked launch for an application id, active or terminal. The Edge
+/// adapter uses this as a read-only view; it never owns the session.
+pub(crate) fn latest_launch_for_app(app: &AppHandle, app_id: &str) -> Option<LaunchSession> {
+    app.state::<LaunchRegistry>()
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .launches
+        .iter()
+        .filter(|tracked| tracked.session.app_id.as_deref() == Some(app_id))
+        .max_by_key(|tracked| tracked.session.started_at_ms)
+        .map(|tracked| tracked.session.clone())
+}
+
+/// Only an active launch may own a session. Used before starting a duplicate.
+pub(crate) fn active_launch_for_app(app: &AppHandle, app_id: &str) -> Option<LaunchSession> {
+    app.state::<LaunchRegistry>()
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .launches
+        .iter()
+        .filter(|tracked| {
+            tracked.session.app_id.as_deref() == Some(app_id)
+                && tracked.session.phase.is_active()
+        })
+        .max_by_key(|tracked| tracked.session.started_at_ms)
+        .map(|tracked| tracked.session.clone())
+}
+
+pub(crate) fn launch_by_id(app: &AppHandle, launch_id: &str) -> Option<LaunchSession> {
+    app.state::<LaunchRegistry>()
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .launches
+        .iter()
+        .find(|tracked| tracked.session.id == launch_id)
+        .map(|tracked| tracked.session.clone())
+}
+
 /// Explicit cancellation. It is idempotent for terminal launches: a repeated
 /// request returns the already-finished session instead of emitting again.
 pub(crate) fn cancel_launch(app: &AppHandle, launch_id: &str) -> Result<LaunchSession, String> {
@@ -1026,8 +1171,8 @@ pub fn get_launch_registry_status(app: AppHandle) -> LaunchRegistrySnapshot {
 mod tests {
     use super::{
         advance, apply_baseline, matching_pids, reset_resume_state, same_launch_group, set_phase,
-        ProcessTable, LaunchKind, LaunchPhase, LaunchSession, LaunchWatch, Observation,
-        TrackedLaunch, EXIT_GRACE_MS, START_TIMEOUT_MS,
+        window_close_is_terminal, ProcessTable, LaunchKind, LaunchPhase, LaunchSession, LaunchWatch,
+        Observation, TrackedLaunch, EXIT_GRACE_MS, START_TIMEOUT_MS,
     };
     use crate::process_table::ProcessIdentity;
     use crate::window_broker::{ForegroundWindow, TrackedWindow};
@@ -1073,6 +1218,7 @@ mod tests {
             },
             watch: watch(),
             absent_since_ms: None,
+            window_absent_since_ms: None,
         }
     }
 
@@ -1306,6 +1452,7 @@ mod tests {
             },
             watch,
             absent_since_ms: None,
+            window_absent_since_ms: None,
         };
         let event = advance(
             &mut session,
@@ -1344,6 +1491,219 @@ mod tests {
         assert_eq!(event.session.phase, LaunchPhase::ProcessStarted);
         assert_eq!(event.session.process_ids, vec![103]);
         assert_eq!(event.session.window_id, Some(12));
+    }
+
+    #[test]
+    fn cinema_root_window_counts_even_for_a_descendant_only_watch() {
+        let mut watch = LaunchWatch::new(
+            LaunchKind::Cinema,
+            "Edge Cinema",
+            Some("edge-cinema".into()),
+            Vec::new(),
+            Some(300),
+            true,
+            true,
+            Vec::new(),
+            true,
+            Some(crate::session_orchestrator::SessionId::Cinema),
+        )
+        .detect_window_close()
+        .include_root_window();
+        watch.baseline_captured = true;
+        let mut session = TrackedLaunch {
+            session: LaunchSession {
+                id: "cinema-1".into(),
+                kind: LaunchKind::Cinema,
+                display_name: "Edge Cinema".into(),
+                app_id: Some("edge-cinema".into()),
+                phase: LaunchPhase::Requested,
+                process_ids: Vec::new(),
+                foreground: false,
+                window_id: None,
+                started_at_ms: 1_000,
+                updated_at_ms: 1_000,
+                error: None,
+                restore: None,
+                session_revision: None,
+                pid_reuse_detected: false,
+                attention: None,
+            },
+            watch,
+            absent_since_ms: None,
+            window_absent_since_ms: None,
+        };
+        let observation = observation(
+            vec![(300, 1, "msedge.exe"), (301, 300, "msedge.exe")],
+            vec![(700, 300, "Chrome_WidgetWin_1")],
+            Some(700),
+            2_000,
+        );
+        let event = advance(&mut session, &observation).unwrap();
+        assert_eq!(event.session.phase, LaunchPhase::ProcessStarted);
+        let event = advance(&mut session, &observation).unwrap();
+        assert_eq!(event.session.phase, LaunchPhase::SessionActive);
+        assert_eq!(event.session.window_id, Some(700));
+        assert!(event.session.process_ids.contains(&300));
+        assert!(event.session.process_ids.contains(&301));
+        assert!(event.session.foreground);
+    }
+
+    #[test]
+    fn cinema_window_close_ends_a_lingering_browser_process_after_grace() {
+        let mut watch = LaunchWatch::new(
+            LaunchKind::Cinema,
+            "Edge Cinema",
+            Some("edge-cinema".into()),
+            Vec::new(),
+            Some(300),
+            true,
+            true,
+            Vec::new(),
+            true,
+            Some(crate::session_orchestrator::SessionId::Cinema),
+        )
+        .detect_window_close()
+        .include_root_window();
+        watch.baseline_captured = true;
+        let mut session = TrackedLaunch {
+            session: LaunchSession {
+                id: "cinema-2".into(),
+                kind: LaunchKind::Cinema,
+                display_name: "Edge Cinema".into(),
+                app_id: Some("edge-cinema".into()),
+                phase: LaunchPhase::SessionActive,
+                process_ids: vec![300],
+                foreground: true,
+                window_id: None,
+                started_at_ms: 1_000,
+                updated_at_ms: 1_000,
+                error: None,
+                restore: None,
+                session_revision: None,
+                pid_reuse_detected: false,
+                attention: None,
+            },
+            watch,
+            absent_since_ms: None,
+            window_absent_since_ms: None,
+        };
+        // The browser process still exists, but its visible app window is gone.
+        assert!(advance(
+            &mut session,
+            &observation(vec![(300, 1, "msedge.exe")], vec![], None, 2_000),
+        )
+        .is_none());
+        assert_eq!(session.session.phase, LaunchPhase::SessionActive);
+        let event = advance(
+            &mut session,
+            &observation(
+                vec![(300, 1, "msedge.exe")],
+                vec![],
+                None,
+                2_000 + EXIT_GRACE_MS,
+            ),
+        )
+        .unwrap();
+        assert_eq!(event.session.phase, LaunchPhase::Ended);
+        assert!(event.session.attention.is_some());
+    }
+
+    #[test]
+    fn cinema_window_reappearing_during_grace_keeps_the_session() {
+        let mut watch = LaunchWatch::new(
+            LaunchKind::Cinema,
+            "Edge Cinema",
+            Some("edge-cinema".into()),
+            Vec::new(),
+            Some(300),
+            true,
+            true,
+            Vec::new(),
+            true,
+            Some(crate::session_orchestrator::SessionId::Cinema),
+        )
+        .detect_window_close()
+        .include_root_window();
+        watch.baseline_captured = true;
+        let mut session = TrackedLaunch {
+            session: LaunchSession {
+                id: "cinema-3".into(),
+                kind: LaunchKind::Cinema,
+                display_name: "Edge Cinema".into(),
+                app_id: Some("edge-cinema".into()),
+                phase: LaunchPhase::SessionActive,
+                process_ids: vec![300],
+                foreground: true,
+                window_id: None,
+                started_at_ms: 1_000,
+                updated_at_ms: 1_000,
+                error: None,
+                restore: None,
+                session_revision: None,
+                pid_reuse_detected: false,
+                attention: None,
+            },
+            watch,
+            absent_since_ms: None,
+            window_absent_since_ms: None,
+        };
+        assert!(advance(
+            &mut session,
+            &observation(vec![(300, 1, "msedge.exe")], vec![], None, 2_000),
+        )
+        .is_none());
+        assert!(session.window_absent_since_ms.is_some());
+        advance(
+            &mut session,
+            &observation(
+                vec![(300, 1, "msedge.exe")],
+                vec![(700, 300, "Chrome_WidgetWin_1")],
+                Some(700),
+                3_000,
+            ),
+        );
+        assert!(session.window_absent_since_ms.is_none());
+        assert_eq!(session.session.phase, LaunchPhase::SessionActive);
+    }
+
+    #[test]
+    fn cinema_launches_are_not_superseded_by_generic_managed_apps() {
+        assert!(same_launch_group(
+            LaunchKind::Cinema,
+            Some("edge-cinema"),
+            LaunchKind::Cinema,
+            Some("edge-cinema"),
+        ));
+        assert!(!same_launch_group(
+            LaunchKind::Cinema,
+            Some("edge-cinema"),
+            LaunchKind::ManagedApp,
+            Some("edge"),
+        ));
+        assert!(!same_launch_group(
+            LaunchKind::ManagedApp,
+            Some("edge"),
+            LaunchKind::Cinema,
+            Some("edge-cinema"),
+        ));
+        assert_eq!(
+            super::session_target_for(
+                LaunchKind::Cinema,
+                Some(crate::session_orchestrator::SessionId::Cinema)
+            ),
+            Some(crate::session_orchestrator::SessionId::Cinema)
+        );
+    }
+
+    #[test]
+    fn window_close_requires_no_window_no_focus_and_a_dead_last_hwnd() {
+        assert!(window_close_is_terminal(true, false, false));
+        assert!(!window_close_is_terminal(false, false, false));
+        assert!(!window_close_is_terminal(true, true, false));
+        assert!(
+            !window_close_is_terminal(true, false, true),
+            "a cloaked/other-desktop window is not closed"
+        );
     }
 
     #[test]
@@ -1448,6 +1808,7 @@ mod tests {
             },
             watch,
             absent_since_ms: None,
+            window_absent_since_ms: None,
         };
         let first_identity = ProcessIdentity {
             process_id: 100,
@@ -1533,11 +1894,11 @@ mod tests {
                 is_main: true,
             }],
             foreground: ForegroundWindow {
-                hwnd: None,
-                process_id: None,
-                process_name: None,
-                class_name: None,
-                window_present: false,
+                hwnd: Some(700),
+                process_id: Some(200),
+                process_name: Some("Playnite.FullscreenApp.exe".into()),
+                class_name: Some("SDL_app".into()),
+                window_present: true,
             },
             identities: HashMap::from([(
                 200,
@@ -1551,6 +1912,14 @@ mod tests {
         let event = advance(&mut session, &observation).unwrap();
         assert_eq!(event.session.phase, LaunchPhase::ProcessStarted);
         assert_eq!(event.session.window_id, None);
+        assert!(
+            !event.session.foreground,
+            "a stale HWND must not count as the foreground window after PID reuse"
+        );
+        // A second tick with the same stale HWND still must not promote it.
+        advance(&mut session, &observation);
+        assert_eq!(session.session.phase, LaunchPhase::ProcessStarted);
+        assert!(!session.session.foreground);
     }
 
     #[test]

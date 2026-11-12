@@ -246,7 +246,7 @@ pub async fn launch_managed_app(app: AppHandle, id: String) -> Result<LaunchRece
     run_blocking_command(move || launch_managed_app_blocking(app, id)).await
 }
 
-fn launch_managed_app_blocking(app: AppHandle, id: String) -> Result<LaunchReceipt, String> {
+pub(crate) fn launch_managed_app_blocking(app: AppHandle, id: String) -> Result<LaunchReceipt, String> {
     let spec = spec_for(&id).ok_or_else(|| "Aplikacja nie znajduje się na allowliście VELORA.".to_string())?;
 
     #[cfg(target_os = "windows")]

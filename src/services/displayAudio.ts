@@ -1,61 +1,20 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type {
+  DisplayAudioSnapshot,
+  DisplayChangedEvent,
+} from "../contracts/display";
+
+export type {
+  AudioEndpointInfo,
+  AudioEndpointState,
+  DisplayAudioPolicy,
+  DisplayAudioSnapshot,
+  DisplayChangedEvent,
+  DisplayInfo,
+} from "../contracts/display";
 
 export const DISPLAY_CHANGED_EVENT = "velora-display-changed";
-
-export type AudioEndpointState =
-  | "active"
-  | "disabled"
-  | "notPresent"
-  | "unplugged"
-  | "unknown";
-
-export type DisplayInfo = {
-  id: string;
-  name: string;
-  width: number;
-  height: number;
-  refreshHz: number;
-  bitsPerPixel: number;
-  primary: boolean;
-  hdr: boolean | null;
-  hdrError: string | null;
-};
-
-export type AudioEndpointInfo = {
-  id: string;
-  name: string;
-  state: AudioEndpointState;
-  defaultDevice: boolean;
-  volumePercent: number | null;
-  muted: boolean | null;
-};
-
-export type DisplayAudioPolicy = {
-  readOnly: boolean;
-  automaticModeChanges: boolean;
-  notes: string[];
-};
-
-export type DisplayAudioSnapshot = {
-  windows: boolean;
-  supported: boolean;
-  displays: DisplayInfo[];
-  audio: AudioEndpointInfo[];
-  displayError: string | null;
-  audioError: string | null;
-  policy: DisplayAudioPolicy;
-  limitations: string[];
-  displaySignature: string;
-  capturedAtMs: number;
-};
-
-export type DisplayChangedEvent = {
-  previousSignature: string;
-  displaySignature: string;
-  displays: DisplayInfo[];
-  atMs: number;
-};
 
 export const disabledDisplayAudioStatus: DisplayAudioSnapshot = {
   windows: false,

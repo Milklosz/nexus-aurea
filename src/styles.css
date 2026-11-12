@@ -274,3 +274,70 @@
 @media (prefers-reduced-motion: reduce) {
   .control-center, .cc-panel:not([hidden]), .cc-card button { animation: none; transition: none; }
 }
+
+/* ===== AUREA Navigation v1 — 2D focus states ===== */
+/* Clear, per-source focus states layered on top of the AUREA Grand Cinema look.
+   The cinematic background (.screen/.sun/.ridge), cream typography, gold accents
+   and the translucent dock are intentionally left untouched. */
+
+/* Active grid item: gold ring + subtle lift (also driven by the .aurea-active class). */
+.app[data-aurea-focus="active"],
+.app.aurea-active {
+  border-color: var(--gold);
+  background: linear-gradient(155deg, rgba(210, 180, 132, .18), rgba(255, 255, 255, .06));
+  box-shadow: 0 0 0 2px rgba(210, 180, 132, .6), 0 0 26px rgba(210, 180, 132, .28), 0 16px 34px #0005;
+  transform: translateY(-6px) scale(1.02);
+  transition: transform .3s var(--ease), box-shadow .3s var(--ease), border-color .3s ease, background .3s ease;
+}
+
+/* Keyboard focus: enhanced gold outline. */
+.app:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 3px rgba(245, 240, 231, .22), 0 0 26px rgba(210, 180, 132, .3);
+}
+
+/* Distinguish which input source produced the focus (body[data-focus-source]). */
+[data-focus-source="keyboard"] .app:focus {
+  box-shadow: 0 0 0 2px rgba(245, 240, 231, .7), 0 16px 32px #0006;
+}
+[data-focus-source="remote"] .app:focus {
+  box-shadow: 0 0 0 2px var(--gold), 0 0 34px rgba(210, 180, 132, .45), 0 18px 36px #0006;
+}
+[data-focus-source="gamepad"] .app:focus {
+  box-shadow: 0 0 0 3px #e7c99a, 0 0 40px rgba(231, 201, 154, .5), 0 18px 36px #0006;
+}
+
+/* 2D grid items in the Playnite library and the Control Center tabs. */
+.playnite-library [data-aurea-focus="active"] {
+  outline: 2px solid var(--gold);
+  outline-offset: 3px;
+  border-color: var(--gold);
+}
+.cc-tabs button:focus-visible {
+  outline: 3px solid var(--gold);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 5px rgba(210, 180, 132, .22);
+}
+
+/* Respect reduced motion for the newly added focus transitions only. */
+@media (prefers-reduced-motion: reduce) {
+  .app[data-aurea-focus="active"],
+  .app.aurea-active,
+  .app:focus-visible,
+  [data-focus-source="keyboard"] .app:focus,
+  [data-focus-source="remote"] .app:focus,
+  [data-focus-source="gamepad"] .app:focus {
+    transition: none;
+    animation: none;
+  }
+}
+
+/* V1 integration: the Playnite library spans the full Gaming Hub grid. */
+.cc-gaming-card .gaming-hub > .playnite-library { grid-column: 1 / -1; }
+/* Align the Playnite panel's own focus marker ("true") with the gold AUREA ring. */
+.playnite-library [data-aurea-focus="true"] {
+  outline: 2px solid var(--gold);
+  outline-offset: 3px;
+  border-color: var(--gold);
+}

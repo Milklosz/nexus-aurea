@@ -1,16 +1,23 @@
 use tauri::{Emitter, Manager};
 
+mod autostart;
 mod control_service;
 mod diagnostics;
 mod display_audio;
+mod edge_cinema;
 mod remote_access;
 mod app_manager;
-mod music_service;
-mod platform_launchers;
 mod gamepad_home;
 mod launch_registry;
+mod music_service;
 mod operation_registry;
+mod platform_launchers;
+mod playnite_library;
+#[allow(dead_code)]
+mod playnite_manifest;
 mod process_table;
+#[allow(dead_code)]
+mod remote_reliability;
 mod session_monitor;
 mod session_orchestrator;
 mod session_store;
@@ -60,6 +67,20 @@ pub fn run() {
             window_broker::restore_velora_window,
             launch_registry::get_launch_registry_status,
             launch_registry::cancel_launch_session,
+            edge_cinema::launch_edge_cinema,
+            edge_cinema::get_edge_cinema_status,
+            edge_cinema::get_edge_cinema_session,
+            edge_cinema::request_edge_cinema_close,
+            edge_cinema::report_edge_cinema_exit,
+            edge_cinema::reset_edge_cinema_session,
+            autostart::get_autostart_status,
+            autostart::set_autostart_enabled,
+            autostart::get_startup_mode,
+            autostart::get_autostart_diagnostics,
+            autostart::get_autostart_recovery,
+            playnite_library::get_playnite_library,
+            playnite_library::launch_playnite_game,
+            playnite_manifest::get_playnite_manifest,
         ])
         .setup(|app| {
             #[cfg(target_os = "windows")]
@@ -72,6 +93,7 @@ pub fn run() {
                 let _ = app.emit("velora-session-recovery", recovery);
             }
             window_broker::start_foreground_monitor(app.handle().clone());
+            edge_cinema::reconcile_edge_marker(app.handle());
             display_audio::start_monitor(app.handle().clone());
             session_monitor::start(app.handle().clone());
             if std::env::args().any(|arg| arg == "--windowed") {
