@@ -8,6 +8,7 @@ import { MusicPanel } from "./MusicPanel";
 import type { CinemaProfile } from "../services/cinemaMode";
 import type { AppleMusicAction, AppleMusicStatus, SystemVolumeAction } from "../services/musicBridge";
 import {
+  controllerMappingSummary,
   resolveControllerProfile,
   type ControllerProfile,
 } from "../services/controllerEngine";
@@ -76,22 +77,33 @@ export function GamepadDiagnostics({
     const index = profiles.indexOf(profile);
     onProfileChange(profiles[(index + 1) % profiles.length]);
   };
+  // A text field to try the on-screen keyboard. VELORA has no other free-text field yet.
+  const [testText, setTestText] = useState("");
 
   return <dialog ref={dialog} className="diagnostics" onCancel={onClose} aria-labelledby="pad-title">
     <h2 id="pad-title">Diagnostyka pada PlayStation</h2>
     <p>{supported ? "Gamepad API dostępne" : "Gamepad API niedostępne"} · Połączone: {pads.length} · Fokus VELORA: {focused ? "aktywny" : "nieaktywny"}</p>
     <p>Naciśnij przycisk pada, gdy VELORA ma fokus. Windows może wykrywać urządzenie, zanim udostępni je Gamepad API.</p>
-    <p>← / → lub lewy analog porusza fokusem. ✕ wybiera, ◯ wraca, Options otwiera Control Center. F2 otwiera diagnostykę. Przytrzymanie kierunku powtarza ruch.</p>
+    <p>← / → lub lewy analog porusza fokusem, ↑ / ↓ porusza w pionie. ✕ wybiera, ◯ wraca, Options otwiera Control Center. PS + Options wraca do ekranu głównego. F2 otwiera diagnostykę.</p>
+    <p>Na polu tekstowym ✕ otwiera klawiaturę VELORA. Wstecz zamyka ją bez zmian tekstu, a fokus wraca do pola.</p>
     <button type="button" data-remote-allow="" onClick={cycleProfile}>Mapowanie: {profileLabels[profile]} · zmień</button>
+    <label className="pad-test-field">
+      <span>Pole testowe klawiatury</span>
+      <input
+        type="text"
+        aria-label="Pole testowe klawiatury VELORA"
+        maxLength={40}
+        value={testText}
+        onChange={(event) => setTestText(event.target.value)}
+      />
+    </label>
     {pads.map(pad => {
       const resolvedProfile = resolveControllerProfile(pad, profile);
-      const confirmButton = resolvedProfile === "playstation" ? 1 : 0;
-      const backButton = resolvedProfile === "playstation" ? 2 : 1;
       return <section key={pad.index}>
         <h3>#{pad.index} {pad.id}</h3>
         <p>Mapowanie API: {pad.mapping || "niestandardowe"} · Profil wejścia: {resolvedProfile ?? "nierozpoznany"}</p>
         {resolvedProfile
-          ? <p>✕ B{confirmButton} · ◯ B{backButton} · Options B9 · D-pad B14/B15 · lewy analog A0</p>
+          ? <p>{controllerMappingSummary(resolvedProfile)}</p>
           : <p>Surowe wartości poniżej; auto nie mapuje tego pada.</p>}
         <div className="pad-values">{pad.buttons.map((button, i) => <span key={i} data-pressed={button.pressed}>B{i}: {button.value.toFixed(2)} {button.pressed ? "●" : "○"}</span>)}</div>
         <p>Osie: {pad.axes.map((value, i) => "A" + i + ": " + value.toFixed(3)).join(" · ")}</p>

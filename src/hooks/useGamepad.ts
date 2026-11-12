@@ -8,9 +8,13 @@ import {
 
 export type ControllerActions = {
   move: (delta: -1 | 1) => void;
+  /** Up/Down. Optional so existing callers keep their behaviour. */
+  moveY?: (delta: -1 | 1) => void;
   confirm: () => void;
   back: () => void;
   options: () => void;
+  /** PS + Options chord. Optional so existing callers keep their behaviour. */
+  home?: () => void;
 };
 
 export function useGamepad(
@@ -37,8 +41,27 @@ export function useGamepad(
     let selectedPad = "";
     const engine = new ControllerEngine();
     const dispatch = (action: ControllerAction) => {
-      if (action.type === "move") actionsRef.current.move(action.delta);
-      else actionsRef.current[action.type]();
+      const handlers = actionsRef.current;
+      switch (action.type) {
+        case "move":
+          handlers.move(action.delta);
+          return;
+        case "moveY":
+          handlers.moveY?.(action.delta);
+          return;
+        case "confirm":
+          handlers.confirm();
+          return;
+        case "back":
+          handlers.back();
+          return;
+        case "options":
+          handlers.options();
+          return;
+        case "home":
+          handlers.home?.();
+          return;
+      }
     };
     const poll = () => {
       const focused = document.hasFocus() && document.visibilityState === "visible";

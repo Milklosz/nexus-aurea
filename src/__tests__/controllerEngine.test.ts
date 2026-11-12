@@ -86,14 +86,18 @@ describe("controller timing and focus", () => {
     const allPressed = { ...neutral, confirm: true, back: true, options: true };
     expect(engine.update(allPressed, 10, true)).toEqual([]);
     expect(engine.update(allPressed, 49, true)).toEqual([]);
+    // X and O are immediate. Options waits out the Home chord window (250 ms) so a
+    // PS + Options chord never also opens the Control Center.
     expect(engine.update(allPressed, 50, true)).toEqual([
       { type: "confirm" },
       { type: "back" },
-      { type: "options" },
     ]);
     expect(engine.update(allPressed, 100, true)).toEqual([]);
-    expect(engine.update(neutral, 110, true)).toEqual([]);
-    expect(engine.update(neutral, 150, true)).toEqual([]);
+    expect(engine.update(allPressed, 299, true)).toEqual([]);
+    expect(engine.update(allPressed, 300, true)).toEqual([{ type: "options" }]);
+    expect(engine.update(allPressed, 350, true)).toEqual([]);
+    expect(engine.update(neutral, 360, true)).toEqual([]);
+    expect(engine.update(neutral, 400, true)).toEqual([]);
   });
 
   it("resets input when the window loses focus and suppresses buttons held on return", () => {
