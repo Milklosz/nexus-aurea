@@ -56,9 +56,13 @@ wiring), `src/styles.css` (appended panels), navigation/remote tests.
 
 No conflict occurred in `app_manager.rs`, `control_service.rs`,
 `remote_access.rs`, `music_service.rs`, `public/remote/*` or capabilities, so
-P1 fixes were not reverted. `src/__tests__/remoteSecurityInvariants.test.ts`
-expected the pre-P1 Service Worker cache name; P1 intentionally bumped it to
-`…command-5`, so the invariant now asserts the current confirmed-command cache.
+P1 security fixes were not reverted. P1's Playnite focus-return logic was
+superseded by the native `WindowBroker` policy during the Core integration; the
+same restriction (desktop shell, Playnite or VELORA only) is enforced and tested
+in `window_broker::tests::automatic_restore_allows_only_shell_playnite_or_velora`.
+`src/__tests__/remoteSecurityInvariants.test.ts` expected the pre-P1 Service
+Worker cache name; P1 intentionally bumped it to `…command-5`, so the invariant
+now asserts the current confirmed-command cache.
 
 ## 4. Architectural risks found before coding
 
