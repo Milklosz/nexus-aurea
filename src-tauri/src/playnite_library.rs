@@ -106,18 +106,30 @@ fn standard_install_roots() -> Vec<PathBuf> {
     roots
 }
 
+/// Granica adaptera: preferujemy zwalidowany, tylko-do-odczytu manifest
+/// (gdy jest dostępny), w przeciwnym razie wracamy do bezpiecznego wykrycia
+/// samego pliku wykonywalnego Playnite. Nigdy nie zgadujemy metadanych gier.
 #[tauri::command]
 pub fn get_playnite_library() -> PlayniteLibrarySnapshot {
-    // Granica adaptera: źródło "playnite-api" jest zarezerwowane dla przyszłego,
-    // udokumentowanego API. W VELORA 1.0 `playnite_api_is_configured()` to stałe
-    // false, więc nigdy nie zwracamy metadanych gier.
-    if playnite_api_is_configured() {
-        return unavailable_snapshot();
-    }
-    if playnite_executable_detected() {
-        detected_snapshot()
-    } else {
-        unavailable_snapshot()
+    resolve_library_snapshot(crate::playnite_manifest::read_default_manifest().ok())
+}
+
+/// Czysty wybór snapshotu: prawdziwy, zwalidowany manifest albo bezpieczny fallback.
+pub fn resolve_library_snapshot(
+    manifest: Option<crate::playnite_manifest::VeloraLibraryManifest>,
+) -> PlayniteLibrarySnapshot {
+    match manifest {
+        Some(valid) => crate::playnite_manifest::snapshot_from_manifest(&valid),
+        None => {
+            if playnite_api_is_configured() {
+                return unavailable_snapshot();
+            }
+            if playnite_executable_detected() {
+                detected_snapshot()
+            } else {
+                unavailable_snapshot()
+            }
+        }
     }
 }
 
@@ -155,10 +167,49 @@ mod tests {
 
     #[test]
     fn command_never_invents_games() {
-        let snapshot = get_playnite_library();
+        // Deterministyczne: niezależne od ewentualnego manifestu na maszynie dev.
+        let snapshot = resolve_library_snapshot(None);
         assert!(snapshot.games.is_empty());
         assert!(snapshot.read_only);
         assert!(!snapshot.available);
+        assert!(ALLOWED_SOURCES.contains(&snapshot.source.as_str()));
+    }
+
+    #[test]
+    fn manifest_snapshot_carries_real_games() {
+        const FIXTURE: &str = r#"{
+            "schemaVersion": 1,
+            "kind": "velora.playnite.library-manifest",
+            "generatedAt": "2026-11-12T00:00:00Z",
+            "extension": { "id": "velora-library-exporter", "version": "1.0.0" },
+            "source": "playnite-api",
+            "readOnly": true,
+            "games": [
+                {
+                    "id": "64f78cd1-0b00-4271-a9e1-89abc55f66cc",
+                    "name": "Example Game",
+                    "cover": null,
+                    "source": "Steam",
+                    "lastPlayed": null,
+                    "favorite": false,
+                    "installed": true,
+                    "launch": {
+                        "kind": "playnite-uri",
+                        "uri": "playnite://playnite/start/64f78cd1-0b00-4271-a9e1-89abc55f66cc"
+                    }
+                }
+            ]
+        }"#;
+        let manifest = crate::playnite_manifest::parse_manifest(FIXTURE.as_bytes())
+            .expect("poprawny manifest testowy musi się sparsować");
+        let snapshot = resolve_library_snapshot(Some(manifest));
+        assert_eq!(snapshot.source, "playnite-api");
+        assert!(snapshot.available);
+        assert!(snapshot.read_only);
+        assert!(snapshot.reason.is_none());
+        assert_eq!(snapshot.games.len(), 1);
+        assert_eq!(snapshot.games[0].id, "64f78cd1-0b00-4271-a9e1-89abc55f66cc");
+        assert_eq!(snapshot.games[0].name, "Example Game");
         assert!(ALLOWED_SOURCES.contains(&snapshot.source.as_str()));
     }
 

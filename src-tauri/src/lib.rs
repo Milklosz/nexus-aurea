@@ -8,6 +8,10 @@ mod platform_launchers;
 mod edge_cinema;
 mod autostart;
 mod playnite_library;
+#[allow(dead_code)]
+mod playnite_manifest;
+#[allow(dead_code)]
+mod remote_reliability;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -15,6 +19,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(control_service::ControlService::default())
         .manage(remote_access::RemoteAccess::default())
+        .manage(edge_cinema::EdgeCinemaSessions::default())
         .invoke_handler(tauri::generate_handler![
             platform_launchers::get_platform_launcher_status,
             platform_launchers::launch_platform,
@@ -42,6 +47,13 @@ pub fn run() {
             autostart::set_autostart_enabled,
             autostart::get_startup_mode,
             playnite_library::get_playnite_library,
+            playnite_manifest::get_playnite_manifest,
+            edge_cinema::get_edge_cinema_session,
+            edge_cinema::request_edge_cinema_close,
+            edge_cinema::report_edge_cinema_exit,
+            edge_cinema::reset_edge_cinema_session,
+            autostart::get_autostart_diagnostics,
+            autostart::get_autostart_recovery,
         ])
         .setup(|app| {
             if std::env::args().any(|arg| arg == "--windowed") {

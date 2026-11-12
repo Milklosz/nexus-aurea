@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { playniteLaunchRef } from "../contracts";
 
 /**
  * Granica adaptera biblioteki Playnite (VELORA 1.0).
@@ -33,6 +34,39 @@ export type PlayniteLibrarySnapshot = {
 export interface PlayniteLibraryAdapter {
   read(): Promise<PlayniteLibrarySnapshot>;
 }
+
+/* ------------------------------------------------------------------------- *
+ * v1-ecosystem: bogatszy, typowany widok manifestu (ADDITIVE).
+ * Kształt zgodny z `playnite_manifest::PlayniteManifestView` (camelCase).
+ * ------------------------------------------------------------------------- */
+
+export type PlayniteManifestLaunch = {
+  kind: string;
+  uri: string;
+};
+
+export type PlayniteManifestGame = {
+  id: string;
+  name: string;
+  cover: string | null;
+  source: string;
+  lastPlayed: string | null;
+  favorite: boolean;
+  installed: boolean;
+  playCount: number;
+  playtimeSeconds: number;
+  launch: PlayniteManifestLaunch | null;
+};
+
+export type PlayniteManifestView = {
+  schemaVersion: number;
+  generatedAt: string;
+  source: string;
+  readOnly: boolean;
+  gameCount: number;
+  games: PlayniteManifestGame[];
+  diagnostics: string[];
+};
 
 const FALLBACK_REASON =
   "Brak bezpiecznego, udokumentowanego API Playnite. VELORA nie odczytuje plików bazy danych Playnite ani nie zgaduje jej struktury.";
@@ -232,4 +266,145 @@ export function moveGridFocus(index: number, key: string, columns: number, count
     default: return index;
   }
   return Math.min(Math.max(next, 0), count - 1);
+}
+
+/* ------------------------------------------------------------------------- *
+ * v1-ecosystem: typowany widok manifestu + NOWY adapter (ADDITIVE).
+ * `readPlayniteLibrary` i jego domyślny parametr pozostają BEZ ZMIAN.
+ * ------------------------------------------------------------------------- */
+
+const EXPECTED_MANIFEST_KIND = "velora.playnite.library-manifest";
+const ISO_UTC = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$/;
+
+function isCounter(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && Number.isFinite(value) && value >= 0;
+}
+
+/** Jedyna bezpieczna postać uruchomienia: uri wyprowadzone z `id` gry. */
+function isLaunchRef(value: unknown, gameId: string): value is PlayniteManifestLaunch {
+  if (!isRecord(value)) return false;
+  if (value.kind !== "playnite-uri") return false;
+  if (typeof value.uri !== "string") return false;
+  const ref = playniteLaunchRef(gameId);
+  return ref !== null && ref.kind === "playnite-uri" && value.uri === ref.target;
+}
+
+function isManifestGame(value: unknown): value is PlayniteManifestGame {
+  if (!isRecord(value)) return false;
+  if (typeof value.id !== "string" || value.id.length === 0) return false;
+  // Id musi być Guid — `playniteLaunchRef` zwraca null dla każdego innego kształtu.
+  if (playniteLaunchRef(value.id) === null) return false;
+  if (typeof value.name !== "string" || value.name.length === 0 || value.name.length > 512) return false;
+  if (value.cover !== null && typeof value.cover !== "string") return false;
+  if (typeof value.cover === "string" && sanitizeCoverSource(value.cover) === null) return false;
+  if (typeof value.source !== "string" || value.source.length > 128) return false;
+  if (value.lastPlayed !== null && typeof value.lastPlayed !== "string") return false;
+  if (typeof value.lastPlayed === "string" && (value.lastPlayed.length > 64 || !ISO_UTC.test(value.lastPlayed))) return false;
+  if (typeof value.favorite !== "boolean") return false;
+  if (typeof value.installed !== "boolean") return false;
+  if (!isCounter(value.playCount) || !isCounter(value.playtimeSeconds)) return false;
+  if (value.launch !== null && !isLaunchRef(value.launch, value.id)) return false;
+  return true;
+}
+
+/**
+ * Ścisła walidacja odpowiedzi `get_playnite_manifest`. Widok natywny nie niesie
+ * pola `kind` (jest zbudowany z już-zwalidowanego manifestu); jeśli `kind`
+ * występuje, musi być poprawne. Każde odchylenie → `null`, bez rzucania błędu.
+ */
+function validateManifestView(value: unknown): PlayniteManifestView | null {
+  if (!isRecord(value)) return null;
+  if (value.schemaVersion !== 1) return null;
+  if (value.source !== "playnite-api") return null;
+  if (value.readOnly !== true) return null;
+  if (value.kind !== undefined && value.kind !== EXPECTED_MANIFEST_KIND) return null;
+  const generatedAt: unknown = value.generatedAt;
+  if (typeof generatedAt !== "string" || generatedAt.length > 64 || !ISO_UTC.test(generatedAt)) return null;
+  if (!Array.isArray(value.games)) return null;
+  const gameCount: unknown = value.gameCount;
+  if (!isCounter(gameCount)) return null;
+  if (!Array.isArray(value.diagnostics)) return null;
+  const diagnostics: string[] = [];
+  for (const entry of value.diagnostics as unknown[]) {
+    if (typeof entry !== "string") return null;
+    diagnostics.push(entry);
+  }
+
+  const seen = new Set<string>();
+  const games: PlayniteManifestGame[] = [];
+  for (const game of value.games) {
+    if (!isManifestGame(game)) return null;
+    if (seen.has(game.id)) return null;
+    seen.add(game.id);
+    games.push(game);
+  }
+  if (games.length !== gameCount) return null;
+
+  return {
+    schemaVersion: 1,
+    generatedAt,
+    source: "playnite-api",
+    readOnly: true,
+    gameCount: games.length,
+    games,
+    diagnostics,
+  };
+}
+
+/**
+ * Nowa komenda `get_playnite_manifest` — typowany widok manifestu.
+ * W podglądzie webowym NIE woła `invoke`. Dowolna awaria (odrzucenie, zły
+ * kształt, duplikat, niebezpieczna okładka, wstrzyknięte uri) → `null`.
+ */
+export async function readPlayniteManifest(): Promise<PlayniteManifestView | null> {
+  try {
+    if (!isTauri()) return null;
+    const raw: unknown = await invoke<unknown>("get_playnite_manifest");
+    return validateManifestView(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Czysty helper: bezpieczna referencja uruchomienia wyprowadzona z `id`
+ * i ponownie zweryfikowana względem `launch.uri`. `null` przy rozbieżności.
+ */
+export function playniteLaunchRefFor(game: PlayniteManifestGame): PlayniteManifestLaunch | null {
+  const ref = playniteLaunchRef(game.id);
+  if (ref === null || ref.kind !== "playnite-uri") return null;
+  const launch = game.launch;
+  if (launch === null || launch.kind !== "playnite-uri" || launch.uri !== ref.target) return null;
+  return { kind: "playnite-uri", uri: launch.uri };
+}
+
+/**
+ * NOWY adapter (opt-in): mapuje zwalidowany widok na ISTNIEJĄCY kształt
+ * `PlayniteLibrarySnapshot` przez `normalizeSnapshot` (okładki zsanityzowane).
+ * Nie zmienia domyślnego adaptera `readPlayniteLibrary()`.
+ */
+export function createManifestPlayniteAdapter(): PlayniteLibraryAdapter {
+  return {
+    async read() {
+      const view = await readPlayniteManifest();
+      if (view === null) return unavailableSnapshot(READ_FAILURE_REASON);
+      try {
+        return normalizeSnapshot({
+          source: "playnite-api",
+          available: true,
+          reason: null,
+          games: view.games.map((game) => ({
+            id: game.id,
+            name: game.name,
+            cover: game.cover,
+            source: game.source,
+            lastPlayed: game.lastPlayed,
+          })),
+          readOnly: true,
+        });
+      } catch {
+        return unavailableSnapshot(READ_FAILURE_REASON);
+      }
+    },
+  };
 }
