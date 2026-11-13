@@ -12,6 +12,7 @@ import { StatusBar } from "./components/StatusBar";
 import { Toast } from "./components/Toast";
 import { streamingServices } from "./data/streamingServices";
 import { useClock } from "./hooks/useClock";
+import { useMusicStatusPolling } from "./hooks/useMusicStatusPolling";
 import { useGamepad, type ControllerActions } from "./hooks/useGamepad";
 import { dispatchControllerAction, isIgnoredShortcutEvent, type NavIntentHandlers } from "./services/navIntent";
 import { useControllerOwnershipSuspension } from "./hooks/useControllerOwnershipSuspension";
@@ -258,16 +259,7 @@ export default function App() {
   const refreshMusicStatus = useCallback(async () => {
     setMusicStatus(await getAppleMusicStatus());
   }, []);
-  useEffect(() => {
-    if (!diagnostics && !musicBackgroundMode && !ambientSettings.enabled) return;
-    let active = true;
-    const refresh = () => void getAppleMusicStatus().then(status => { if (active) setMusicStatus(status); }).catch(() => {
-      if (active) setMusicStatus({ ...unavailableAppleMusicStatus, windows: true, message: "Nie udało się odczytać sesji Windows SMTC." });
-    });
-    refresh();
-    const timer = window.setInterval(refresh, 2500);
-    return () => { active = false; window.clearInterval(timer); };
-  }, [ambientSettings.enabled, diagnostics, musicBackgroundMode]);
+  useMusicStatusPolling(Boolean(diagnostics || musicBackgroundMode || ambientSettings.enabled), setMusicStatus);
   const changeMusicBackgroundMode = useCallback((enabled: boolean) => {
     setMusicBackgroundMode(enabled);
     saveMusicBackgroundMode(enabled);
