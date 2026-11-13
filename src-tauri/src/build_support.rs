@@ -95,6 +95,14 @@ pub fn is_full_git_sha(value: &str) -> bool {
     (value.len() == 40 || value.len() == 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+pub fn branch_label(snapshot: &GitSnapshot) -> String {
+    match (snapshot.checkout_sha.as_ref(), snapshot.branch.as_ref()) {
+        (Some(_), Some(branch)) => branch.clone(),
+        (Some(_), None) => "detached".to_string(),
+        (None, _) => "unknown".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,6 +288,7 @@ fn main() {
         assert!(is_full_git_sha(snapshot.checkout_sha.as_deref().unwrap()));
         assert_eq!(snapshot.branch, None);
         assert_eq!(snapshot.dirty, Some(false));
+        assert_eq!(branch_label(&snapshot), "detached");
     }
 
     #[test]
@@ -331,6 +340,7 @@ fn main() {
         assert_eq!(snapshot.checkout_sha, None);
         assert_eq!(snapshot.branch, None);
         assert_eq!(snapshot.dirty, None);
+        assert_eq!(branch_label(&snapshot), "unknown");
         let _ = fs::remove_dir_all(directory);
     }
 

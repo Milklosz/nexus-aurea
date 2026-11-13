@@ -71,13 +71,13 @@ fn emit_build_provenance() {
         );
     }
 
+    let branch = build_support::branch_label(&git);
     let source_sha = expected_source_sha
         .or_else(|| git.checkout_sha.clone())
         .unwrap_or_else(|| "unknown".to_string());
     let checkout_sha = expected_checkout_sha
         .or(git.checkout_sha)
         .unwrap_or_else(|| "unknown".to_string());
-    let branch = git.branch.unwrap_or_else(|| "detached".to_string());
     let dirty = git
         .dirty
         .map(|value| value.to_string())
