@@ -15,6 +15,7 @@ import { useMusicStatusPolling } from "./hooks/useMusicStatusPolling";
 import { returnHomeFocusTarget, useReturnHomeListener } from "./hooks/useReturnHomeFocus";
 import { useGamepad, type ControllerActions } from "./hooks/useGamepad";
 import { dispatchControllerAction, isIgnoredShortcutEvent, type NavIntentHandlers } from "./services/navIntent";
+import { shouldRestoreDockFocus } from "./services/windowFocusRestore";
 import { useControllerOwnershipSuspension } from "./hooks/useControllerOwnershipSuspension";
 import { isTextEntryTarget, useNavigation } from "./hooks/useNavigation";
 import { useFocusRestoreOnClose } from "./hooks/useFocusRestoreOnClose";
@@ -340,7 +341,11 @@ export default function App() {
       if (event.key === "F3") { setDiagnostics(false); setControlCenterOpen(true); }
     };
     const restore = () => {
-      if (!diagnostics) navigation.focusApp(activeServiceRef.current);
+      // Window focus returns while an overlay may be open; the dock must not take the highlight under it.
+      const dialogOpen = document.querySelector("dialog[open]") !== null;
+      if (shouldRestoreDockFocus({ diagnosticsOpen: diagnostics, controlCenterOpen, dialogOpen })) {
+        navigation.focusApp(activeServiceRef.current);
+      }
     };
     window.addEventListener("keydown", recover);
     window.addEventListener("focus", restore);
