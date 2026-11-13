@@ -13,7 +13,7 @@ import { Toast } from "./components/Toast";
 import { streamingServices } from "./data/streamingServices";
 import { useClock } from "./hooks/useClock";
 import { useGamepad, type ControllerActions } from "./hooks/useGamepad";
-import { dispatchControllerAction, type NavIntentHandlers } from "./services/navIntent";
+import { dispatchControllerAction, isIgnoredShortcutEvent, type NavIntentHandlers } from "./services/navIntent";
 import { useControllerOwnershipSuspension } from "./hooks/useControllerOwnershipSuspension";
 import { isTextEntryTarget, useNavigation } from "./hooks/useNavigation";
 import { useFocusRestoreOnClose } from "./hooks/useFocusRestoreOnClose";
@@ -309,6 +309,9 @@ export default function App() {
   useGamepad(controllerActions, !ambient.active && !ambient.controllerSuppressed, controllerProfile, shouldSuspendControllerInput);
   useEffect(() => {
     const recover = (event: KeyboardEvent) => {
+      // OS/browser combinations (Ctrl+Escape, Alt+…) and auto-repeat of one-shot
+      // keys (F11 fullscreen toggle, Escape, F2, F3) must not trigger app actions.
+      if (isIgnoredShortcutEvent(event)) return;
       const openDialog = document.querySelector("dialog[open]");
       if (event.key === "Escape" && openDialog) {
         event.preventDefault();

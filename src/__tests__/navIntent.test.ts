@@ -4,6 +4,7 @@ import {
   intentFromController,
   intentFromKeyboard,
   intentFromRemote,
+  isIgnoredShortcutEvent,
   type NavIntent,
   type NavIntentHandlers,
 } from "../services/navIntent";
@@ -36,6 +37,32 @@ describe("keyboard intents", () => {
     expect(intentFromKeyboard(key({ key: "a" }))).toBeNull();
     expect(intentFromKeyboard(key({ key: "toString" }))).toBeNull();
     expect(intentFromKeyboard(key({ key: "Enter" }))).toBeNull();
+  });
+});
+
+describe("app shortcut guard", () => {
+  it("ignores Ctrl, Alt and Meta combinations so OS shortcuts are not hijacked", () => {
+    expect(isIgnoredShortcutEvent(key({ key: "Escape", ctrlKey: true }))).toBe(true);
+    expect(isIgnoredShortcutEvent(key({ key: "F11", altKey: true }))).toBe(true);
+    expect(isIgnoredShortcutEvent(key({ key: "F3", metaKey: true }))).toBe(true);
+    expect(isIgnoredShortcutEvent(key({ key: "ArrowLeft", altKey: true }))).toBe(true);
+  });
+
+  it("ignores auto-repeat of one-shot shortcuts so a held F11 does not flip fullscreen repeatedly", () => {
+    for (const shortcut of ["Escape", "F11", "F2", "F3"]) {
+      expect(isIgnoredShortcutEvent(key({ key: shortcut, repeat: true }))).toBe(true);
+    }
+  });
+
+  it("allows the first press of each one-shot shortcut", () => {
+    for (const shortcut of ["Escape", "F11", "F2", "F3"]) {
+      expect(isIgnoredShortcutEvent(key({ key: shortcut }))).toBe(false);
+    }
+  });
+
+  it("keeps auto-repeat for arrows and Backspace, which legitimately repeat", () => {
+    expect(isIgnoredShortcutEvent(key({ key: "ArrowDown", repeat: true }))).toBe(false);
+    expect(isIgnoredShortcutEvent(key({ key: "Backspace", repeat: true }))).toBe(false);
   });
 });
 
