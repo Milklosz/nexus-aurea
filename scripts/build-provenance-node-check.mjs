@@ -152,6 +152,7 @@ function syntheticExe(
   bytes.writeUInt32LE(0x1000, section + 12); // virtual address
   bytes.writeUInt32LE(rawSize, section + 16); // raw size
   bytes.writeUInt32LE(0x200, section + 20); // raw pointer
+  bytes.writeUInt32LE(0x60000020, section + 36); // code, executable, readable
   if (tag) bytes.write(`${MARKER}${tag}`, markerOffset, "ascii");
   extraMarkers.forEach(([offset, extraTag]) => bytes.write(`${MARKER}${extraTag}`, offset, "ascii"));
   return bytes;
@@ -160,6 +161,15 @@ function syntheticExe(
 /** The installer stub: a 32-bit EXE with data appended after the last section (the NSIS overlay). */
 function syntheticInstaller() {
   return Buffer.concat([syntheticExe(null, { machine: I386, seed: 21 }), Buffer.from("appended installer data")]);
+}
+
+/** An NSIS uninstaller: the installer's own stub code with its own appended script data. */
+function syntheticUninstaller({ signature = true, seed = 21, machine = I386, dll = false, extra = 0 } = {}) {
+  return Buffer.concat([
+    syntheticExe(null, { machine, seed, dll }),
+    Buffer.from(signature ? "NullsoftInst uninstaller script data" : "uninstaller script data"),
+    Buffer.alloc(extra),
+  ]);
 }
 
 const POLICY = PAYLOAD_POLICIES.get("2.12.4");
@@ -506,6 +516,52 @@ test("every unexpected, modified or missing payload file is rejected", async () 
   }
 });
 
+test("an uninstall.exe is accepted only as the installer's own NSIS stub", async () => {
+  const installer = syntheticInstaller();
+  const policy = syntheticPayloadPolicy();
+  const inspect = (directory, installerBytes = installer) =>
+    inspectNsisPayload(directory, policy, { machine: AMD64, installerBytes });
+  const withUninstaller = async (bytes, name = "uninstall.exe") => {
+    const directory = await writeExtractedPayload("payload-uninstaller");
+    await writeFile(path.join(directory, name), bytes);
+    return directory;
+  };
+
+  // The real shape: same code as the installer, its own appended data.
+  const accepted = await inspect(await withUninstaller(syntheticUninstaller()));
+  assert.ok(accepted.executables.includes("uninstall.exe"));
+  assert.equal(accepted.fileCount, 8);
+  // The extractor may list it in any letter case.
+  await inspect(await withUninstaller(syntheticUninstaller(), "UNINSTALL.EXE"));
+  // Optional: older 7-Zip versions do not list it at all (the plain payload test above).
+
+  const notStub = Buffer.from(syntheticUninstaller());
+  const console3 = syntheticUninstaller();
+  console3.writeUInt16LE(3, OPTIONAL_OFFSET + 68); // console subsystem
+  const rejected = [
+    ["a different program named uninstall.exe", syntheticUninstaller({ seed: 5 }), /not the installer's NSIS stub/],
+    ["the installer's code without the NSIS signature", syntheticUninstaller({ signature: false }), /NSIS header signature/],
+    ["a 64-bit EXE named uninstall.exe", syntheticUninstaller({ machine: AMD64 }), /expected 0x14c/],
+    ["a DLL named uninstall.exe", syntheticUninstaller({ dll: true }), /DLL, not an application/],
+    ["a console program named uninstall.exe", console3, /not a GUI program/],
+    ["an oversized uninstall.exe", syntheticUninstaller({ extra: 300 * 1024 }), /larger than an NSIS uninstaller stub/],
+    ["text named uninstall.exe", Buffer.from("MZ plain text ".repeat(100)), /not a valid Windows executable/],
+    ["a corrupt PE named uninstall.exe", (() => { notStub.writeUInt32LE(0x7fffffff, 0x3c); return notStub; })(), /outside the file/],
+  ];
+  for (const [label, bytes, pattern] of rejected) {
+    await assert.rejects(inspect(await withUninstaller(bytes)), pattern, label);
+  }
+
+  // An uninstaller cannot be vouched for without the installer it belongs to.
+  await assert.rejects(inspect(await withUninstaller(syntheticUninstaller()), null), /without the installer/);
+  // Only the root uninstall.exe is expected: another location or name is just another executable.
+  const nested = await writeExtractedPayload("payload-uninstaller-nested");
+  await mkdir(path.join(nested, "bin"));
+  await writeFile(path.join(nested, "bin", "uninstall.exe"), syntheticUninstaller());
+  await assert.rejects(inspect(nested), /Unexpected executable.*bin\/uninstall\.exe/);
+  await assert.rejects(inspect(await withUninstaller(syntheticUninstaller(), "uninstall2.exe")), /Unexpected executable.*uninstall2\.exe/);
+});
+
 test("a link in the extracted payload is refused", async (context) => {
   const directory = await writeExtractedPayload("payload-link");
   try {
@@ -532,6 +588,7 @@ test("manifest creation and verification inspect the whole extracted installer",
   await withSyntheticPolicy(async () => {
     const build = await prepareBuild("payload-e2e");
     const extractedDir = await writeExtractedPayload("payload-e2e-dir");
+    await writeFile(path.join(extractedDir, "uninstall.exe"), syntheticUninstaller());
     const { packagedPayloadPath: _unused, ...rest } = build.files;
     const files = { ...rest, extractedDir };
     const manifest = await createManifest({ ...files, env: build.env, tools: TOOLS, requireTools: true, now: new Date("2026-11-13T12:00:00Z") });
@@ -553,6 +610,11 @@ test("manifest creation and verification inspect the whole extracted installer",
       verifyManifest({ manifest, ...rest, extractedDir, packagedPayloadPath: path.join(extractedDir, "nexus-aurea.exe"), env: build.env, collect: build.collect, now: build.now }),
       /exactly one of/,
     );
+
+    // An uninstall.exe that is not the installer's stub makes verification fail.
+    await writeFile(path.join(extractedDir, "uninstall.exe"), syntheticUninstaller({ seed: 5 }));
+    await assert.rejects(createManifest({ ...files, env: build.env, tools: TOOLS }), /not the installer's NSIS stub/);
+    await writeFile(path.join(extractedDir, "uninstall.exe"), syntheticUninstaller());
 
     // An extra EXE with a different name makes both creation and verification fail.
     await writeFile(path.join(extractedDir, "$PLUGINSDIR", "helper.exe"), syntheticExe(null, { seed: 3 }));
