@@ -1,3 +1,5 @@
+import { normalizeGamepad } from "./controllerInput";
+
 export type ControllerProfile = "auto" | "standard" | "playstation";
 export type ControllerAction =
   | { type: "move"; delta: -1 | 1 }
@@ -39,11 +41,6 @@ export function resolveControllerProfile(
   return isPlayStationId(pad.id) ? "playstation" : null;
 }
 
-function isPressed(pad: Gamepad, index: number): boolean {
-  const button = pad.buttons[index];
-  return Boolean(button && (button.pressed || button.value >= 0.7));
-}
-
 export function readControllerSample(
   pad: Gamepad | null | undefined,
   preference: ControllerProfile = "auto",
@@ -52,25 +49,19 @@ export function readControllerSample(
   const profile = resolveControllerProfile(pad, preference);
   if (!profile) return null;
 
-  const confirmButton = profile === "standard" ? 0 : 1;
-  const backButton = profile === "standard" ? 1 : 2;
-  const axisX = pad.axes[0] ?? 0;
-  const axisY = pad.axes[1] ?? 0;
-  // Standard buttons 12/13 are D-pad up/down. In the raw PlayStation layout
-  // button 12 is the PS button, so D-pad vertical is read only from the standard
-  // mapping; the left stick Y covers vertical input on both profiles.
-  const standardDpad = profile === "standard";
+  // Raw layouts differ (standard buttons, Sony hat on axis 9); normalizeGamepad hides that.
+  const input = normalizeGamepad(pad, profile);
   return {
     connected: true,
-    dpadLeft: isPressed(pad, 14),
-    dpadRight: isPressed(pad, 15),
-    axisX: Number.isFinite(axisX) ? axisX : 0,
-    confirm: isPressed(pad, confirmButton),
-    back: isPressed(pad, backButton),
-    options: isPressed(pad, 9),
-    dpadUp: standardDpad && isPressed(pad, 12),
-    dpadDown: standardDpad && isPressed(pad, 13),
-    axisY: Number.isFinite(axisY) ? axisY : 0,
+    dpadLeft: input.dpad.left,
+    dpadRight: input.dpad.right,
+    dpadUp: input.dpad.up,
+    dpadDown: input.dpad.down,
+    axisX: input.stick.x,
+    axisY: input.stick.y,
+    confirm: input.buttons.confirm,
+    back: input.buttons.back,
+    options: input.buttons.options,
   };
 }
 
