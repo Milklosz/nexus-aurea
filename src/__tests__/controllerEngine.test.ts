@@ -51,8 +51,9 @@ describe("PlayStation and standard controller mappings", () => {
   it("maps raw Sony layouts and allows forcing either profile", () => {
     const source = pad("", "Wireless Controller (054c)");
     expect(resolveControllerProfile(source, "auto")).toBe("playstation");
-    expect(readControllerSample(press(source, 1))?.confirm).toBe(true);
-    expect(readControllerSample(press(source, 2))?.back).toBe(true);
+    // DualSense: Cross (0) confirms, Circle (1) goes back.
+    expect(readControllerSample(press(source, 0))?.confirm).toBe(true);
+    expect(readControllerSample(press(source, 1))?.back).toBe(true);
     expect(readControllerSample(press(source, 9))?.options).toBe(true);
     expect(resolveControllerProfile({ id: "Unknown pad", mapping: "" }, "auto")).toBeNull();
     expect(resolveControllerProfile({ id: "Unknown pad", mapping: "" }, "standard")).toBe("standard");
