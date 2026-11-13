@@ -122,12 +122,14 @@ describe("iPhone Remote security regression guard", () => {
 });
 
 describe("iPhone Remote credential-state invariants (S0 audit F01/F02)", () => {
+  // The checkout may use CRLF line endings (Windows CI); search normalised text.
+  const source = rust.replace(/\r\n/g, "\n");
   const section = (from: string, to: string) => {
-    const start = rust.indexOf(from);
+    const start = source.indexOf(from);
     expect(start).toBeGreaterThan(-1);
-    const end = rust.indexOf(to, start);
+    const end = source.indexOf(to, start);
     expect(end).toBeGreaterThan(start);
-    return rust.slice(start, end);
+    return source.slice(start, end);
   };
 
   it("takes the cross-process lock and re-reads the store before every state write", () => {
