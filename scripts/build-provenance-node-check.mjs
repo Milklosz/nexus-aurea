@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
@@ -9,7 +10,9 @@ import {
   TOOL_PATTERNS,
   buildLocationOf,
   createManifest,
-  findSinglePackagedExecutable,
+  assertApplicationExecutable,
+  inspectNsisPayload,
+  parsePortableExecutable,
   inspectSource,
   parseLinkerProbe,
   payloadPolicyFor,
@@ -102,19 +105,61 @@ const TOOLS = {
 const MARKER = "__TAURI_BUNDLE_TYPE_VAR_";
 const MARKER_OFFSET = 1000;
 
-/** A synthetic "PE": MZ header, deterministic filler and one bundle-type marker. */
-function syntheticExe(tag = "UNK", { size = 4096, markerOffset = MARKER_OFFSET, extraMarkers = [], seed = 7 } = {}) {
+// Layout of the synthetic PE below (all offsets are what the strict parser reads).
+const PE_OFFSET = 0x80;
+const COFF_OFFSET = PE_OFFSET + 4;
+const OPTIONAL_OFFSET = COFF_OFFSET + 20;
+const AMD64 = 0x8664;
+const I386 = 0x14c;
+
+/**
+ * A structurally valid synthetic PE: DOS header, PE signature, COFF header,
+ * Optional Header (PE32+ for 64-bit machines, PE32 otherwise), one section that
+ * holds deterministic filler and an optional bundle-type marker.
+ */
+function syntheticExe(
+  tag = "UNK",
+  { size = 4096, markerOffset = MARKER_OFFSET, extraMarkers = [], seed = 7, machine = AMD64, dll = false } = {},
+) {
   const bytes = Buffer.alloc(size);
   let state = seed;
-  for (let index = 0; index < size; index += 1) {
+  for (let index = 0x200; index < size; index += 1) {
     state = (state * 1103515245 + 12345) & 0x7fffffff;
     bytes[index] = 0x30 + (state % 40); // printable, never contains the marker prefix
   }
-  bytes[0] = 0x4d;
-  bytes[1] = 0x5a;
+  const pe32Plus = machine !== I386;
+  const optionalSize = (pe32Plus ? 112 : 96) + 16 * 8;
+  const rawSize = size - 0x200;
+  const imageSize = 0x1000 + Math.ceil(rawSize / 0x1000) * 0x1000;
+  bytes.write("MZ", 0, "ascii");
+  bytes.writeUInt32LE(PE_OFFSET, 0x3c);
+  bytes.write("PE\0\0", PE_OFFSET, "latin1");
+  bytes.writeUInt16LE(machine, COFF_OFFSET);
+  bytes.writeUInt16LE(1, COFF_OFFSET + 2); // sections
+  bytes.writeUInt16LE(optionalSize, COFF_OFFSET + 16);
+  bytes.writeUInt16LE(0x0002 | (dll ? 0x2000 : 0), COFF_OFFSET + 18);
+  bytes.writeUInt16LE(pe32Plus ? 0x20b : 0x10b, OPTIONAL_OFFSET);
+  bytes.writeUInt32LE(0x1000, OPTIONAL_OFFSET + 16); // entry point
+  bytes.writeUInt32LE(0x1000, OPTIONAL_OFFSET + 32); // section alignment
+  bytes.writeUInt32LE(0x200, OPTIONAL_OFFSET + 36); // file alignment
+  bytes.writeUInt32LE(imageSize, OPTIONAL_OFFSET + 56);
+  bytes.writeUInt32LE(0x200, OPTIONAL_OFFSET + 60); // size of headers
+  bytes.writeUInt16LE(2, OPTIONAL_OFFSET + 68); // GUI subsystem
+  bytes.writeUInt32LE(16, OPTIONAL_OFFSET + (pe32Plus ? 108 : 92)); // data directories
+  const section = OPTIONAL_OFFSET + optionalSize;
+  bytes.write(".text", section, "ascii");
+  bytes.writeUInt32LE(rawSize, section + 8); // virtual size
+  bytes.writeUInt32LE(0x1000, section + 12); // virtual address
+  bytes.writeUInt32LE(rawSize, section + 16); // raw size
+  bytes.writeUInt32LE(0x200, section + 20); // raw pointer
   if (tag) bytes.write(`${MARKER}${tag}`, markerOffset, "ascii");
   extraMarkers.forEach(([offset, extraTag]) => bytes.write(`${MARKER}${extraTag}`, offset, "ascii"));
   return bytes;
+}
+
+/** The installer stub: a 32-bit EXE with data appended after the last section (the NSIS overlay). */
+function syntheticInstaller() {
+  return Buffer.concat([syntheticExe(null, { machine: I386, seed: 21 }), Buffer.from("appended installer data")]);
 }
 
 const POLICY = PAYLOAD_POLICIES.get("2.12.4");
@@ -132,7 +177,7 @@ async function prepareBuild(label, { pullRequest = true } = {}) {
   const installerPath = path.join(outputs, "VELORA_0.9.2_x64-setup.exe");
   const payloadPath = path.join(releaseDirectory, "nexus-aurea.exe");
   const packagedPayloadPath = path.join(outputs, "extracted", "nexus-aurea.exe");
-  await writeFile(installerPath, Buffer.from("synthetic installer bytes"));
+  await writeFile(installerPath, syntheticInstaller());
   await writeFile(payloadPath, syntheticExe("UNK"));
   await writeFile(packagedPayloadPath, syntheticExe("NSS"));
   const checkoutSha = inspectSource(repo).checkoutSha;
@@ -278,8 +323,8 @@ test("payload relation rejects an unrelated file, a modified EXE and every other
   const rejects = (label, builtBytes, packagedBytes, pattern) =>
     assert.throws(() => verifyPayloadRelation(builtBytes, packagedBytes, POLICY), pattern, label);
 
-  rejects("a text file as the built EXE", Buffer.from("this is only text, not an executable ".repeat(200)), packaged, /not a Windows executable/);
-  rejects("a text file as the packaged EXE", built, Buffer.from("this is only text, not an executable ".repeat(200)), /not a Windows executable/);
+  rejects("a text file as the built EXE", Buffer.from("this is only text, not an executable ".repeat(200)), packaged, /not a valid Windows executable/);
+  rejects("a text file as the packaged EXE", built, Buffer.from("this is only text, not an executable ".repeat(200)), /not a valid Windows executable/);
   rejects("a different EXE with the same marker rule", syntheticExe("UNK", { seed: 99 }), packaged, /outside the allowed bundle-type marker/);
 
   const modifiedCode = Buffer.from(packaged);
@@ -289,7 +334,7 @@ test("payload relation rejects an unrelated file, a modified EXE and every other
   modifiedResource[4000] ^= 0x01;
   rejects("a modified byte at the very end", modifiedResource, packaged, /outside the allowed bundle-type marker/);
 
-  rejects("a truncated payload", built, packaged.subarray(0, 4000), /differ in size/);
+  rejects("a truncated payload", built, packaged.subarray(0, 4000), /raw data lies outside the file|differ in size/);
   rejects("an appended payload", built, Buffer.concat([packaged, Buffer.from("x")]), /differ in size/);
   rejects("no marker in the packaged EXE", built, syntheticExe(null), /exactly one bundle-type marker/);
   rejects("no marker in the built EXE", syntheticExe(null), packaged, /exactly one bundle-type marker/);
@@ -309,15 +354,224 @@ test("an unknown Tauri CLI version or a missing tool has no payload policy", () 
   assert.throws(() => payloadPolicyFor("invented"), /No reviewed payload transformation policy/);
 });
 
-test("exactly one packaged EXE must exist in the extracted installer", async () => {
-  const parent = await temporaryDirectory("extraction");
-  await mkdir(path.join(parent, "$PLUGINSDIR"), { recursive: true });
-  await assert.rejects(findSinglePackagedExecutable(parent), /found 0/);
-  await writeFile(path.join(parent, "nexus-aurea.exe"), syntheticExe("NSS"));
-  assert.equal(path.basename(await findSinglePackagedExecutable(parent)), "nexus-aurea.exe");
-  await mkdir(path.join(parent, "second"), { recursive: true });
-  await writeFile(path.join(parent, "second", "NEXUS-AUREA.EXE"), syntheticExe("NSS"));
-  await assert.rejects(findSinglePackagedExecutable(parent), /found 2/);
+// ---------------------------------------------------------------------------
+// PE structure (N02)
+// ---------------------------------------------------------------------------
+
+test("well-formed PE files are accepted: 64-bit EXE, 32-bit EXE, DLL and an installer with appended data", () => {
+  const exe = parsePortableExecutable(syntheticExe("NSS"), "exe");
+  assert.deepEqual([exe.machine, exe.isDll, exe.isPe32Plus, exe.sectionCount], [AMD64, false, true, 1]);
+  const exe32 = parsePortableExecutable(syntheticExe(null, { machine: I386 }), "exe32");
+  assert.deepEqual([exe32.machine, exe32.isPe32Plus], [I386, false]);
+  assert.equal(parsePortableExecutable(syntheticExe(null, { dll: true }), "dll").isDll, true);
+  const installer = syntheticInstaller();
+  assert.ok(parsePortableExecutable(installer, "installer").overlayOffset < installer.length);
+  assert.equal(assertApplicationExecutable(syntheticExe("NSS"), "exe", AMD64).machine, AMD64);
+});
+
+/** Each case patches the header of a valid PE; every one must be refused. */
+const BAD_PE = [
+  ["only an MZ signature", () => Buffer.concat([Buffer.from("MZ"), Buffer.alloc(0x100)]), /overlaps the DOS header/],
+  ["MZ followed by text", () => Buffer.concat([Buffer.from("MZ"), Buffer.from("not a real executable ".repeat(40))]), /outside the file|PE signature|overlaps/],
+  ["no MZ signature", (b) => { b[0] = 0x50; return b; }, /missing MZ/],
+  ["a file shorter than the DOS header", (b) => b.subarray(0, 0x30), /DOS header/],
+  ["e_lfanew inside the DOS header", (b) => { b.writeUInt32LE(0x20, 0x3c); return b; }, /overlaps the DOS header/],
+  ["e_lfanew beyond the end of the file", (b) => { b.writeUInt32LE(b.length + 100, 0x3c); return b; }, /outside the file/],
+  ["e_lfanew of 0xffffffff", (b) => { b.writeUInt32LE(0xffffffff, 0x3c); return b; }, /outside the file/],
+  ["e_lfanew pointing at filler instead of PE\\0\\0", (b) => { b.writeUInt32LE(0x400, 0x3c); return b; }, /PE signature/],
+  ["a damaged PE signature", (b) => { b[PE_OFFSET + 2] = 0x58; return b; }, /PE signature/],
+  ["truncated inside the COFF header", (b) => b.subarray(0, PE_OFFSET + 10), /outside the file/],
+  ["truncated inside the Optional Header", (b) => b.subarray(0, OPTIONAL_OFFSET + 40), /Optional Header/],
+  ["truncated inside the section table", (b) => b.subarray(0, OPTIONAL_OFFSET + 240 + 20), /section table/],
+  ["truncated section data", (b) => b.subarray(0, 0x300), /raw data lies outside the file/],
+  ["an unknown machine type", (b) => { b.writeUInt16LE(0x1234, COFF_OFFSET); return b; }, /unsupported machine/],
+  ["zero sections", (b) => { b.writeUInt16LE(0, COFF_OFFSET + 2); return b; }, /section count/],
+  ["97 sections", (b) => { b.writeUInt16LE(97, COFF_OFFSET + 2); return b; }, /section count/],
+  ["not marked as an executable image", (b) => { b.writeUInt16LE(0x0000, COFF_OFFSET + 18); return b; }, /not marked as an executable/],
+  ["an Optional Header size of zero", (b) => { b.writeUInt16LE(0, COFF_OFFSET + 16); return b; }, /Optional Header is missing/],
+  ["an Optional Header size past the end of the file", (b) => { b.writeUInt16LE(0xfff0, COFF_OFFSET + 16); return b; }, /outside the file/],
+  ["an Optional Header shorter than its fixed part", (b) => { b.writeUInt16LE(60, COFF_OFFSET + 16); return b; }, /shorter than its fixed part/],
+  ["an unknown Optional Header magic", (b) => { b.writeUInt16LE(0x0107, OPTIONAL_OFFSET); return b; }, /Optional Header magic/],
+  ["a PE32 header on a 64-bit machine", (b) => { b.writeUInt16LE(0x10b, OPTIONAL_OFFSET); return b; }, /does not match the machine/],
+  ["17 data directories", (b) => { b.writeUInt32LE(17, OPTIONAL_OFFSET + 108); return b; }, /data directory table/],
+  ["a file alignment of zero", (b) => { b.writeUInt32LE(0, OPTIONAL_OFFSET + 36); return b; }, /file alignment/],
+  ["a file alignment that is not a power of two", (b) => { b.writeUInt32LE(0x300, OPTIONAL_OFFSET + 36); return b; }, /file alignment/],
+  ["a section alignment below the file alignment", (b) => { b.writeUInt32LE(0x100, OPTIONAL_OFFSET + 32); return b; }, /section alignment/],
+  ["a size of image that is not section aligned", (b) => { b.writeUInt32LE(0x2345, OPTIONAL_OFFSET + 56); return b; }, /size of image/],
+  ["a size of headers that does not cover the section table", (b) => { b.writeUInt32LE(0x100, OPTIONAL_OFFSET + 60); return b; }, /size of headers/],
+  ["a console-less native subsystem on an EXE", (b) => { b.writeUInt16LE(1, OPTIONAL_OFFSET + 68); return b; }, /subsystem/],
+  ["an entry point outside every section", (b) => { b.writeUInt32LE(0x50000, OPTIONAL_OFFSET + 16); return b; }, /entry point/],
+  ["a zero entry point on an EXE", (b) => { b.writeUInt32LE(0, OPTIONAL_OFFSET + 16); return b; }, /entry point/],
+  ["a section outside the image", (b) => { b.writeUInt32LE(0x40000, OPTIONAL_OFFSET + 240 + 12); return b; }, /outside the image/],
+  ["a section whose raw data starts inside the headers", (b) => { b.writeUInt32LE(0x40, OPTIONAL_OFFSET + 240 + 20); return b; }, /raw data lies outside the file/],
+  ["a section whose raw data runs past the file", (b) => { b.writeUInt32LE(0x100000, OPTIONAL_OFFSET + 240 + 16); return b; }, /outside the (file|image)/],
+];
+
+test("corrupt, truncated and merely MZ-prefixed files are rejected with a specific reason", () => {
+  for (const [label, damage, pattern] of BAD_PE) {
+    const damaged = damage(syntheticExe("NSS"));
+    assert.throws(() => parsePortableExecutable(damaged, "payload"), pattern, label);
+    assert.throws(() => assertApplicationExecutable(damaged, "payload"), pattern, `${label} (as application EXE)`);
+  }
+  assert.throws(() => assertApplicationExecutable(syntheticExe(null, { dll: true }), "payload"), /DLL, not an application/);
+  assert.throws(() => assertApplicationExecutable(syntheticExe(null, { machine: I386 }), "payload", AMD64), /expected 0x8664/);
+  assert.throws(() => verifyPayloadRelation(syntheticExe("UNK"), syntheticExe("NSS", { dll: true }), POLICY), /DLL, not an application/);
+  assert.throws(
+    () => verifyPayloadRelation(syntheticExe("UNK"), syntheticExe("NSS"), POLICY, { machine: I386 }),
+    /expected 0x14c/,
+  );
+});
+
+test("a DLL may have a zero entry point; an EXE may not", () => {
+  const dll = syntheticExe(null, { dll: true });
+  dll.writeUInt32LE(0, OPTIONAL_OFFSET + 16);
+  assert.equal(parsePortableExecutable(dll, "dll").entryPoint, 0);
+});
+
+// ---------------------------------------------------------------------------
+// NSIS payload: the complete executable list (N02)
+// ---------------------------------------------------------------------------
+
+const LIBRARY_NAMES = ["nsDialogs.dll", "NSISdl.dll", "nsis_tauri_utils.dll", "StartMenu.dll", "System.dll"];
+
+/** A policy that pins the synthetic plugin DLLs, so the real rules run on controlled files. */
+function syntheticPayloadPolicy() {
+  const libraries = new Map();
+  LIBRARY_NAMES.forEach((name, index) => {
+    const bytes = syntheticExe(null, { dll: true, machine: I386, seed: 100 + index });
+    libraries.set(`$pluginsdir/${name.toLowerCase()}`, createHash("sha256").update(bytes).digest("hex"));
+  });
+  return { ...POLICY, payloadLibraries: libraries };
+}
+
+/** A payload shaped like the real extraction: root EXE, five plugin DLLs, one bitmap. */
+async function writeExtractedPayload(label) {
+  const directory = await temporaryDirectory(label);
+  await mkdir(path.join(directory, "$PLUGINSDIR"), { recursive: true });
+  await writeFile(path.join(directory, "nexus-aurea.exe"), syntheticExe("NSS"));
+  for (const [index, name] of LIBRARY_NAMES.entries()) {
+    await writeFile(
+      path.join(directory, "$PLUGINSDIR", name),
+      syntheticExe(null, { dll: true, machine: I386, seed: 100 + index }),
+    );
+  }
+  await writeFile(path.join(directory, "$PLUGINSDIR", "modern-wizard.bmp"), Buffer.from("BM synthetic bitmap"));
+  return directory;
+}
+
+test("a payload with exactly the reviewed executables is accepted", async () => {
+  const directory = await writeExtractedPayload("payload-valid");
+  const result = await inspectNsisPayload(directory, syntheticPayloadPolicy(), { machine: AMD64 });
+  assert.equal(path.basename(result.executablePath), "nexus-aurea.exe");
+  assert.equal(result.fileCount, 7);
+  assert.equal(result.executables.length, 6);
+});
+
+test("the pinned policy lists exactly the executables seen in real PR #50 installers", () => {
+  assert.equal(POLICY.payloadExecutable, "nexus-aurea.exe");
+  assert.deepEqual(
+    [...POLICY.payloadLibraries.keys()].sort(),
+    LIBRARY_NAMES.map((name) => `$pluginsdir/${name.toLowerCase()}`).sort(),
+  );
+  for (const hash of POLICY.payloadLibraries.values()) assert.match(hash, /^[0-9a-f]{64}$/);
+});
+
+/** Each case adds, changes or removes one file of an otherwise valid payload. */
+const PAYLOAD_TAMPERING = [
+  ["an extra EXE under another name at the root", async (d) => writeFile(path.join(d, "helper.exe"), syntheticExe(null, { seed: 3 })), /Unexpected executable.*helper\.exe/],
+  ["an extra EXE with an innocent text name", async (d) => writeFile(path.join(d, "readme.txt"), syntheticExe(null, { seed: 3 })), /Unexpected executable.*readme\.txt/],
+  ["an extra EXE disguised as the wizard bitmap", async (d) => writeFile(path.join(d, "$PLUGINSDIR", "modern-wizard.bmp"), syntheticExe(null, { seed: 3 })), /Unexpected executable.*modern-wizard\.bmp/],
+  ["an extra EXE inside a subdirectory", async (d) => { await mkdir(path.join(d, "bin", "tools"), { recursive: true }); await writeFile(path.join(d, "bin", "tools", "svc.exe"), syntheticExe(null, { seed: 3 })); }, /Unexpected executable.*bin\/tools\/svc\.exe/],
+  ["an extra EXE inside $PLUGINSDIR", async (d) => writeFile(path.join(d, "$PLUGINSDIR", "update.exe"), syntheticExe(null, { seed: 3 })), /Unexpected executable.*update\.exe/],
+  ["a second copy of the application EXE in a subdirectory", async (d) => { await mkdir(path.join(d, "second")); await writeFile(path.join(d, "second", "nexus-aurea.exe"), syntheticExe("NSS")); }, /Unexpected executable.*second\/nexus-aurea\.exe/],
+  ["an extra DLL that is not a reviewed plugin", async (d) => writeFile(path.join(d, "$PLUGINSDIR", "inject.dll"), syntheticExe(null, { dll: true, seed: 4 })), /Unexpected executable.*inject\.dll/],
+  ["a DLL named like a reviewed plugin but in another directory", async (d) => writeFile(path.join(d, "System.dll"), syntheticExe(null, { dll: true, machine: I386, seed: 103 })), /Unexpected executable.*System\.dll/],
+  ["a script file", async (d) => writeFile(path.join(d, "run.bat"), "@echo off\r\n"), /Unexpected executable.*run\.bat/],
+  ["a modified reviewed plugin DLL", async (d) => writeFile(path.join(d, "$PLUGINSDIR", "System.dll"), syntheticExe(null, { dll: true, machine: I386, seed: 999 })), /differs from the reviewed NSIS plugin/],
+  ["a reviewed plugin DLL replaced by an EXE", async (d) => writeFile(path.join(d, "$PLUGINSDIR", "System.dll"), syntheticExe(null, { machine: I386, seed: 103 })), /not a DLL/],
+  ["a reviewed plugin DLL replaced by non-PE data", async (d) => writeFile(path.join(d, "$PLUGINSDIR", "System.dll"), Buffer.from("not a dll")), /not a valid Windows executable/],
+  ["a missing reviewed plugin DLL", async (d) => rm(path.join(d, "$PLUGINSDIR", "StartMenu.dll")), /plugin DLLs are missing.*startmenu\.dll/],
+  ["a missing application EXE", async (d) => rm(path.join(d, "nexus-aurea.exe")), /found 0/],
+  ["an application EXE that is only text", async (d) => writeFile(path.join(d, "nexus-aurea.exe"), Buffer.from("MZ plain text ".repeat(100))), /not a valid Windows executable/],
+  ["an application EXE with a broken PE offset", async (d) => { const b = syntheticExe("NSS"); b.writeUInt32LE(0x7fffffff, 0x3c); await writeFile(path.join(d, "nexus-aurea.exe"), b); }, /outside the file/],
+  ["an application EXE for another machine", async (d) => writeFile(path.join(d, "nexus-aurea.exe"), syntheticExe("NSS", { machine: I386 })), /expected 0x8664/],
+  ["an application EXE that is a DLL", async (d) => writeFile(path.join(d, "nexus-aurea.exe"), syntheticExe("NSS", { dll: true })), /DLL, not an application/],
+];
+
+test("every unexpected, modified or missing payload file is rejected", async () => {
+  for (const [label, tamper, pattern] of PAYLOAD_TAMPERING) {
+    const directory = await writeExtractedPayload("payload-tamper");
+    await tamper(directory);
+    await assert.rejects(inspectNsisPayload(directory, syntheticPayloadPolicy(), { machine: AMD64 }), pattern, label);
+  }
+});
+
+test("a link in the extracted payload is refused", async (context) => {
+  const directory = await writeExtractedPayload("payload-link");
+  try {
+    await symlink(path.join(directory, "nexus-aurea.exe"), path.join(directory, "alias.txt"));
+  } catch (error) {
+    context.skip(`symbolic links cannot be created here (${error.code})`);
+    return;
+  }
+  await assert.rejects(inspectNsisPayload(directory, syntheticPayloadPolicy(), { machine: AMD64 }), /contains a link/);
+});
+
+/** Installs a policy for Tauri CLI 2.12.4 that pins the synthetic plugin DLLs, then restores the real one. */
+async function withSyntheticPolicy(run) {
+  const real = PAYLOAD_POLICIES.get("2.12.4");
+  PAYLOAD_POLICIES.set("2.12.4", syntheticPayloadPolicy());
+  try {
+    return await run();
+  } finally {
+    PAYLOAD_POLICIES.set("2.12.4", real);
+  }
+}
+
+test("manifest creation and verification inspect the whole extracted installer", async () => {
+  await withSyntheticPolicy(async () => {
+    const build = await prepareBuild("payload-e2e");
+    const extractedDir = await writeExtractedPayload("payload-e2e-dir");
+    const { packagedPayloadPath: _unused, ...rest } = build.files;
+    const files = { ...rest, extractedDir };
+    const manifest = await createManifest({ ...files, env: build.env, tools: TOOLS, requireTools: true, now: new Date("2026-11-13T12:00:00Z") });
+    const verified = await verifyManifest({ manifest, ...files, env: build.env, collect: build.collect, now: build.now, ci: true });
+    assert.equal(verified.ciOrigin.confirmed, true);
+
+    // The command line refuses to run CI verification against a single file, which would skip the list check.
+    const manifestPath = path.join(build.parent, "manifest.json");
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    const cli = spawnSync(
+      process.execPath,
+      [SCRIPT, "verify", "--ci", "--installer", files.installerPath, "--payload", files.payloadPath, "--packaged-payload", path.join(extractedDir, "nexus-aurea.exe"), "--manifest", manifestPath],
+      { encoding: "utf8", cwd: build.repo },
+    );
+    assert.notEqual(cli.status, 0);
+    assert.match(cli.stderr, /--ci requires --extracted-dir/);
+    // Giving both, or neither, is ambiguous and refused.
+    await assert.rejects(
+      verifyManifest({ manifest, ...rest, extractedDir, packagedPayloadPath: path.join(extractedDir, "nexus-aurea.exe"), env: build.env, collect: build.collect, now: build.now }),
+      /exactly one of/,
+    );
+
+    // An extra EXE with a different name makes both creation and verification fail.
+    await writeFile(path.join(extractedDir, "$PLUGINSDIR", "helper.exe"), syntheticExe(null, { seed: 3 }));
+    await assert.rejects(createManifest({ ...files, env: build.env, tools: TOOLS }), /Unexpected executable/);
+    await assert.rejects(verifyManifest({ manifest, ...files, env: build.env, collect: build.collect, now: build.now }), /Unexpected executable/);
+    await rm(path.join(extractedDir, "$PLUGINSDIR", "helper.exe"));
+
+    // A modified application EXE in the payload fails the marker rule.
+    const modified = syntheticExe("NSS");
+    modified[3000] ^= 0xff;
+    await writeFile(path.join(extractedDir, "nexus-aurea.exe"), modified);
+    await assert.rejects(createManifest({ ...files, env: build.env, tools: TOOLS }), /outside the allowed bundle-type marker/);
+  });
+});
+
+test("the installer itself must be a well-formed EXE", async () => {
+  const build = await prepareBuild("installer-pe");
+  await writeFile(build.files.installerPath, Buffer.from("synthetic installer bytes"));
+  await assert.rejects(createManifest({ ...build.files, env: build.env, tools: TOOLS }), /installer is not a valid Windows executable/);
 });
 
 test("manifest creation and verification reject an unrelated or modified EXE", async () => {
@@ -326,7 +580,7 @@ test("manifest creation and verification reject an unrelated or modified EXE", a
   const originalPackaged = await readFile(files.packagedPayloadPath);
 
   await writeFile(files.packagedPayloadPath, Buffer.from("a plain text file in place of the EXE ".repeat(100)));
-  await assert.rejects(createManifest({ ...files, env: build.env, tools: TOOLS }), /not a Windows executable/);
+  await assert.rejects(createManifest({ ...files, env: build.env, tools: TOOLS }), /not a valid Windows executable/);
   await assert.rejects(verify(build), /does not match its file/);
 
   const modified = Buffer.from(originalPackaged);
@@ -389,7 +643,7 @@ const TAMPERING = [
   ["app version: unparsable", (m) => { m.app.version = "latest"; }, /schema/],
   ["app version: valid but not the repository's", (m) => { m.app.version = "999.0.0"; }, /does not match package.json/],
   ["target: wrong shape", (m) => { m.build.target = "not a target"; }, /schema/],
-  ["target: other platform (CI compares with the build output)", (m) => { m.build.target = "aarch64-apple-darwin"; }, /target the EXE was built for/, true],
+  ["target: other platform (CI compares with the build output)", (m) => { m.build.target = "aarch64-apple-darwin"; }, /target the EXE was built for|expected 0xaa64/, true],
   ["profile: not allowed", (m) => { m.build.profile = "invented"; }, /schema/],
   ["profile: other (CI compares with the build output)", (m) => { m.build.profile = "debug"; }, /profile the EXE was built with/, true],
   ["runner OS", (m) => { m.build.runnerOs = "Linux"; }, /runner OS/, true],
@@ -490,7 +744,7 @@ test("manifest rejects stale CI checkout SHA", async () => {
   const installerPath = path.join(outputs, "setup.exe");
   const payloadPath = path.join(outputs, "app.exe");
   const packagedPayloadPath = path.join(outputs, "packaged.exe");
-  await writeFile(installerPath, "installer");
+  await writeFile(installerPath, syntheticInstaller());
   await writeFile(payloadPath, syntheticExe("UNK"));
   await writeFile(packagedPayloadPath, syntheticExe("NSS"));
   await assert.rejects(
