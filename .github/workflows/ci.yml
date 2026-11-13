@@ -123,7 +123,13 @@ jobs:
           New-Item -ItemType Directory -Path $extractDirectory -ErrorAction Stop | Out-Null
           & $sevenZipPath x -y "-o$extractDirectory" $installers[0].FullName | Out-Null
           if ($LASTEXITCODE -ne 0) { throw 'Could not extract the NSIS installer for payload verification.' }
-          # Exactly one packaged EXE must exist; the verifier enforces this too (--extracted-dir).
+          # Evidence for review: every file 7-Zip extracted from the real installer.
+          Write-Host '--- Extracted installer payload ---'
+          Get-ChildItem -LiteralPath $extractDirectory -Recurse -File | ForEach-Object {
+            Write-Host ("{0,12}  {1}  {2}" -f $_.Length, (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.FullName.Substring($extractDirectory.Length + 1))
+          }
+          # The verifier (--extracted-dir) enforces the reviewed executable list: exactly one packaged
+          # nexus-aurea.exe plus the pinned NSIS plugin DLLs; any other executable fails the build.
           $builtExe = 'src-tauri/target/x86_64-pc-windows-msvc/release/nexus-aurea.exe'
           if (-not (Test-Path -LiteralPath $builtExe -PathType Leaf)) { throw 'The release payload EXE is missing.' }
           $manifest = Join-Path $bundleDirectory 'velora-build-provenance.json'

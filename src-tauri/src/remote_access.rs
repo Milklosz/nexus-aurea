@@ -900,8 +900,13 @@ impl RemoteAccess {
         Ok(self.status())
     }
 
-    /// Diagnoses the credential state without changing it and issues the
-    /// one-time confirmation code the local UI must present to run a recovery.
+    /// Diagnoses the credential state without changing it and issues a one-time
+    /// freshness token ("confirmation") that `run_recovery` must present. The
+    /// token only proves that a recovery follows a recent inspection made by this
+    /// process, once; it is not proof of a human at the keyboard. That consent is
+    /// the mode choice and the acknowledgement in the local UI, which the backend
+    /// cannot verify. Recovery grants no capability a local process of this user
+    /// does not already have (see docs/velora-s0a-credential-store.md).
     /// Works when the normal load fails, which is the point: a damaged state
     /// must not block the way out of it.
     #[cfg(windows)]
@@ -973,7 +978,8 @@ impl RemoteAccess {
 
     /// Runs the recovery the local user chose. The server is stopped first, the
     /// cross-process lock is held for the whole transaction, and the one-time
-    /// confirmation code issued by `inspect_recovery` is required and consumed.
+    /// freshness token issued by `inspect_recovery` is required and consumed
+    /// (a guard against stale or repeated calls, not an authorization factor).
     /// Only the Tauri commands below call this; no HTTP route reaches it.
     #[cfg(windows)]
     pub fn run_recovery(&self, mode: &str, confirmation: &str) -> Result<RemoteAccessStatus, String> {
@@ -1869,8 +1875,19 @@ fn perform_recovery(
         .set_password(RECOVERY_JOURNAL_ACCOUNT, &journal_text)
         .map_err(credential_store_error)?;
 
+    // A damaged index cannot tell us its old revision, and a fresh process has no
+    // cached floor, so the counter could restart at 1 and an older vault restored
+    // later would look "newer" and be adopted. The wall clock in seconds is far
+    // above any counter that one commit per operation can reach, so it keeps the
+    // new epoch above every earlier revision without a new mechanism. It is only
+    // ever a lower bound: the stored value and the process floor still win when
+    // higher, so the revision never goes backwards, even if the clock does.
+    let clock_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
     let revision = stored_revision
         .max(revision_floor)
+        .max(clock_epoch)
         .checked_add(1)
         .ok_or_else(|| "Licznik wersji indeksu urządzeń został wyczerpany.".to_string())?;
     let empty_index = index_text(&[], revision)?;
@@ -2192,7 +2209,8 @@ pub fn revoke_remote_device(
     service.revoke_device(&device_id)
 }
 
-/// Reads the state and issues a one-time confirmation code. Local UI only.
+/// Reads the state and issues a one-time freshness token. Local UI only; the
+/// token is not proof of a human, see `RemoteAccess::inspect_recovery`.
 #[tauri::command]
 pub fn inspect_remote_recovery(
     service: State<'_, RemoteAccess>,
@@ -2200,7 +2218,7 @@ pub fn inspect_remote_recovery(
     service.inspect_recovery()
 }
 
-/// Runs the recovery the local user chose, with the code from the inspection.
+/// Runs the recovery the local user chose, with the token from the inspection.
 #[tauri::command]
 pub fn run_remote_recovery(
     mode: String,
@@ -3647,6 +3665,53 @@ mod windows_tests {
         lock(&restarted.inner.status).enabled = true; // recovery stopped the server
         assert_eq!(command_result(&restarted, 1, 1), Err(StatusCode::UNAUTHORIZED));
         assert_eq!(restarted.status().store_state, "ok");
+    }
+
+    #[test]
+    fn recovery_from_an_unreadable_index_starts_above_any_earlier_revision_so_an_older_vault_is_detected() {
+        let env = TestEnv::new("revision-epoch");
+        let first = seeded(&env, 2);
+        for sequence in 1..=3 {
+            assert_eq!(command_result(&first, 1, sequence), execute(sequence - 1));
+        }
+        // What a backup restore would bring back later: the vault as it is now.
+        let old_index = env.store.raw_get(DEVICE_INDEX_ACCOUNT).unwrap();
+        let old_revision = stored(env.store.as_ref()).revision;
+        drop(first);
+
+        // The index becomes unreadable and a fresh process (no cached revision)
+        // recovers: the old revision cannot be read back from the damaged text.
+        env.store.raw_set(DEVICE_INDEX_ACCOUNT, "not json");
+        let restarted = env.remote();
+        run_recovery_now(&restarted, "revoke-all-devices").expect("recover");
+        let recovered = stored(env.store.as_ref()).revision;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert!(recovered > old_revision, "revision restarted at {recovered}, below the earlier {old_revision}");
+        assert!(recovered + 60 >= now, "a revision after a lossy recovery starts at the clock epoch");
+
+        // An older vault restored while the process runs would silently
+        // re-trust the revoked device (its token entry is an orphan the
+        // recovery could not name) as soon as the UI's status poll refreshes
+        // the cache. It must be detected instead.
+        lock(&restarted.inner.status).enabled = true; // recovery stopped the server
+        env.store.raw_set(DEVICE_INDEX_ACCOUNT, &old_index);
+        assert_eq!(
+            restarted.status().store_state,
+            "rolled-back",
+            "an older vault must not be adopted after a recovery"
+        );
+        assert!(
+            command_result(&restarted, 1, 4).is_err(),
+            "the revoked device must not be accepted again"
+        );
+
+        // The revision still only moves forward across later recoveries.
+        let plan = restarted.inspect_recovery().unwrap();
+        restarted.run_recovery("revoke-all-devices", &plan.confirmation).expect("second recovery");
+        assert!(stored(env.store.as_ref()).revision > recovered);
     }
 
     #[test]
