@@ -78,9 +78,12 @@ Before the update, `git merge-tree --write-tree` showed conflicts only in
 | #40 | `fix/velora-2-webview2-edge-audit` | `integration/velora-2.0` | Untracked managed launches and a failed Steam baseline are reported, not ignored |
 | #41 | `feat/velora-2-home-zones` | `integration/velora-2.0` | Vertical home zones on the intent model; D-pad and stick up and down |
 | #42 | `feat/velora-2-virtual-keyboard-model` | `integration/velora-2.0` | On-screen keyboard model on the intent model (no UI) |
-| new | `feat/velora-2-virtual-keyboard-ui` | `integration/velora-2.0` | Keyboard UI; opens only for `data-velora-text-entry` fields |
-| new | `fix/velora-2-dualsense-input-normalization` | `integration/velora-2.0` | Gamepad normalization; Sony D-pad read from the hat on axis 9 |
-| new | `docs/velora-2-integration-update` | `integration/velora-2.0` | This document |
+| #43 | `feat/velora-2-virtual-keyboard-ui` | `integration/velora-2.0` | Keyboard UI; opens only for `data-velora-text-entry` fields |
+| #44 | `fix/velora-2-dualsense-input-normalization` | `integration/velora-2.0` | Gamepad normalization; Sony D-pad read from the hat on axis 9 |
+| #45 | `docs/velora-2-integration-update` | `integration/velora-2.0` | This document |
+
+On GitHub, #34 and #36–#42 show as MERGED. Their heads were fast-forwarded into
+`integration/velora-2.0`, which is their base. Nothing was merged to `main`.
 
 ## Verification status
 
