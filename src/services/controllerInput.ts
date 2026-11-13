@@ -111,9 +111,11 @@ export function normalizeDpad(pad: Gamepad, profile: ResolvedControllerProfile):
 }
 
 /**
- * Full normalization. Button roles keep the existing convention: the standard
- * profile uses A=0 (confirm) and B=1 (back); the PlayStation profile uses
- * Circle=1 (confirm) and Square=2 (back). Changing that is a product decision.
+ * Full normalization. Button roles are the same for both profiles, by index:
+ * index 0 confirms and index 1 goes back. On the PlayStation profile that is
+ * Cross (confirm) and Circle (back), as decided for DualSense. Square (index 2)
+ * is reserved for future extra actions and does nothing yet. The standard
+ * profile is unchanged: A confirms, B goes back.
  */
 export function normalizeGamepad(pad: Gamepad, profile: ResolvedControllerProfile): NormalizedPad {
   const { dpad, source } = normalizeDpad(pad, profile);
@@ -122,8 +124,8 @@ export function normalizeGamepad(pad: Gamepad, profile: ResolvedControllerProfil
     dpadSource: source,
     stick: { x: finiteAxis(pad, 0), y: finiteAxis(pad, 1) },
     buttons: {
-      confirm: isPressed(pad, profile === "standard" ? 0 : 1),
-      back: isPressed(pad, profile === "standard" ? 1 : 2),
+      confirm: isPressed(pad, 0),
+      back: isPressed(pad, 1),
       options: isPressed(pad, 9),
     },
   };

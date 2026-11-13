@@ -115,11 +115,21 @@ describe("normalizeGamepad: PlayStation raw mapping", () => {
     expect(fallback.dpadSource).toBe("legacy-buttons");
   });
 
-  it("maps Circle to confirm, Square to back and Options (9) to options", () => {
-    const input = normalizeGamepad(pad({ pressed: [1, 2, 9] }), PS);
-    expect(input.buttons).toEqual({ confirm: true, back: true, options: true });
+  it("maps Cross to confirm (0) and Circle to back (1)", () => {
     const cross = normalizeGamepad(pad({ pressed: [0] }), PS);
-    expect(cross.buttons.confirm).toBe(false);
+    expect(cross.buttons).toEqual({ confirm: true, back: false, options: false });
+    const circle = normalizeGamepad(pad({ pressed: [1] }), PS);
+    expect(circle.buttons).toEqual({ confirm: false, back: true, options: false });
+  });
+
+  it("does nothing on Square (2), which is reserved for future actions", () => {
+    const square = normalizeGamepad(pad({ pressed: [2] }), PS);
+    expect(square.buttons).toEqual({ confirm: false, back: false, options: false });
+  });
+
+  it("maps Options (9) to options and nothing else", () => {
+    const input = normalizeGamepad(pad({ pressed: [9] }), PS);
+    expect(input.buttons).toEqual({ confirm: false, back: false, options: true });
   });
 
   it("returns finite stick values and zero for NaN", () => {
