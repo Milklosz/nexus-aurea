@@ -3,6 +3,8 @@ import {
   beginRemotePairing,
   disabledRemoteAccessStatus,
   getRemoteAccessStatus,
+  inspectRemoteRecovery,
+  runRemoteRecovery,
   startRemoteAccess,
 } from "../services/remoteAccess";
 
@@ -17,5 +19,12 @@ describe("iPhone Remote native access gate", () => {
 
   it("does not allow pairing from the browser preview", async () => {
     await expect(beginRemotePairing()).rejects.toThrow("aplikacji VELORA na Windows");
+  });
+});
+
+describe("iPhone Remote local recovery gate", () => {
+  it("is unavailable outside the Windows app", async () => {
+    await expect(inspectRemoteRecovery()).rejects.toThrow("aplikacji VELORA na Windows");
+    await expect(runRemoteRecovery("reset-trust", "ABCD2345")).rejects.toThrow("aplikacji VELORA na Windows");
   });
 });

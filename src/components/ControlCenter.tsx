@@ -14,15 +14,27 @@ import {
   beginRemotePairing,
   disabledRemoteAccessStatus,
   getRemoteAccessStatus,
+  inspectRemoteRecovery,
   listenForRemoteAccessStatus,
   prepareRemoteTrustProfile,
   REMOTE_ACCESS_DISABLED_REASON,
   revokeAllRemoteDevices,
   revokeRemoteDevice,
+  runRemoteRecovery,
   startRemoteAccess,
   stopRemoteAccess,
   type RemoteAccessStatus,
+  type RemoteRecoveryMode,
+  type RemoteRecoveryPlan,
 } from "../services/remoteAccess";
+
+const STORE_STATE_LABELS: Record<string, string> = {
+  unavailable: "niedostępny",
+  locked: "zajęty przez inny proces VELORA",
+  damaged: "uszkodzony lub niekompletny",
+  "rolled-back": "cofnięty do starszego stanu",
+  "recovery-pending": "odzyskiwanie nie zostało dokończone",
+};
 
 type ControlCenterProps = {
   profile: CinemaProfile;
@@ -80,6 +92,9 @@ export function ControlCenter(props: ControlCenterProps) {
   const [trustConfirmed, setTrustConfirmed] = useState(false);
   const [remoteError, setRemoteError] = useState("");
   const [remoteNotice, setRemoteNotice] = useState("");
+  const [recoveryPlan, setRecoveryPlan] = useState<RemoteRecoveryPlan | null>(null);
+  const [recoveryChoice, setRecoveryChoice] = useState<RemoteRecoveryMode | null>(null);
+  const [recoveryAcknowledged, setRecoveryAcknowledged] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -185,6 +200,44 @@ export function ControlCenter(props: ControlCenterProps) {
       setRemoteNotice(success);
     } catch (cause) {
       setRemoteError(cause instanceof Error ? cause.message : "Nie udało się zmienić ustawień iPhone Remote.");
+    } finally {
+      setRemoteBusy(false);
+    }
+  };
+
+  const openRecovery = async () => {
+    if (!remoteStatusReady || remoteBusy) return;
+    setRemoteBusy(true);
+    setRemoteError("");
+    setRemoteNotice("");
+    try {
+      setRecoveryPlan(await inspectRemoteRecovery());
+      setRecoveryChoice(null);
+      setRecoveryAcknowledged(false);
+    } catch (cause) {
+      setRemoteError(cause instanceof Error ? cause.message : "Nie udało się odczytać stanu odzyskiwania.");
+    } finally {
+      setRemoteBusy(false);
+    }
+  };
+
+  const executeRecovery = async () => {
+    if (!recoveryPlan || !recoveryChoice || !recoveryAcknowledged || remoteBusy) return;
+    setRemoteBusy(true);
+    setRemoteError("");
+    setRemoteNotice("");
+    try {
+      setRemoteStatus(await runRemoteRecovery(recoveryChoice, recoveryPlan.confirmation));
+      setRemoteNotice(recoveryChoice === "reset-trust"
+        ? "Odzyskiwanie zakończone. Certyfikat zaufania usunięto: przygotuj nowy profil, zainstaluj go na iPhonie i sparuj urządzenia ponownie."
+        : "Odzyskiwanie zakończone. Wszystkie urządzenia odwołano; sparuj je ponownie.");
+      setRecoveryPlan(null);
+      setRecoveryChoice(null);
+      setRecoveryAcknowledged(false);
+    } catch (cause) {
+      setRemoteError(cause instanceof Error ? cause.message : "Odzyskiwanie nie zostało ukończone. Serwer pozostaje wyłączony.");
+      setRecoveryPlan(null);
+      void readRemoteStatus();
     } finally {
       setRemoteBusy(false);
     }
@@ -366,6 +419,25 @@ export function ControlCenter(props: ControlCenterProps) {
               : remoteStatus.pairingAvailable ? "gotowe po wygenerowaniu kodu" : "wyłączone"}</strong></li>
             <li><span>Sparowane urządzenia</span><strong>{remoteStatusReady ? remoteStatus.pairedDeviceCount : "?"}</strong></li>
           </ul>
+          {remoteStatusReady && remoteStatus.storeState && STORE_STATE_LABELS[remoteStatus.storeState] && <div className="cc-remote-actions" role="alert">
+            <p>Magazyn poświadczeń iPhone Remote: {STORE_STATE_LABELS[remoteStatus.storeState]}. Pilot pozostaje wyłączony.</p>
+            {remoteStatus.storeMessage && <p>{remoteStatus.storeMessage}</p>}
+            {!remoteStatus.recoveryRequired && <p className="cc-card-note">Ten stan nie wymaga kasowania danych. Zamknij drugi proces VELORA lub napraw dostęp do Magazynu poświadczeń Windows i ponów odczyt.</p>}
+            {remoteStatus.recoveryRequired && !recoveryPlan && <button type="button" disabled={remoteBusy} onClick={() => void openRecovery()}>Odzyskiwanie zaufania…</button>}
+            {recoveryPlan && <>
+              <p>Odzyskiwanie działa wyłącznie lokalnie: zatrzymuje serwer LAN, odwołuje urządzenia i usuwa tylko wpisy VELORA iPhone Remote. Nic nie jest rotowane ani zastępowane automatycznie.</p>
+              {recoveryPlan.options.map((option) => <label className="remote-trust-confirmation" key={option.mode}>
+                <input type="radio" name="remote-recovery-mode" checked={recoveryChoice === option.mode}
+                  onChange={() => { setRecoveryChoice(option.mode); setRecoveryAcknowledged(false); }} />
+                {option.summary}
+              </label>)}
+              {recoveryChoice && <label className="remote-trust-confirmation">
+                <input type="checkbox" checked={recoveryAcknowledged} onChange={(event) => setRecoveryAcknowledged(event.target.checked)} />
+                Rozumiem, że wybrane wpisy zostaną trwale usunięte, a urządzenia trzeba sparować ponownie.
+              </label>}
+              <button type="button" disabled={remoteBusy || !recoveryChoice || !recoveryAcknowledged} onClick={() => void executeRecovery()}>Wykonaj odzyskiwanie</button>
+            </>}
+          </div>}
           {!remoteStatusReady && <p className={remoteStatusError ? "cc-feedback cc-error" : "cc-feedback"} role={remoteStatusError ? "alert" : "status"}>
             {remoteStatusLoading ? "Odczytuję bezpieczny stan iPhone Remote…" : remoteStatusError}
           </p>}

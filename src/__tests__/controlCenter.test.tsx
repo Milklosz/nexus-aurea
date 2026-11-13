@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => ({
   stopRemoteAccess: vi.fn(async () => mocks.remoteStatus),
   revokeAllRemoteDevices: vi.fn(async () => mocks.remoteStatus),
   revokeRemoteDevice: vi.fn(async () => mocks.remoteStatus),
+  inspectRemoteRecovery: vi.fn(async () => ({ storeState: "damaged", message: null, recoveryRequired: true, options: [{ mode: "revoke-all-devices", summary: "Odwołaj wszystkie urządzenia." }, { mode: "reset-trust", summary: "Zresetuj zaufanie." }], confirmation: "ABCD2345", confirmationExpiresInSeconds: 120 })),
+  runRemoteRecovery: vi.fn(async () => mocks.remoteStatus),
 }));
 vi.mock("../services/controlService", () => ({
   disabledControlServiceStatus: { windows: false, running: false, gameMode: false, controllerCount: 0, playstationControllerCount: 0, foregroundProcess: null, returnHotkeyRegistered: false, lastError: null },
@@ -40,6 +42,8 @@ vi.mock("../services/remoteAccess", () => ({
   stopRemoteAccess: mocks.stopRemoteAccess,
   revokeAllRemoteDevices: mocks.revokeAllRemoteDevices,
   revokeRemoteDevice: mocks.revokeRemoteDevice,
+  inspectRemoteRecovery: mocks.inspectRemoteRecovery,
+  runRemoteRecovery: mocks.runRemoteRecovery,
 }));
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); mocks.remoteStatusListener = null; });
@@ -235,6 +239,51 @@ describe("Control Center", () => {
     expect(remoteStatus.textContent).toContain("2");
     expect(remoteStatus.textContent).toContain("HTTPSaktywny");
     expect(mocks.getRemoteStatus).toHaveBeenCalledOnce();
+  });
+
+  it("offers a local, explicitly confirmed recovery when the credential state is damaged", async () => {
+    setupDialog();
+    mocks.getRemoteStatus.mockResolvedValue({
+      ...mocks.remoteStatus,
+      storeState: "damaged",
+      storeMessage: "Zapisany klucz zaufania nie pasuje do zapisanego certyfikatu.",
+      recoveryRequired: true,
+    } as never);
+    renderCenter();
+    fireEvent.click(screen.getByRole("tab", { name: "iPhone Remote" }));
+    expect((await screen.findByText(/uszkodzony lub niekompletny/)).textContent).toContain("Pilot pozostaje wyłączony");
+    expect(screen.getByText(/nie pasuje do zapisanego certyfikatu/)).toBeTruthy();
+    expect(mocks.runRemoteRecovery).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Odzyskiwanie zaufania…" }));
+    const execute = await screen.findByRole("button", { name: "Wykonaj odzyskiwanie" });
+    expect((execute as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByLabelText("Zresetuj zaufanie."));
+    expect((execute as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByLabelText(/Rozumiem, że wybrane wpisy zostaną trwale usunięte/));
+    expect((execute as HTMLButtonElement).disabled).toBe(false);
+    mocks.getRemoteStatus.mockResolvedValue({ ...mocks.remoteStatus, storeState: "ok", recoveryRequired: false } as never);
+    fireEvent.click(execute);
+    await waitFor(() => expect(mocks.runRemoteRecovery).toHaveBeenCalledWith("reset-trust", "ABCD2345"));
+    expect(await screen.findByText(/Certyfikat zaufania usunięto/)).toBeTruthy();
+    mocks.getRemoteStatus.mockImplementation(async () => mocks.remoteStatus);
+  });
+
+  it("shows an unreadable or busy credential store without offering any destructive recovery", async () => {
+    setupDialog();
+    mocks.getRemoteStatus.mockResolvedValue({
+      ...mocks.remoteStatus,
+      storeState: "unavailable",
+      storeMessage: "Systemowy magazyn poświadczeń jest niedostępny.",
+      recoveryRequired: false,
+    } as never);
+    renderCenter();
+    fireEvent.click(screen.getByRole("tab", { name: "iPhone Remote" }));
+    expect(await screen.findByText(/Magazyn poświadczeń iPhone Remote: niedostępny/)).toBeTruthy();
+    expect(screen.getByText(/nie wymaga kasowania danych/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Odzyskiwanie zaufania…" })).toBeNull();
+    expect(mocks.inspectRemoteRecovery).not.toHaveBeenCalled();
+    mocks.getRemoteStatus.mockImplementation(async () => mocks.remoteStatus);
   });
 
   it("keeps one panel visible and supports remote left-right tab navigation", async () => {

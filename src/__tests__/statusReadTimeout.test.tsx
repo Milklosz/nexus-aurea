@@ -39,6 +39,8 @@ vi.mock("../services/remoteAccess", () => ({
   stopRemoteAccess: vi.fn(async () => mocks.remoteStatus),
   revokeAllRemoteDevices: vi.fn(async () => mocks.remoteStatus),
   revokeRemoteDevice: vi.fn(async () => mocks.remoteStatus),
+  inspectRemoteRecovery: vi.fn(),
+  runRemoteRecovery: vi.fn(),
 }));
 
 function setupDialog() {
