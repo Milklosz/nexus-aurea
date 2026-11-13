@@ -49,3 +49,27 @@ Verification of the integration branch (local, Windows):
 2. Each significant fix gets its own Draft PR with tests.
 3. Existing PRs are not closed or rewritten unless the owner decides so.
 4. Merging to `main` and publishing any release require a separate owner decision.
+
+## Draft PRs created in this sprint (2026-11-13)
+
+| PR | Head | Base | Scope |
+|---|---|---|---|
+| #33 | `fix/velora-2-shortcut-guards` | `feat/nav-wire-controller-remote` (#32) | Shortcut guards (F11 repeat, Ctrl/Alt/Meta); audit doc |
+| #34 | `fix/velora-2-focus-restore-overlays` | `integration/velora-2.0` | Window focus does not move dock highlight under an open overlay |
+| #35 | `feat/velora-2-nav-back-intent` | `fix/velora-2-focus-restore-overlays` (#34) | Keyboard Backspace uses the shared back intent; parity tests |
+
+`integration/velora-2.0` is a branch without its own PR. It is the base for #34.
+
+## Verification status
+
+- Local (Windows): `pnpm test` 59 files / 507 tests passed on the #35 head. `pnpm build` passed.
+  `cargo test --lib` 258 passed (short `CARGO_TARGET_DIR`).
+- CI on #33: Windows and macOS `test-and-build` passed; Playnite extension passed.
+  #34 and #35 were queued when this was written; check their status before merging anything.
+
+## Next steps
+
+1. Confirm CI for #34 and #35.
+2. Decide the fate of #22 (VELORA 1.5 navigation), which is not integrated.
+3. Single-instance and restart resilience review (Sprint A, not started).
+4. Hardware checks listed in `NIGHT_BUILD_PROGRESS.md` remain NOT RUN.

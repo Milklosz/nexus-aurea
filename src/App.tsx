@@ -14,7 +14,7 @@ import { streamingServices } from "./data/streamingServices";
 import { useMusicStatusPolling } from "./hooks/useMusicStatusPolling";
 import { returnHomeFocusTarget, useReturnHomeListener } from "./hooks/useReturnHomeFocus";
 import { useGamepad, type ControllerActions } from "./hooks/useGamepad";
-import { dispatchControllerAction, isIgnoredShortcutEvent, type NavIntentHandlers } from "./services/navIntent";
+import { dispatchControllerAction, intentFromKeyboard, isIgnoredShortcutEvent, type NavIntentHandlers } from "./services/navIntent";
 import { shouldRestoreDockFocus } from "./services/windowFocusRestore";
 import { useControllerOwnershipSuspension } from "./hooks/useControllerOwnershipSuspension";
 import { isTextEntryTarget, useNavigation } from "./hooks/useNavigation";
@@ -321,15 +321,10 @@ export default function App() {
         return;
       }
       if (event.key === "Backspace" && isTextEntryTarget(event.target)) return;
-      if ((event.key === "Backspace" || event.key === "BrowserBack") && openDialog) {
+      // Back is one shared intent: the same handler serves Backspace, DualSense and the iPhone remote.
+      if (intentFromKeyboard(event)?.kind === "back") {
         event.preventDefault();
-        if (controlCenterOpen) closeControlCenter();
-        else closeDiagnostics();
-        return;
-      }
-      if (event.key === "Backspace" || event.key === "BrowserBack") {
-        event.preventDefault();
-        navigation.focusApp(0);
+        dispatchControllerAction({ type: "back" }, controllerIntentHandlers);
         return;
       }
       if (event.key === "Escape" || event.key === "F11") {
@@ -350,7 +345,7 @@ export default function App() {
     window.addEventListener("keydown", recover);
     window.addEventListener("focus", restore);
     return () => { window.removeEventListener("keydown", recover); window.removeEventListener("focus", restore); };
-  }, [closeControlCenter, closeDiagnostics, controlCenterOpen, diagnostics, moveControllerFocus, navigation.focusApp, showMenu, showToast]);
+  }, [closeControlCenter, closeDiagnostics, controlCenterOpen, controllerIntentHandlers, diagnostics, moveControllerFocus, navigation.focusApp, showMenu, showToast]);
 
   useEffect(() => {
     let active = true;
