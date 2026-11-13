@@ -24,17 +24,21 @@ export interface SceneParams {
   fg: string;
   seed: number;
   stars?: boolean;
+  /** Number of terrain strata (dunes / mist). Default 10. */
+  layers?: number;
+  /** Terrain frequency multiplier. Default 1. */
+  freq?: number;
 }
 
 export const SCENES: readonly SceneParams[] = [
-  { id: "netflix", type: "dunes", sky: ["#050506", "#13080a", "#3a1214"], glow: "#ff6a4a", gx: 1380, ga: 0.55, hz: 612, haze: "#5a1e1c", fg: "#050404", seed: 2.1 },
-  { id: "disney", type: "dunes", sky: ["#020309", "#070f28", "#1b336c"], glow: "#86a8ff", gx: 1500, ga: 0.42, hz: 640, haze: "#1b2a58", fg: "#020309", seed: 5.7, stars: true },
-  { id: "max", type: "dunes", sky: ["#040309", "#110b25", "#37226c"], glow: "#a586ff", gx: 1200, ga: 0.5, hz: 598, haze: "#2b1f50", fg: "#040308", seed: 8.2 },
-  { id: "prime", type: "sea", sky: ["#020a10", "#092331", "#2b6a82"], glow: "#a8e6f4", gx: 1330, ga: 0.48, hz: 624, haze: "#1a4858", fg: "#02070a", seed: 3.3 },
-  { id: "youtube", type: "dunes", sky: ["#060302", "#1c0c06", "#582311"], glow: "#ff8c4a", gx: 1470, ga: 0.58, hz: 622, haze: "#682b17", fg: "#060302", seed: 11.4 },
-  { id: "steam", type: "mist", sky: ["#03050a", "#0e1722", "#334c64"], glow: "#b8d6f0", gx: 1250, ga: 0.34, hz: 560, haze: "#283a4e", fg: "#03050a", seed: 4.8 },
-  { id: "playnite", type: "dunes", sky: ["#020605", "#091c17", "#205646"], glow: "#80e2bf", gx: 1410, ga: 0.4, hz: 632, haze: "#1a483c", fg: "#020504", seed: 6.6 },
-  { id: "appleMusic", type: "dunes", sky: ["#070205", "#1c0911", "#581a35"], glow: "#ff7ca2", gx: 1310, ga: 0.5, hz: 602, haze: "#581d37", fg: "#060204", seed: 9.9 },
+  { id: "netflix", type: "dunes", sky: ["#050506", "#13080a", "#3a1214"], glow: "#ff6a4a", gx: 1380, ga: 0.55, hz: 612, haze: "#5a1e1c", fg: "#050404", seed: 2.1, layers: 10, freq: 1 },
+  { id: "disney", type: "dunes", sky: ["#020309", "#070f28", "#1b336c"], glow: "#86a8ff", gx: 1650, ga: 0.42, hz: 700, haze: "#1b2a58", fg: "#020309", seed: 5.7, stars: true, layers: 8, freq: 0.8 },
+  { id: "max", type: "dunes", sky: ["#040309", "#110b25", "#37226c"], glow: "#a586ff", gx: 1200, ga: 0.5, hz: 520, haze: "#2b1f50", fg: "#040308", seed: 8.2, layers: 12, freq: 1.3 },
+  { id: "prime", type: "sea", sky: ["#020a10", "#092331", "#2b6a82"], glow: "#a8e6f4", gx: 1300, ga: 0.48, hz: 640, haze: "#1a4858", fg: "#02070a", seed: 3.3 },
+  { id: "youtube", type: "dunes", sky: ["#060302", "#1c0c06", "#582311"], glow: "#ff8c4a", gx: 1560, ga: 0.58, hz: 660, haze: "#682b17", fg: "#060302", seed: 11.4, layers: 7, freq: 1.8 },
+  { id: "steam", type: "mist", sky: ["#03050a", "#0e1722", "#334c64"], glow: "#b8d6f0", gx: 1200, ga: 0.34, hz: 470, haze: "#283a4e", fg: "#03050a", seed: 4.8, layers: 9 },
+  { id: "playnite", type: "dunes", sky: ["#020605", "#091c17", "#205646"], glow: "#80e2bf", gx: 1480, ga: 0.4, hz: 740, haze: "#1a483c", fg: "#020504", seed: 6.6, layers: 6, freq: 0.7 },
+  { id: "appleMusic", type: "dunes", sky: ["#070205", "#1c0911", "#581a35"], glow: "#ff7ca2", gx: 1700, ga: 0.5, hz: 560, haze: "#581d37", fg: "#060204", seed: 9.9, layers: 9, freq: 1.1 },
 ];
 
 const hex = (h: string): number[] => [1, 3, 5].map((k) => parseInt(h.slice(k, k + 2), 16));
@@ -51,7 +55,8 @@ function rng(seed: number): () => number {
 /** Full-bleed 16:9 SVG (viewBox 1920x1080) for one scene. `i` only namespaces gradient ids. */
 export function sceneSvg(sc: SceneParams, i = 0): string {
   const H = 1080;
-  const N = 10;
+  const N = sc.layers ?? 10;
+  const freq = sc.freq ?? 1;
   const r = rng(sc.seed);
   let defs = `<linearGradient id="sky${i}" x1="0" y1="0" x2="0" y2="${sc.hz}" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="${sc.sky[0]}"/><stop offset=".58" stop-color="${sc.sky[1]}"/><stop offset="1" stop-color="${sc.sky[2]}"/></linearGradient>
@@ -69,14 +74,15 @@ export function sceneSvg(sc: SceneParams, i = 0): string {
   for (let k = 0; k < 5; k++) {
     const cy = sc.hz - 60 - r() * 300;
     const cx = sc.gx + (r() - 0.6) * 900;
-    body += `<ellipse cx="${cx.toFixed(0)}" cy="${cy.toFixed(0)}" rx="${(500 + r() * 500).toFixed(0)}" ry="${(14 + r() * 26).toFixed(0)}" fill="url(#g${i})" opacity="${(0.25 + r() * 0.3).toFixed(2)}"/>`;
+    body += `<ellipse cx="${cx.toFixed(0)}" cy="${cy.toFixed(0)}" rx="${(500 + r() * 500).toFixed(0)}" ry="${(60 + r() * 50).toFixed(0)}" fill="url(#g${i})" opacity="${(0.1 + r() * 0.08).toFixed(2)}"/>`;
   }
-  body += `<ellipse cx="${sc.gx}" cy="${sc.hz}" rx="1000" ry="460" fill="url(#g${i})"/><ellipse cx="${sc.gx}" cy="${sc.hz}" rx="320" ry="120" fill="url(#c${i})"/>`;
-  for (let k = 0; k < N; k++) {
+  body += `<ellipse cx="${sc.gx}" cy="${sc.hz}" rx="1000" ry="460" fill="url(#g${i})"/><ellipse cx="${sc.gx}" cy="${sc.hz}" rx="620" ry="56" fill="url(#c${i})" opacity=".45"/>`;
+  const terrain = sc.type === "sea" ? 0 : N;
+  for (let k = 0; k < terrain; k++) {
     const t = k / (N - 1);
-    const base = sc.hz + (H - sc.hz) * Math.pow(t, 1.4) * 1.02 - 6;
-    const amp = sc.type === "sea" ? 1.2 + 2 * t : sc.type === "mist" ? 30 + 90 * Math.pow(t, 1.2) : 4 + 120 * Math.pow(t, 1.35);
-    const f = 0.0011 + 0.0024 * (1 - t);
+    const base = sc.hz + (H - sc.hz) * Math.pow(t, 1.4) * 1.02 - 18;
+    const amp = sc.type === "mist" ? 30 + 90 * Math.pow(t, 1.2) : 4 + 120 * Math.pow(t, 1.35);
+    const f = (0.0011 + 0.0024 * (1 - t)) * freq;
     const p1 = r() * 6.28;
     const p2 = r() * 6.28;
     const p3 = r() * 6.28;
@@ -95,12 +101,9 @@ export function sceneSvg(sc: SceneParams, i = 0): string {
     }
   }
   if (sc.type === "sea") {
-    for (let j = 0; j < 22; j++) {
-      const y = sc.hz + 5 + j * j * 0.5;
-      const w = 300 - j * 11 + r() * 50;
-      const x = sc.gx - w / 2 + (r() - 0.5) * 40;
-      body += `<rect x="${x.toFixed(0)}" y="${y.toFixed(1)}" width="${w.toFixed(0)}" height="${(1.4 + j * 0.16).toFixed(1)}" rx="1" fill="${sc.glow}" opacity="${(0.22 * Math.pow(1 - j / 22, 1.6)).toFixed(3)}"/>`;
-    }
+    defs += `<linearGradient id="w${i}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${mix(hazeL, sc.glow, 0.12)}"/><stop offset=".35" stop-color="${mix(hazeL, sc.fg, 0.55)}"/><stop offset="1" stop-color="${sc.fg}"/></linearGradient>
+      <radialGradient id="r${i}" cx=".5" cy="0" r="1"><stop offset="0" stop-color="${sc.glow}" stop-opacity=".3"/><stop offset=".5" stop-color="${sc.glow}" stop-opacity=".08"/><stop offset="1" stop-color="${sc.glow}" stop-opacity="0"/></radialGradient>`;
+    body += `<rect y="${sc.hz}" width="1920" height="${H - sc.hz}" fill="url(#w${i})"/><ellipse cx="${sc.gx}" cy="${sc.hz}" rx="260" ry="360" fill="url(#r${i})"/>`;
   }
   body += `<ellipse cx="${sc.gx}" cy="${sc.hz + 20}" rx="900" ry="200" fill="url(#g${i})" opacity=".35"/>`;
   return `<svg viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg"><defs>${defs}</defs>${body}</svg>`;

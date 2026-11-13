@@ -97,7 +97,11 @@
   box-shadow: var(--lr-shadow-focus); opacity: 0; transition: opacity var(--lr-t-focus) linear;
 }
 .lr-tile:focus { outline: none; }
-.lr-tile.is-selected { background: var(--lr-plate-sel); }
+/* selected = remembered while focus is elsewhere: same plate, a short underline (the same mark as the selected tab) */
+.lr-tile.is-selected::before {
+  content: ""; position: absolute; left: 50%; bottom: var(--lr-s8); width: var(--lr-s32); height: var(--lr-s4);
+  border-radius: var(--lr-s4); background: var(--lr-ink); transform: translateX(-50%);
+}
 .lr-tile.is-focused { transform: var(--lr-lift); background: var(--lr-focus-bg); box-shadow: none; z-index: 2; }
 .lr-tile.is-focused::after { opacity: 1; }
 .lr-tile:active { transform: translateY(calc(var(--lr-px) * -4)) scale(1.04); transition-duration: var(--lr-t-press); }

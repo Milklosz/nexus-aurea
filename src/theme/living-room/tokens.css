@@ -46,6 +46,7 @@
   --lr-s32: calc(var(--lr-px) * 32);
   --lr-s40: calc(var(--lr-px) * 40);
   --lr-s48: calc(var(--lr-px) * 48);
+  --lr-s56: calc(var(--lr-px) * 56);
   --lr-s64: calc(var(--lr-px) * 64);
   --lr-s72: calc(var(--lr-px) * 72);
   --lr-s96: calc(var(--lr-px) * 96);

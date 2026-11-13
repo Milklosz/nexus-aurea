@@ -38,6 +38,8 @@ type ControlCenterProps = {
   appSearch?: { entries: readonly SearchEntry[]; onLaunch: (entryId: string) => void };
   /** Tab shown first. Home entries (Szukaj, Pilot) open Control Center directly on their tab. */
   initialPanel?: ControlPanelId;
+  /** Living Room Home: Polish section names, "Ustawienia" heading, and focus starts on the open section tab. */
+  livingRoom?: boolean;
 };
 
 const profiles: Array<{ id: CinemaProfile; label: string }> = [
@@ -45,6 +47,8 @@ const profiles: Array<{ id: CinemaProfile; label: string }> = [
   { id: "gaming", label: "Gaming" },
   { id: "desktop", label: "Desktop" },
 ];
+
+const livingRoomPanelLabels: Record<string, string> = { cinema: "Kino", gaming: "Gry", remote: "Pilot", search: "Szukaj" };
 
 const controlPanels = [
   { id: "cinema", label: "Cinema" },
@@ -139,9 +143,14 @@ export function ControlCenter(props: ControlCenterProps) {
   useEffect(() => {
     const element = dialog.current;
     if (element && !element.open && typeof element.showModal === "function") element.showModal();
+    // showModal focuses the first control (the close button). In the Living Room the open section tab is the natural start.
+    const focusFrame = props.livingRoom
+      ? window.requestAnimationFrame(() => element?.querySelector<HTMLElement>('.cc-tabs [aria-selected="true"]')?.focus({ preventScroll: true }))
+      : 0;
     let active = true;
     void readControlStatus(() => active);
     return () => {
+      window.cancelAnimationFrame(focusFrame);
       active = false;
       controlStatusRequestId.current += 1;
       controlStatusRequestInFlight.current = false;
@@ -253,7 +262,7 @@ export function ControlCenter(props: ControlCenterProps) {
     <header className="control-center-header">
       <div>
         <span className="control-center-eyebrow">VELORA · GRAND CINEMA</span>
-        <h2 id="control-center-title">Control Center</h2>
+        <h2 id="control-center-title">{props.livingRoom ? "Ustawienia" : "Control Center"}</h2>
         <p>Ustawienia konsoli multimedialnej</p>
       </div>
       <button className="cc-close" type="button" data-remote-allow="" onClick={props.onClose} aria-label="Zamknij Control Center">×</button>
@@ -272,7 +281,7 @@ export function ControlCenter(props: ControlCenterProps) {
         tabIndex={activePanel === panel.id ? 0 : -1}
         onClick={() => selectPanel(panel.id)}
         onKeyDown={(event) => handleTabKeyDown(event, index)}
-      >{panel.label}</button>)}
+      >{props.livingRoom ? livingRoomPanelLabels[panel.id] ?? panel.label : panel.label}</button>)}
     </nav>
 
     <div className="cc-stage">
@@ -426,7 +435,7 @@ export function ControlCenter(props: ControlCenterProps) {
     </div>
 
     <footer className="cc-footer">
-      <span className="cc-footer-hint">F3 otwiera panel · Esc wraca · ← → przełączają sekcję</span>
+      <span className="cc-footer-hint">{props.livingRoom ? "○ / Esc  Zamknij" : "F3 otwiera panel · Esc wraca · ← → przełączają sekcję"}</span>
       <div>
         <button type="button" data-remote-allow="" onClick={props.onOpenDiagnostics}>Diagnostyka</button>
       <button type="button" data-remote-allow="" onClick={props.onShowDesktop}>Pokaż pulpit</button>

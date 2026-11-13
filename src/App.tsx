@@ -631,6 +631,7 @@ export default function App() {
         onClose={closeControlCenter}
         appSearch={appSearch}
         initialPanel={controlCenterPanel}
+        livingRoom={livingRoom}
       />}
       {ambient.active && <AmbientScreen />}
       {diagnostics && <GamepadDiagnostics

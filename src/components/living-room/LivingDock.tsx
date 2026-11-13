@@ -1,4 +1,4 @@
-import { useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import type { StreamingService } from "../../data/streamingServices";
 import type { AppManagerSnapshot } from "../../services/appManager";
 import { SERVICE_PRESENTATION, type DockServiceState } from "../../theme/living-room/content";
@@ -27,32 +27,35 @@ export function dockServiceState(service: StreamingService, launching: boolean, 
 type FocusSource = "keyboard" | "gamepad" | "remote";
 
 export function LivingDock({ services, activeIndex, launchingIds, appManager, buttonRefs, onFocus, onActivate, onUnavailable }: LivingDockProps) {
-  const [dockHasFocus, setDockHasFocus] = useState(false);
+  // Focus is the default state of the dock (Home opens, or returns from an app, with the selected tile focused).
+  // It is only "elsewhere" while a focus event landed outside the dock: a top action or an overlay. Window blur never clears it.
+  const [focusElsewhere, setFocusElsewhere] = useState(false);
+  const navRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const onFocusIn = (event: FocusEvent) => {
+      if (event.target instanceof Node) setFocusElsewhere(!navRef.current?.contains(event.target));
+    };
+    document.addEventListener("focusin", onFocusIn);
+    return () => document.removeEventListener("focusin", onFocusIn);
+  }, []);
   const [focusSource, setFocusSource] = useState<FocusSource>("keyboard");
 
   const handleItemFocus = (index: number) => {
     const current = typeof document !== "undefined" ? document.body?.dataset.focusSource : undefined;
     const source: FocusSource = current === "remote" || current === "gamepad" || current === "keyboard" ? current : "keyboard";
     setFocusSource(source);
-    setDockHasFocus(true);
+    setFocusElsewhere(false);
     onFocus(index);
   };
 
   return (
-    <nav
-      className="lr-dock"
-      aria-label="Aplikacje"
-      onBlur={(event) => {
-        // Focus moved outside the dock (top bar, a dialog, another window): the tile stays "selected", not "focused".
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDockHasFocus(false);
-      }}
-    >
+    <nav ref={navRef} className="lr-dock" aria-label="Aplikacje">
       {services.map((service, index) => {
         const active = activeIndex === index;
         const state = dockServiceState(service, launchingIds.has(service.id), appManager);
         const presentation = SERVICE_PRESENTATION[service.id];
         const classes = ["lr-tile", `lr-tile-${service.id}`];
-        if (active) classes.push("aurea-active", dockHasFocus ? "is-focused" : "is-selected");
+        if (active) classes.push("aurea-active", focusElsewhere ? "is-selected" : "is-focused");
         if (state === "launching") classes.push("is-launching");
         if (state === "missing") classes.push("is-missing");
         return (
