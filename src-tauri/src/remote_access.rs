@@ -1681,6 +1681,11 @@ mod windows_tests {
         (RemoteAccess::with_credential_store(store.clone()), store)
     }
 
+    fn persist_synthetic_trust(store: &dyn CredentialStore) {
+        persist_trust_material(store, TEST_CA_CERT, TEST_CA_KEY)
+            .expect("persist synthetic test trust before pairing");
+    }
+
     fn device_id(index: u64) -> String {
         format!("{index:032x}")
     }
@@ -1963,6 +1968,7 @@ mod windows_tests {
             .is_none());
 
         let (failed_token_remote, failed_token_store) = remote_with_test_store("fail-device-token");
+        persist_synthetic_trust(failed_token_store.as_ref());
         failed_token_remote.ensure_vault_loaded().unwrap();
         lock(&failed_token_remote.inner.status).enabled = true;
         failed_token_store.fail_write(&device_token_account(&device_id(1)));
@@ -1976,6 +1982,7 @@ mod windows_tests {
             .is_empty());
 
         let (failed_index_remote, failed_index_store) = remote_with_test_store("fail-pair-index");
+        persist_synthetic_trust(failed_index_store.as_ref());
         failed_index_remote.ensure_vault_loaded().unwrap();
         lock(&failed_index_remote.inner.status).enabled = true;
         failed_index_store.fail_write(DEVICE_INDEX_ACCOUNT);
@@ -1993,6 +2000,7 @@ mod windows_tests {
             .is_empty());
 
         let (sequence_remote, sequence_store) = remote_with_test_store("fail-sequence-index");
+        persist_synthetic_trust(sequence_store.as_ref());
         sequence_remote.ensure_vault_loaded().unwrap();
         lock(&sequence_remote.inner.status).enabled = true;
         pair_test_device(&sequence_remote, 1, "Synthetic Remote")
@@ -2017,6 +2025,7 @@ mod windows_tests {
     #[test]
     fn revoke_write_failure_is_visible_and_failed_cleanup_stays_revoked() {
         let (remote, store) = remote_with_test_store("revoke-errors");
+        persist_synthetic_trust(store.as_ref());
         remote.ensure_vault_loaded().unwrap();
         lock(&remote.inner.status).enabled = true;
         pair_test_device(&remote, 1, "Synthetic Remote").expect("pair test device");
