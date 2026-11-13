@@ -8,6 +8,8 @@ import {
 
 export type ControllerActions = {
   move: (delta: -1 | 1) => void;
+  /** Up (-1) or down (+1): home zones, or dialog focus while a dialog is open. Optional: absent means no-op. */
+  vertical?: (delta: -1 | 1) => void;
   confirm: () => void;
   back: () => void;
   options: () => void;
@@ -38,6 +40,7 @@ export function useGamepad(
     const engine = new ControllerEngine();
     const dispatch = (action: ControllerAction) => {
       if (action.type === "move") actionsRef.current.move(action.delta);
+      else if (action.type === "vertical") actionsRef.current.vertical?.(action.delta);
       else actionsRef.current[action.type]();
     };
     const poll = () => {

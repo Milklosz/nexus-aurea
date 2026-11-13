@@ -13,6 +13,11 @@ export interface UseNavigationOptions {
   columns?: number;
   /** When provided, registers this navigation as an AUREA grid (for 2D remote / gamepad focus). */
   gridId?: string;
+  /**
+   * Handles ArrowUp/ArrowDown in linear (non-grid) mode, for example to move between
+   * home zones. Returns true when it moved focus; false keeps the legacy behavior.
+   */
+  onVerticalZone?: (delta: -1 | 1) => boolean;
 }
 
 export function useNavigation(
@@ -36,6 +41,12 @@ export function useNavigation(
   useEffect(() => {
     menuRef.current = onMenu;
   }, [onMenu]);
+
+  const onVerticalZone = options?.onVerticalZone;
+  const verticalRef = useRef(onVerticalZone);
+  useEffect(() => {
+    verticalRef.current = onVerticalZone;
+  }, [onVerticalZone]);
 
   const focusApp = useCallback(
     (index: number) => {
@@ -76,6 +87,12 @@ export function useNavigation(
       if (intent.kind !== "move") return;
 
       const direction = intent.direction;
+      if ((direction === "up" || direction === "down") && columns === undefined && verticalRef.current) {
+        if (verticalRef.current(direction === "up" ? -1 : 1)) {
+          event.preventDefault();
+          return;
+        }
+      }
       if (direction === "up") {
         if (columns !== undefined) {
           event.preventDefault();

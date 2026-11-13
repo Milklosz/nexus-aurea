@@ -1,6 +1,7 @@
 export type ControllerProfile = "auto" | "standard" | "playstation";
 export type ControllerAction =
   | { type: "move"; delta: -1 | 1 }
+  | { type: "vertical"; delta: -1 | 1 }
   | { type: "confirm" | "back" | "options" };
 
 export type ControllerSample = {
@@ -11,6 +12,11 @@ export type ControllerSample = {
   confirm: boolean;
   back: boolean;
   options: boolean;
+  /** Optional so existing samples without vertical input stay valid. */
+  dpadUp?: boolean;
+  dpadDown?: boolean;
+  /** Left stick Y: negative is up, positive is down. */
+  axisY?: number;
 };
 
 type Direction = -1 | 0 | 1;
@@ -49,6 +55,11 @@ export function readControllerSample(
   const confirmButton = profile === "standard" ? 0 : 1;
   const backButton = profile === "standard" ? 1 : 2;
   const axisX = pad.axes[0] ?? 0;
+  const axisY = pad.axes[1] ?? 0;
+  // Standard buttons 12/13 are D-pad up/down. In the raw PlayStation layout
+  // button 12 is the PS button, so D-pad vertical is read only from the standard
+  // mapping; the left stick Y covers vertical input on both profiles.
+  const standardDpad = profile === "standard";
   return {
     connected: true,
     dpadLeft: isPressed(pad, 14),
@@ -57,6 +68,9 @@ export function readControllerSample(
     confirm: isPressed(pad, confirmButton),
     back: isPressed(pad, backButton),
     options: isPressed(pad, 9),
+    dpadUp: standardDpad && isPressed(pad, 12),
+    dpadDown: standardDpad && isPressed(pad, 13),
+    axisY: Number.isFinite(axisY) ? axisY : 0,
   };
 }
 
@@ -64,12 +78,55 @@ function emptyButton(): ButtonState {
   return { raw: false, since: 0, pressed: false };
 }
 
+/**
+ * Debounced, auto-repeating direction for one axis of input. The first step fires
+ * after the debounce window, the second after the initial repeat delay, and then at
+ * the repeat rate while the direction is held.
+ */
+class DirectionRepeat {
+  private direction: Direction = 0;
+  private since = 0;
+  private nextAt: number | null = null;
+
+  /** Returns the step to emit now, or 0 when nothing should fire. */
+  step(direction: Direction, now: number): Direction {
+    if (direction !== this.direction) {
+      this.direction = direction;
+      this.since = now;
+      this.nextAt = null;
+      return 0;
+    }
+    if (direction === 0 || now - this.since < DEBOUNCE_MS) return 0;
+    if (this.nextAt === null) {
+      this.nextAt = now + INITIAL_REPEAT_MS;
+      return direction;
+    }
+    if (now >= this.nextAt) {
+      this.nextAt = now + REPEAT_MS;
+      return direction;
+    }
+    return 0;
+  }
+
+  prime(direction: Direction, now: number): void {
+    this.direction = direction;
+    this.since = now;
+    this.nextAt = direction === 0 ? null : Number.POSITIVE_INFINITY;
+  }
+
+  reset(): void {
+    this.direction = 0;
+    this.since = 0;
+    this.nextAt = null;
+  }
+}
+
 export class ControllerEngine {
   private ready = false;
-  private direction: Direction = 0;
-  private directionSince = 0;
-  private nextRepeatAt: number | null = null;
+  private readonly horizontal = new DirectionRepeat();
+  private readonly vertical = new DirectionRepeat();
   private axisDirection: Direction = 0;
+  private axisYDirection: Direction = 0;
   private readonly buttons: Record<"confirm" | "back" | "options", ButtonState> = {
     confirm: emptyButton(),
     back: emptyButton(),
@@ -87,20 +144,10 @@ export class ControllerEngine {
     }
 
     const actions: ControllerAction[] = [];
-    const direction = this.readDirection(sample);
-    if (direction !== this.direction) {
-      this.direction = direction;
-      this.directionSince = now;
-      this.nextRepeatAt = null;
-    } else if (direction !== 0 && now - this.directionSince >= DEBOUNCE_MS) {
-      if (this.nextRepeatAt === null) {
-        actions.push({ type: "move", delta: direction });
-        this.nextRepeatAt = now + INITIAL_REPEAT_MS;
-      } else if (now >= this.nextRepeatAt) {
-        actions.push({ type: "move", delta: direction });
-        this.nextRepeatAt = now + REPEAT_MS;
-      }
-    }
+    const horizontalStep = this.horizontal.step(this.readDirection(sample), now);
+    if (horizontalStep !== 0) actions.push({ type: "move", delta: horizontalStep });
+    const verticalStep = this.vertical.step(this.readVerticalDirection(sample), now);
+    if (verticalStep !== 0) actions.push({ type: "vertical", delta: verticalStep });
 
     this.updateButton("confirm", sample.confirm, now, actions);
     this.updateButton("back", sample.back, now, actions);
@@ -110,10 +157,10 @@ export class ControllerEngine {
 
   reset(): void {
     this.ready = false;
-    this.direction = 0;
-    this.directionSince = 0;
-    this.nextRepeatAt = null;
+    this.horizontal.reset();
+    this.vertical.reset();
     this.axisDirection = 0;
+    this.axisYDirection = 0;
     this.buttons.confirm = emptyButton();
     this.buttons.back = emptyButton();
     this.buttons.options = emptyButton();
@@ -121,9 +168,8 @@ export class ControllerEngine {
 
   private prime(sample: ControllerSample, now: number): void {
     this.ready = true;
-    this.direction = this.readDirection(sample);
-    this.directionSince = now;
-    this.nextRepeatAt = this.direction === 0 ? null : Number.POSITIVE_INFINITY;
+    this.horizontal.prime(this.readDirection(sample), now);
+    this.vertical.prime(this.readVerticalDirection(sample), now);
     for (const name of ["confirm", "back", "options"] as const) {
       this.buttons[name] = { raw: sample[name], since: now, pressed: sample[name] };
     }
@@ -143,6 +189,26 @@ export class ControllerEngine {
       return 1;
     }
     this.axisDirection = 0;
+    return 0;
+  }
+
+  /** -1 is up, +1 is down. The D-pad wins over the stick, as it does horizontally. */
+  private readVerticalDirection(sample: ControllerSample): Direction {
+    const dpadUp = sample.dpadUp ?? false;
+    const dpadDown = sample.dpadDown ?? false;
+    if (dpadUp !== dpadDown) return dpadUp ? -1 : 1;
+    const axis = sample.axisY ?? 0;
+    if (this.axisYDirection < 0 && axis < -0.35) return -1;
+    if (this.axisYDirection > 0 && axis > 0.35) return 1;
+    if (axis < -0.55) {
+      this.axisYDirection = -1;
+      return -1;
+    }
+    if (axis > 0.55) {
+      this.axisYDirection = 1;
+      return 1;
+    }
+    this.axisYDirection = 0;
     return 0;
   }
 
