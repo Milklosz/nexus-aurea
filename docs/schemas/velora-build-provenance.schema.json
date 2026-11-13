@@ -2,16 +2,17 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Milklosz/nexus-aurea/blob/main/docs/schemas/velora-build-provenance.schema.json",
   "title": "VELORA Windows build provenance manifest",
+  "description": "Schema version 2. Describes the files of one unsigned Windows build and the context they were built in. It is not a signature: see docs/velora-s0b-build-provenance.md for what verification can and cannot prove. Tool versions may be the string \"unavailable\" in a local manifest; CI and release verification reject that.",
   "type": "object",
   "required": ["schemaVersion", "app", "source", "build", "tools", "artifacts"],
   "properties": {
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": { "const": 2 },
     "app": {
       "type": "object",
       "required": ["name", "version"],
       "properties": {
         "name": { "const": "VELORA" },
-        "version": { "type": "string", "minLength": 1 }
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?$" }
       },
       "additionalProperties": false
     },
@@ -26,7 +27,7 @@
         "ref": { "type": "string", "minLength": 1 },
         "dirty": { "type": ["boolean", "null"] },
         "clean": { "type": ["boolean", "null"] },
-        "event": { "type": "string", "minLength": 1 },
+        "event": { "type": "string", "pattern": "^[a-z_]+$" },
         "pullRequest": {
           "oneOf": [
             { "type": "null" },
@@ -50,11 +51,11 @@
       "required": ["generatedAt", "target", "profile", "runnerOs", "runId", "runAttempt"],
       "properties": {
         "generatedAt": { "type": "string", "format": "date-time" },
-        "target": { "type": "string", "minLength": 1 },
-        "profile": { "type": "string", "minLength": 1 },
+        "target": { "type": "string", "pattern": "^[a-z0-9_]+(?:-[a-z0-9_]+){2,3}$" },
+        "profile": { "enum": ["release", "debug"] },
         "runnerOs": { "type": "string", "minLength": 1 },
-        "runId": { "type": ["string", "null"] },
-        "runAttempt": { "type": ["string", "null"] }
+        "runId": { "type": ["string", "null"], "pattern": "^[0-9]+$" },
+        "runAttempt": { "type": ["string", "null"], "pattern": "^[0-9]+$" }
       },
       "additionalProperties": false
     },
@@ -62,23 +63,36 @@
       "type": "object",
       "required": ["node", "pnpm", "rustc", "cargo", "tauriCli", "msvc", "windowsSdk"],
       "properties": {
-        "node": { "type": "string" },
-        "pnpm": { "type": "string" },
-        "rustc": { "type": "string" },
-        "cargo": { "type": "string" },
-        "tauriCli": { "type": "string" },
-        "msvc": { "type": "string" },
-        "windowsSdk": { "type": "string" }
+        "node": { "type": "string", "pattern": "^(?:unavailable|v\\d+\\.\\d+\\.\\d+)$" },
+        "pnpm": { "type": "string", "pattern": "^(?:unavailable|\\d+\\.\\d+\\.\\d+)$" },
+        "rustc": { "type": "string", "pattern": "^(?:unavailable|rustc \\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.]+)? .*)$" },
+        "cargo": { "type": "string", "pattern": "^(?:unavailable|cargo \\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.]+)? .*)$" },
+        "tauriCli": { "type": "string", "pattern": "^(?:unavailable|tauri-cli \\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.]+)?)$" },
+        "msvc": { "type": "string", "pattern": "^(?:unavailable|\\d+\\.\\d+\\.\\d+(?:\\.\\d+)?)$" },
+        "windowsSdk": { "type": "string", "pattern": "^(?:unavailable|10\\.\\d+\\.\\d+\\.\\d+)$" }
       },
       "additionalProperties": false
     },
     "artifacts": {
       "type": "object",
-      "required": ["installer", "builtExe", "packagedExe"],
+      "required": ["installer", "builtExe", "packagedExe", "payloadRelation"],
       "properties": {
         "installer": { "$ref": "#/$defs/artifact" },
         "builtExe": { "$ref": "#/$defs/artifact" },
-        "packagedExe": { "$ref": "#/$defs/artifact" }
+        "packagedExe": { "$ref": "#/$defs/artifact" },
+        "payloadRelation": {
+          "type": "object",
+          "required": ["policy", "transformation", "markerOffset"],
+          "properties": {
+            "policy": { "type": "string", "minLength": 1 },
+            "transformation": {
+              "type": "string",
+              "pattern": "^__TAURI_BUNDLE_TYPE_VAR_[A-Z]+->__TAURI_BUNDLE_TYPE_VAR_[A-Z]+$"
+            },
+            "markerOffset": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        }
       },
       "additionalProperties": false
     }

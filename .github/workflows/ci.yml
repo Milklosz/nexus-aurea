@@ -123,18 +123,27 @@ jobs:
           New-Item -ItemType Directory -Path $extractDirectory -ErrorAction Stop | Out-Null
           & $sevenZipPath x -y "-o$extractDirectory" $installers[0].FullName | Out-Null
           if ($LASTEXITCODE -ne 0) { throw 'Could not extract the NSIS installer for payload verification.' }
-          $packagedExecutables = @(Get-ChildItem -LiteralPath $extractDirectory -Filter 'nexus-aurea.exe' -File -Recurse)
-          if ($packagedExecutables.Count -ne 1) {
-            throw "Expected exactly one packaged nexus-aurea.exe; found $($packagedExecutables.Count)."
-          }
-
+          # Exactly one packaged EXE must exist; the verifier enforces this too (--extracted-dir).
           $builtExe = 'src-tauri/target/x86_64-pc-windows-msvc/release/nexus-aurea.exe'
           if (-not (Test-Path -LiteralPath $builtExe -PathType Leaf)) { throw 'The release payload EXE is missing.' }
           $manifest = Join-Path $bundleDirectory 'velora-build-provenance.json'
-          node scripts/build-provenance.mjs write --installer "$($installers[0].FullName)" --payload "$builtExe" --packaged-payload "$($packagedExecutables[0].FullName)" --manifest "$manifest"
+          # --ci: every tool version must be available (pnpm, Tauri CLI, MSVC and Windows SDK included),
+          # the built EXE and the packaged EXE must be related by exactly the reviewed Tauri bundle-type
+          # marker change, and the manifest is compared with this job's GitHub context and installed tools.
+          node scripts/build-provenance.mjs write --ci --installer "$($installers[0].FullName)" --payload "$builtExe" --extracted-dir "$extractDirectory" --manifest "$manifest"
           if ($LASTEXITCODE -ne 0) { throw 'Could not write and verify the build provenance manifest.' }
-          node scripts/build-provenance.mjs verify --installer "$($installers[0].FullName)" --payload "$builtExe" --packaged-payload "$($packagedExecutables[0].FullName)" --manifest "$manifest"
+          node scripts/build-provenance.mjs verify --ci --installer "$($installers[0].FullName)" --payload "$builtExe" --extracted-dir "$extractDirectory" --manifest "$manifest"
           if ($LASTEXITCODE -ne 0) { throw 'The build provenance manifest does not match its output files.' }
+
+          # Release preview: the same file selection and installer/manifest check the release job will
+          # use, run without publishing anything.
+          $preview = Join-Path $env:RUNNER_TEMP "velora-release-preview-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
+          New-Item -ItemType Directory -Path $preview -ErrorAction Stop | Out-Null
+          Copy-Item -LiteralPath $installers[0].FullName, $manifest -Destination $preview
+          $assets = @(node scripts/build-provenance.mjs release-assets --dir "$preview")
+          if ($LASTEXITCODE -ne 0 -or $assets.Count -ne 2) { throw 'The release asset selection failed.' }
+          node scripts/build-provenance.mjs verify-release --preview --installer "$($assets[0])" --manifest "$($assets[1])"
+          if ($LASTEXITCODE -ne 0) { throw 'The release assets do not match each other.' }
 
           $provenance = Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
           @(
@@ -150,6 +159,10 @@ jobs:
             "- Built EXE SHA-256: $($provenance.artifacts.builtExe.sha256)"
             "- Packaged payload EXE: $($provenance.artifacts.packagedExe.name) ($($provenance.artifacts.packagedExe.sizeBytes) bytes)"
             "- Packaged payload EXE SHA-256: $($provenance.artifacts.packagedExe.sha256)"
+            "- Payload relation: $($provenance.artifacts.payloadRelation.transformation) at offset $($provenance.artifacts.payloadRelation.markerOffset) ($($provenance.artifacts.payloadRelation.policy))"
+            "- Tools: node $($provenance.tools.node); pnpm $($provenance.tools.pnpm); $($provenance.tools.rustc); $($provenance.tools.cargo); $($provenance.tools.tauriCli); MSVC $($provenance.tools.msvc); Windows SDK $($provenance.tools.windowsSdk)"
+            '- Verification: internal consistency passed; CI origin was compared with this job''s GitHub context and runner tools (the runner is the only witness).'
+            '- Not a digital signature: hashes and this manifest do not prove who built the files.'
             '- The Actions artifact ZIP digest is reported separately by GitHub.'
           ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
@@ -216,21 +229,43 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Check out source (verification script and schema only)
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
       - name: Download Windows installer artifact
         uses: actions/download-artifact@v8
         with:
           name: VELORA-Windows-x64-${{ github.sha }}
           path: dist/installers
 
+      - name: Select and verify release assets
+        id: assets
+        shell: bash
+        run: |
+          # Exactly one installer and its provenance manifest, nothing else; the manifest must
+          # belong to this installer and to this run's commit, event and tag.
+          mapfile -t assets < <(node scripts/build-provenance.mjs release-assets --dir dist/installers)
+          [ "${#assets[@]}" -eq 2 ] || { echo "Expected the installer and the manifest."; exit 1; }
+          node scripts/build-provenance.mjs verify-release --installer "${assets[0]}" --manifest "${assets[1]}"
+          printf 'installer=%s\nmanifest=%s\n' "${assets[0]}" "${assets[1]}" >> "$GITHUB_OUTPUT"
+
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_INSTALLER: ${{ steps.assets.outputs.installer }}
+          RELEASE_MANIFEST: ${{ steps.assets.outputs.manifest }}
         shell: bash
         run: |
+          # The manifest is published together with the installer it describes.
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/installers/*.exe --clobber
+            gh release upload "$GITHUB_REF_NAME" "$RELEASE_INSTALLER" "$RELEASE_MANIFEST" --clobber
           else
-            gh release create "$GITHUB_REF_NAME" dist/installers/*.exe \
+            gh release create "$GITHUB_REF_NAME" "$RELEASE_INSTALLER" "$RELEASE_MANIFEST" \
               --title "VELORA $GITHUB_REF_NAME" \
               --generate-notes \
               --verify-tag
