@@ -34,6 +34,7 @@ import { launchManagedApp, listenForLaunchEvent, listenForManagedAppExit, manage
 import { getSessionState, requestSessionTransition, returnVeloraHome, type ReturnHomeEvent, type SessionId } from "./services/sessionOrchestrator";
 import { useStartupRecoveryNotice } from "./hooks/useStartupRecoveryNotice";
 import { sessionTransitionFailureNotice } from "./services/sessionTransitionNotice";
+import { collectSearchEntries, tileSearchEntries } from "./services/appSearch";
 import { readCinemaProfile, saveCinemaProfile, type CinemaProfile } from "./services/cinemaMode";
 import {
   adjustSystemVolume,
@@ -140,6 +141,17 @@ export default function App() {
     onVerticalZone: handleVerticalZone,
   });
   const closeControlCenter = useCallback(() => setControlCenterOpen(false), []);
+  // Native search over the home tiles. Games (Steam, Playnite) will join as more providers.
+  const searchEntriesList = useMemo(() => collectSearchEntries([() => tileSearchEntries(streamingServices)]), []);
+  const appSearch = useMemo(() => ({
+    entries: searchEntriesList,
+    onLaunch: (entryId: string) => {
+      const index = streamingServices.findIndex((service) => `tile:${service.id}` === entryId);
+      if (index < 0) return;
+      closeControlCenter();
+      void openService(index);
+    },
+  }), [closeControlCenter, openService, searchEntriesList]);
   const toggleControlCenter = useCallback(() => {
     if (controlCenterOpen) {
       closeControlCenter();
@@ -557,6 +569,7 @@ export default function App() {
         onOpenDiagnostics={openDiagnosticsFromCenter}
         onReturnToNexus={returnToNexus}
         onClose={closeControlCenter}
+        appSearch={appSearch}
       />}
       {ambient.active && <AmbientScreen />}
       {diagnostics && <GamepadDiagnostics
