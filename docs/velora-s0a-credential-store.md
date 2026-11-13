@@ -18,17 +18,19 @@ At the baseline, the Windows `keyring` dependency used its default feature set; 
 
 ## Verification status
 
-Results below are for the current S0a branch head and must be refreshed after CI runs on the PR head.
+The original local Windows sandbox run could not access Credential Manager (`Unavailable`); this is recorded separately from the dedicated GitHub-hosted Windows CI run. The CI result below is for head `934fd664e4b21c2a3f342413aa89b277718e0ff6` (run `43467145834`, PR #49).
 
 | Check | Result | Evidence |
 |---|---|---|
 | Dependency feature inspection | PASS | `cargo tree --offline --locked --manifest-path src-tauri/Cargo.toml -e features -i keyring` shows `keyring feature "windows-native"`. |
-| Rust library test suite | FAIL / native scenarios NOT RUN | 272 tests ran: 267 passed and five new Windows Credential Manager integration tests failed at the first native write/read with `CredentialStoreError::Unavailable` in this execution environment. This does not establish persistence, independent-process, revoke, or native payload-boundary behavior. |
+| Dedicated Windows CI Rust suite | PASS | Run `43467145834` on the current PR head completed successfully. Windows-only integration tests use unique synthetic Credential Manager service/account names and cover independent handles/processes, CA/device/sequence persistence through a new handle and child process, replay rejection after restart, revoke/revoke-all, device and payload bounds. |
+| Injected write/delete failures | PASS | The test-only fault-injecting store exercises failure of CA, token, index, sequence and cleanup writes; pairing and command handling fail closed and revoke remains effective when token cleanup fails. This validates service behavior when the adapter returns an error. |
+| Native Credential Manager write-error injection | NOT RUN | GitHub-hosted CI does not provide a safe, deterministic way to force a valid native write to fail after reaching Windows Credential Manager. Native reads/writes and the safe payload boundary are tested against unique synthetic records; failures are injected at the storage adapter boundary. |
 | UTF-16 limit arithmetic and safe boundary | PASS | `credential_limit_counts_windows_utf16_bytes` passed for ASCII and supplementary Unicode characters. |
-| Rust formatting and whitespace | PASS | `cargo fmt --manifest-path src-tauri/Cargo.toml`; `git diff --check`. |
+| Windows CI build checks | PASS | The same run completed JavaScript tests, Rust library tests, React/TypeScript build, Windows MSVC check, and NSIS installer build. No installer was installed or published. |
 | iPhone/Safari and physical pairing | NOT RUN | Requires the separate hardware acceptance stage. |
 
-The native integration failure is an explicit limitation, not a mocked success. The GitHub Actions result on the new PR head is still required before S0a can meet its acceptance criteria.
+The native CredMan scenarios passed on the dedicated Windows runner; the local sandbox's `Unavailable` result is not presented as a native PASS. The injected error tests use the test-only storage adapter and are not described as native CredMan error injection.
 
 ## Recovery and remaining risks
 
