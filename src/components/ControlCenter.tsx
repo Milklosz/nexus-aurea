@@ -36,6 +36,8 @@ type ControlCenterProps = {
   onClose: () => void;
   /** When present, the Szukaj tab is shown. Launching a result goes through onLaunch. */
   appSearch?: { entries: readonly SearchEntry[]; onLaunch: (entryId: string) => void };
+  /** Tab shown first. Home entries (Szukaj, Pilot) open Control Center directly on their tab. */
+  initialPanel?: ControlPanelId;
 };
 
 const profiles: Array<{ id: CinemaProfile; label: string }> = [
@@ -51,7 +53,7 @@ const controlPanels = [
   { id: "search", label: "Szukaj" },
 ] as const;
 
-type ControlPanelId = (typeof controlPanels)[number]["id"];
+export type ControlPanelId = (typeof controlPanels)[number]["id"];
 
 function delayLabel(seconds: number): string {
   return Math.round(seconds / 60) + " min";
@@ -62,7 +64,8 @@ export function ControlCenter(props: ControlCenterProps) {
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   // The Szukaj tab exists only when the app passes search entries.
   const panels = controlPanels.filter((panel) => panel.id !== "search" || props.appSearch !== undefined);
-  const [activePanel, setActivePanel] = useState<ControlPanelId>("cinema");
+  const [activePanel, setActivePanel] = useState<ControlPanelId>(() =>
+    props.initialPanel !== undefined && (props.initialPanel !== "search" || props.appSearch !== undefined) ? props.initialPanel : "cinema");
   const [status, setStatus] = useState<ControlServiceStatus>(disabledControlServiceStatus);
   const [loading, setLoading] = useState(true);
   const [statusReadFailed, setStatusReadFailed] = useState(false);

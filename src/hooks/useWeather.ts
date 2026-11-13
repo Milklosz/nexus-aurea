@@ -67,5 +67,8 @@ export function useWeather() {
         ? "Nie udało się pobrać pogody. Ponowna próba nastąpi za 15 minut."
         : "Bieżąca pogoda dla Zabrza.";
 
-  return { label, title };
+  // Structured parts for layouts that style the temperature and the condition separately.
+  // Both stay empty when there is no reading: nothing is invented.
+  const temperatureText = weather.temperature !== null ? `${Math.round(weather.temperature)}°` : "";
+  return { label, title, temperatureText, condition: weather.temperature !== null ? weather.condition : "", stale: weather.stale };
 }

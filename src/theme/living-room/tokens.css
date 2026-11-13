@@ -1,0 +1,104 @@
+/*
+ * VELORA 2.0 "Living Room" design tokens: the single source for colour, spacing,
+ * type, radii, elevation, motion and focus. Every length is authored in reference
+ * pixels of a 1920x1080 canvas (--lr-px = 1 reference px) and scales to 4K and to
+ * other window sizes without media queries. See design/prototypes/DESIGN_SPEC.md.
+ */
+.lr {
+  color-scheme: dark;
+
+  /* ---- scale: 1 reference px. 1080p -> 1px, 4K at 100% Windows scale -> 2px ---- */
+  --lr-px: min(100vw / 1920, 100vh / 1080);
+
+  /* ---- colour: surfaces ---- */
+  --lr-bg: #050506;
+  --lr-plate: rgba(12, 12, 14, .64);
+  --lr-plate-line: rgba(255, 255, 255, .12);
+  --lr-plate-sel: rgba(243, 240, 234, .18);
+  --lr-action-bg: rgba(255, 255, 255, .09);
+  --lr-sheet-bg: #0d0d0f;
+  --lr-sheet-raised: #17171a;
+  --lr-sheet-line: rgba(255, 255, 255, .1);
+  --lr-scrim: rgba(0, 0, 0, .55);
+
+  /* ---- colour: text ---- */
+  --lr-ink: #f3f0ea;
+  --lr-ink-2: rgba(243, 240, 234, .8);
+  --lr-ink-3: rgba(243, 240, 234, .62); /* only on opaque sheets, >= 20 reference px */
+
+  /* ---- colour: focus (one language everywhere: a light plate with dark text) ---- */
+  --lr-focus-bg: #f3f0ea;
+  --lr-focus-ink: #121214;
+  --lr-focus-ink-2: rgba(18, 18, 20, .66);
+
+  /* ---- colour: state ---- */
+  --lr-ok: #9ccf9c;
+  --lr-warn: #e6c17a;
+  --lr-danger: #f0877a;
+
+  /* ---- spacing (reference px) ---- */
+  --lr-s4: calc(var(--lr-px) * 4);
+  --lr-s8: calc(var(--lr-px) * 8);
+  --lr-s12: calc(var(--lr-px) * 12);
+  --lr-s16: calc(var(--lr-px) * 16);
+  --lr-s20: calc(var(--lr-px) * 20);
+  --lr-s24: calc(var(--lr-px) * 24);
+  --lr-s32: calc(var(--lr-px) * 32);
+  --lr-s40: calc(var(--lr-px) * 40);
+  --lr-s48: calc(var(--lr-px) * 48);
+  --lr-s64: calc(var(--lr-px) * 64);
+  --lr-s72: calc(var(--lr-px) * 72);
+  --lr-s96: calc(var(--lr-px) * 96);
+
+  /* ---- safe area for TV overscan ---- */
+  --lr-safe-x: var(--lr-s96);
+  --lr-safe-top: var(--lr-s64);
+  --lr-safe-bottom: var(--lr-s72);
+
+  /* ---- type ---- */
+  --lr-font: "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --lr-fs-title: calc(var(--lr-px) * 72);
+  --lr-fs-clock: calc(var(--lr-px) * 44);
+  --lr-fs-wordmark: calc(var(--lr-px) * 26);
+  --lr-fs-context: calc(var(--lr-px) * 26);
+  --lr-fs-weather: calc(var(--lr-px) * 24);
+  --lr-fs-sheet-title: calc(var(--lr-px) * 40);
+  --lr-fs-row: calc(var(--lr-px) * 26);
+  --lr-fs-label: calc(var(--lr-px) * 22);
+  --lr-fs-small: calc(var(--lr-px) * 20); /* the floor */
+
+  /* ---- radii ---- */
+  --lr-r-tile: calc(var(--lr-px) * 14);
+  --lr-r-row: calc(var(--lr-px) * 16);
+  --lr-r-pill: calc(var(--lr-px) * 28);
+
+  /* ---- elevation: exactly one shadow, on the focused tile, faded with opacity only ---- */
+  --lr-shadow-focus: 0 calc(var(--lr-px) * 18) calc(var(--lr-px) * 36) rgba(0, 0, 0, .55);
+
+  /* ---- component sizes ---- */
+  --lr-tile-w: calc(var(--lr-px) * 176);
+  --lr-tile-h: calc(var(--lr-px) * 100);
+  --lr-action-h: calc(var(--lr-px) * 56);
+
+  /* ---- motion: only transform and opacity ever animate ---- */
+  --lr-ease-out: cubic-bezier(.2, .8, .2, 1);
+  --lr-ease-std: cubic-bezier(.4, 0, .2, 1);
+  --lr-t-focus: 220ms;
+  --lr-t-surface: 140ms;
+  --lr-t-press: 90ms;
+  --lr-t-title-out: 110ms;
+  --lr-t-title-in: 240ms;
+  --lr-t-scene: 700ms;
+  --lr-t-scene-settle: 1400ms;
+  --lr-t-sheet: 320ms;
+  --lr-t-toast: 240ms;
+
+  /* ---- focus lift (tile) ---- */
+  --lr-lift: translateY(calc(var(--lr-px) * -8)) scale(1.08);
+}
+
+/* Control Center, diagnostics and the on-screen keyboard are rem-based. Scale the root with the canvas so they stay readable at 4K
+   (1080p keeps the browser default of 16px). The class is set on <html> only while this theme is active. */
+html.lr-theme {
+  font-size: max(12px, calc(16 * min(100vw / 1920, 100vh / 1080)));
+}

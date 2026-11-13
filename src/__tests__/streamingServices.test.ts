@@ -15,10 +15,11 @@ describe("official streaming links", () => {
     expect(websites.find((service) => service.id === "max")?.href).toBe("https://www.hbomax.com/pl/pl");
   });
 
-  it("adds native Apple Music and Steam launchers to the cinema dock", () => {
+  it("adds native Steam, Playnite and Apple Music launchers to the cinema dock", () => {
     expect(streamingServices.filter((service) => service.kind === "managed").map((service) => service.id)).toEqual([
-      "appleMusic",
       "steam",
+      "playnite",
+      "appleMusic",
     ]);
   });
 

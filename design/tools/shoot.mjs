@@ -27,8 +27,8 @@ try {
   ws.addEventListener("message", (m) => { const d = JSON.parse(m.data); if (d.id && pending.has(d.id)) { pending.get(d.id)(d); pending.delete(d.id); } });
   const send = (method, params = {}) => new Promise((res, rej) => { const i = ++id; pending.set(i, (d) => d.error ? rej(new Error(d.error.message)) : res(d.result)); ws.send(JSON.stringify({ id: i, method, params })); });
   await send("Page.enable");
-  const keyInfo = { ArrowRight: [39], ArrowLeft: [37], ArrowUp: [38], ArrowDown: [40], Enter: [13], Escape: [27], Backspace: [8], Tab: [9] };
-  const press = async (key) => { const [code] = keyInfo[key] ?? [0]; const base = { key, code: key, windowsVirtualKeyCode: code, nativeVirtualKeyCode: code }; await send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base }); await send("Input.dispatchKeyEvent", { type: "keyUp", ...base }); await sleep(450); };
+  const keyInfo = { ArrowRight: [39], ArrowLeft: [37], ArrowUp: [38], ArrowDown: [40], Enter: [13], Escape: [27], Backspace: [8], Tab: [9], F2: [113], F3: [114], " ": [32] };
+  const press = async (key) => { const [code] = keyInfo[key] ?? [0]; const base = { key, code: key, windowsVirtualKeyCode: code, nativeVirtualKeyCode: code }; const text = key === "Enter" ? "\r" : key === " " ? " " : undefined; await send("Input.dispatchKeyEvent", text ? { type: "keyDown", text, ...base } : { type: "rawKeyDown", ...base }); await send("Input.dispatchKeyEvent", { type: "keyUp", ...base }); await sleep(450); };
   for (const [w, h] of sizes) {
     await send("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: 1, mobile: false });
     await send("Page.navigate", { url });

@@ -1,0 +1,165 @@
+@import "./tokens.css";
+@import "./overlays.css";
+
+/* ===== VELORA 2.0 "Living Room" Home (Cinema Minimal). Scoped to .lr; the previous Grand Cinema styles are untouched. ===== */
+
+.lr {
+  position: relative;
+  isolation: isolate;
+  width: 100vw;
+  height: 100svh;
+  overflow: hidden;
+  background: var(--lr-bg);
+  color: var(--lr-ink);
+  font-family: var(--lr-font);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- background ---------- */
+.lr-scenes { position: absolute; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+.lr-scene {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block;
+  opacity: 0; transform: scale(1.03);
+  transition: opacity var(--lr-t-scene) var(--lr-ease-std), transform var(--lr-t-scene-settle) var(--lr-ease-out);
+  will-change: opacity, transform;
+}
+.lr-scene.is-on { opacity: 1; transform: scale(1); }
+.lr-scrim {
+  position: absolute; inset: 0;
+  background:
+    linear-gradient(90deg, rgba(4, 4, 5, .66) 0%, rgba(4, 4, 5, .3) 36%, rgba(4, 4, 5, 0) 60%),
+    linear-gradient(0deg, rgba(4, 4, 5, .88) 0%, rgba(4, 4, 5, .5) 24%, rgba(4, 4, 5, 0) 50%),
+    linear-gradient(180deg, rgba(4, 4, 5, .5) 0%, rgba(4, 4, 5, 0) 20%);
+}
+.lr-grain {
+  position: absolute; inset: 0; opacity: .07;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: calc(var(--lr-px) * 220) calc(var(--lr-px) * 220);
+}
+
+/* ---------- top line ---------- */
+.lr-top {
+  position: absolute; z-index: 1;
+  top: var(--lr-safe-top); left: var(--lr-safe-x); right: var(--lr-safe-x); height: var(--lr-action-h);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.lr-when { display: flex; align-items: baseline; gap: calc(var(--lr-px) * 28); }
+.lr-clock { font-size: var(--lr-fs-clock); font-weight: 500; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.lr-weather { font-size: var(--lr-fs-weather); color: var(--lr-ink-2); }
+.lr-weather b { margin-right: var(--lr-s8); font-weight: 600; color: var(--lr-ink); }
+.lr-weather.is-stale { opacity: .72; }
+.lr-actions { display: flex; gap: var(--lr-s12); }
+.lr-action {
+  height: var(--lr-action-h); padding: 0 calc(var(--lr-px) * 26) 0 calc(var(--lr-px) * 22);
+  display: flex; align-items: center; gap: var(--lr-s12);
+  border: 0; border-radius: var(--lr-r-pill); background: var(--lr-action-bg); color: var(--lr-ink-2);
+  font: 500 var(--lr-fs-label) / 1 var(--lr-font); cursor: pointer;
+  transition: transform var(--lr-t-focus) var(--lr-ease-out), background-color var(--lr-t-surface) linear;
+}
+.lr-action svg { width: var(--lr-s24); height: var(--lr-s24); fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.lr-action:focus { outline: none; }
+.lr-action.is-focused { background: var(--lr-focus-bg); color: var(--lr-focus-ink); transform: scale(1.06); }
+.lr-action:active { transform: scale(1.02); transition-duration: var(--lr-t-press); }
+
+/* ---------- selected app: the hero ---------- */
+.lr-info {
+  position: absolute; z-index: 1;
+  left: var(--lr-safe-x); bottom: calc(var(--lr-px) * 224); max-width: calc(var(--lr-px) * 1100);
+  transition: opacity var(--lr-t-title-in) var(--lr-ease-out), transform var(--lr-t-title-in) var(--lr-ease-out);
+}
+.lr-info.is-out-l, .lr-info.is-out-r { opacity: 0; transition-duration: var(--lr-t-title-out); }
+.lr-info.is-out-l { transform: translateX(calc(var(--lr-px) * -24)); }
+.lr-info.is-out-r { transform: translateX(calc(var(--lr-px) * 24)); }
+.lr-info.is-in-l, .lr-info.is-in-r { opacity: 0; transition: none; }
+.lr-info.is-in-l { transform: translateX(calc(var(--lr-px) * -24)); }
+.lr-info.is-in-r { transform: translateX(calc(var(--lr-px) * 24)); }
+.lr-title { margin: 0; font-size: var(--lr-fs-title); line-height: 1; font-weight: 600; letter-spacing: -.025em; }
+.lr-context { margin: calc(var(--lr-px) * 18) 0 0; font-size: var(--lr-fs-context); line-height: calc(var(--lr-px) * 34); color: var(--lr-ink-2); }
+.lr-sep { margin: 0 calc(var(--lr-px) * 10); opacity: .5; }
+
+/* ---------- dock ---------- */
+.lr-dock {
+  position: absolute; z-index: 1;
+  left: var(--lr-safe-x); bottom: var(--lr-safe-bottom);
+  display: flex; gap: var(--lr-s20);
+}
+.lr-tile {
+  position: relative; width: var(--lr-tile-w); height: var(--lr-tile-h); padding: 0;
+  display: grid; place-items: center;
+  border: 0; border-radius: var(--lr-r-tile); background: var(--lr-plate);
+  box-shadow: inset 0 0 0 1px var(--lr-plate-line);
+  color: var(--lr-ink); font: inherit; cursor: pointer;
+  transition: transform var(--lr-t-focus) var(--lr-ease-out), background-color var(--lr-t-surface) linear;
+  will-change: transform;
+}
+.lr-tile::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  box-shadow: var(--lr-shadow-focus); opacity: 0; transition: opacity var(--lr-t-focus) linear;
+}
+.lr-tile:focus { outline: none; }
+.lr-tile.is-selected { background: var(--lr-plate-sel); }
+.lr-tile.is-focused { transform: var(--lr-lift); background: var(--lr-focus-bg); box-shadow: none; z-index: 2; }
+.lr-tile.is-focused::after { opacity: 1; }
+.lr-tile:active { transform: translateY(calc(var(--lr-px) * -4)) scale(1.04); transition-duration: var(--lr-t-press); }
+
+.lr-wordmark { font-size: var(--lr-fs-wordmark); font-weight: 600; letter-spacing: -.012em; white-space: nowrap; color: var(--lr-ink); }
+.lr-wordmark i { font-style: normal; }
+.lr-wordmark .l { font-weight: 350; }
+.lr-wordmark .a { color: var(--acc); }
+.lr-tile.is-focused .lr-wordmark { color: var(--lr-focus-ink); }
+.lr-tile.is-focused .lr-wordmark .a { color: var(--acc-light); }
+
+/* not installed: dimmed but still focusable, never skipped */
+.lr-tile.is-missing .lr-wordmark { opacity: .42; }
+.lr-tile.is-missing.is-focused .lr-wordmark { opacity: .5; }
+
+/* launching: indeterminate sweep (the launcher reports no real progress, so none is faked) */
+.lr-bar {
+  position: absolute; left: var(--lr-s16); right: var(--lr-s16); bottom: var(--lr-s12); height: var(--lr-s4);
+  border-radius: calc(var(--lr-px) * 2); overflow: hidden; opacity: 0; background: rgba(243, 240, 234, .16);
+}
+.lr-bar::after {
+  content: ""; position: absolute; inset: 0 auto 0 0; width: 35%; border-radius: inherit; background: var(--lr-ink);
+  transform: translateX(-100%);
+}
+.lr-tile.is-focused .lr-bar { background: rgba(18, 18, 20, .16); }
+.lr-tile.is-focused .lr-bar::after { background: var(--lr-focus-ink); }
+.lr-tile.is-launching .lr-wordmark { opacity: .55; }
+.lr-tile.is-launching .lr-bar { opacity: 1; }
+.lr-tile.is-launching .lr-bar::after { animation: lr-sweep 1200ms var(--lr-ease-std) infinite; }
+@keyframes lr-sweep { to { transform: translateX(290%); } }
+
+/* ---------- Apple Music background-mode player (existing component, restyled) ---------- */
+.lr .music-mini-player {
+  top: calc(var(--lr-safe-top) + var(--lr-action-h) + var(--lr-s24)); right: var(--lr-safe-x);
+  width: calc(var(--lr-px) * 420); padding: var(--lr-s20) var(--lr-s24); gap: var(--lr-s8);
+  border: 0; border-radius: var(--lr-r-row); background: var(--lr-sheet-bg); box-shadow: inset 0 0 0 1px var(--lr-sheet-line);
+  backdrop-filter: none; z-index: 1;
+}
+.lr .music-mini-label { display: none; }
+.lr .music-mini-player strong { font-size: var(--lr-fs-row); font-weight: 600; color: var(--lr-ink); }
+.lr .music-mini-player > span:not(.music-mini-label) { font-size: var(--lr-fs-label); color: var(--lr-ink-2); }
+.lr .music-mini-player button {
+  width: calc(var(--lr-px) * 64); height: calc(var(--lr-px) * 48); border: 0; border-radius: var(--lr-r-pill);
+  background: var(--lr-action-bg); color: var(--lr-ink); font-size: var(--lr-fs-label);
+  transition: transform var(--lr-t-focus) var(--lr-ease-out), background-color var(--lr-t-surface) linear;
+}
+.lr .music-mini-player button:focus { outline: none; background: var(--lr-focus-bg); color: var(--lr-focus-ink); transform: scale(1.06); }
+
+/* ---------- toast ---------- */
+.lr .toast {
+  top: var(--lr-safe-top); padding: var(--lr-s16) calc(var(--lr-px) * 26); border: 0; border-radius: var(--lr-r-pill);
+  background: var(--lr-focus-bg); color: var(--lr-focus-ink); font: 500 var(--lr-fs-label) / 1.2 var(--lr-font);
+  backdrop-filter: none; transform: translate(-50%, calc(var(--lr-px) * -12)); white-space: nowrap; z-index: 40;
+  transition: opacity 200ms linear, transform var(--lr-t-toast) var(--lr-ease-out);
+}
+.lr .toast.show { transform: translate(-50%, 0); }
+
+/* ---------- reduced motion: focus is a surface swap only, no travel, short fades ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .lr-scene, .lr-scene.is-on { transform: none; transition: opacity 120ms linear; }
+  .lr-tile.is-focused, .lr-tile:active, .lr-action.is-focused, .lr-action:active { transform: none; }
+  .lr-info, .lr-info.is-out-l, .lr-info.is-out-r, .lr-info.is-in-l, .lr-info.is-in-r { transform: none; }
+  .lr-tile.is-launching .lr-bar::after { animation: none; transform: translateX(0); }
+  .lr .toast, .lr .toast.show { transform: translate(-50%, 0); }
+}
