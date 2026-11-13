@@ -12,6 +12,7 @@ import { StatusBar } from "./components/StatusBar";
 import { Toast } from "./components/Toast";
 import { streamingServices } from "./data/streamingServices";
 import { useMusicStatusPolling } from "./hooks/useMusicStatusPolling";
+import { returnHomeFocusTarget, useReturnHomeListener } from "./hooks/useReturnHomeFocus";
 import { useGamepad, type ControllerActions } from "./hooks/useGamepad";
 import { dispatchControllerAction, isIgnoredShortcutEvent, type NavIntentHandlers } from "./services/navIntent";
 import { useControllerOwnershipSuspension } from "./hooks/useControllerOwnershipSuspension";
@@ -24,7 +25,7 @@ import { useWeather } from "./hooks/useWeather";
 import { openStreamingService, streamingServiceErrorMessage } from "./services/openStreamingService";
 import { getControlServiceStatus, setControlGameMode } from "./services/controlService";
 import { launchManagedApp, listenForLaunchEvent, listenForManagedAppExit, managedAppErrorMessage } from "./services/appManager";
-import { listenForReturnHome, requestSessionTransition, returnVeloraHome, type SessionId } from "./services/sessionOrchestrator";
+import { requestSessionTransition, returnVeloraHome, type ReturnHomeEvent, type SessionId } from "./services/sessionOrchestrator";
 import { readCinemaProfile, saveCinemaProfile, type CinemaProfile } from "./services/cinemaMode";
 import {
   adjustSystemVolume,
@@ -372,26 +373,15 @@ export default function App() {
     };
   }, [backControllerFocus, changeCinemaProfile, confirmControllerFocus, confirmRemoteFocus, handleSystemVolume, moveControllerFocus, returnToNexus, showToast]);
 
-  useEffect(() => {
-    let active = true;
-    let unlisten: (() => void) | undefined;
-    void listenForReturnHome((event) => {
-      if (!active) return;
-      setControlCenterOpen(false);
-      setDiagnostics(false);
-      navigation.focusApp(0);
-      if (!event.restore.restored && event.restore.outcome !== "alreadyFocused") {
-        showToast(event.restore.message || "Windows zablokował powrót do VELORA. Użyj Alt+Tab.");
-      }
-    }).then((stopListening) => {
-      if (active) unlisten = stopListening;
-      else stopListening();
-    }).catch(() => {});
-    return () => {
-      active = false;
-      unlisten?.();
-    };
-  }, [navigation.focusApp, showToast]);
+  useReturnHomeListener(useCallback((event: ReturnHomeEvent) => {
+    setControlCenterOpen(false);
+    setDiagnostics(false);
+    // Restore the tile the user launched from, not always the first one.
+    navigation.focusApp(returnHomeFocusTarget(activeServiceRef.current, streamingServices.length));
+    if (!event.restore.restored && event.restore.outcome !== "alreadyFocused") {
+      showToast(event.restore.message || "Windows zablokował powrót do VELORA. Użyj Alt+Tab.");
+    }
+  }, [navigation.focusApp, showToast]));
 
   useEffect(() => {
     let active = true;
