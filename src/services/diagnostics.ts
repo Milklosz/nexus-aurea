@@ -6,8 +6,16 @@ import type { DisplayAudioSnapshot } from "./displayAudio";
 export type BuildInfo = {
   version: string;
   buildSha: string;
+  checkoutSha: string;
+  branch: string;
+  buildRef: string;
+  dirty: string;
+  event: string;
+  prHeadSha: string | null;
+  prBaseSha: string | null;
   target: string;
   profile: string;
+  rustcVersion: string;
   windows: boolean;
 };
 
@@ -86,8 +94,16 @@ export function previewDiagnosticsSnapshot(message: string): DiagnosticsSnapshot
     build: {
       version: "web",
       buildSha: "unknown",
+      checkoutSha: "unknown",
+      branch: "unknown",
+      buildRef: "unknown",
+      dirty: "unknown",
+      event: "preview",
+      prHeadSha: null,
+      prBaseSha: null,
       target: "browser",
       profile: "preview",
+      rustcVersion: "unknown",
       windows: false,
     },
     session: {

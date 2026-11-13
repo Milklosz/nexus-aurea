@@ -27,6 +27,10 @@ mod session_store;
 mod single_instance;
 mod window_broker;
 
+#[cfg(test)]
+#[allow(dead_code)]
+mod build_support;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     if !single_instance::claim_or_activate_existing() {

@@ -30,7 +30,21 @@ afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 function snapshot(): DiagnosticsSnapshot {
   const value = previewDiagnosticsSnapshot("native");
-  value.build = { version: "0.9.2", buildSha: "3a201da", target: "windows-x86_64", profile: "release", windows: true };
+  value.build = {
+    version: "0.9.2",
+    buildSha: "36312486cebb5b523c24cf0754f4a317ad87f042",
+    checkoutSha: "36312486cebb5b523c24cf0754f4a317ad87f042",
+    branch: "test/velora-2-candidate-1",
+    buildRef: "refs/heads/test/velora-2-candidate-1",
+    dirty: "false",
+    event: "test",
+    prHeadSha: null,
+    prBaseSha: null,
+    target: "x86_64-pc-windows-msvc",
+    profile: "release",
+    rustcVersion: "rustc 1.89.0",
+    windows: true,
+  };
   value.session.current = "game";
   value.session.revision = 3;
   value.session.recovery = {
@@ -79,7 +93,7 @@ describe("System Intelligence panel", () => {
     mocks.snapshot = snapshot();
     render(<SystemDiagnosticsPanel />);
     expect(await screen.findByText(/Wersja 0.9.2/)).toBeTruthy();
-    expect(screen.getByText(/build 3a201da/)).toBeTruthy();
+    expect(screen.getByText(/build 36312486cebb5b523c24cf0754f4a317ad87f042/)).toBeTruthy();
     expect(screen.getByText(/rewizja 3/)).toBeTruthy();
     expect(screen.getByText(/Poprzednie uruchomienie/)).toBeTruthy();
     expect(screen.getByText(/DualSense · Bluetooth · raporty 42/)).toBeTruthy();
