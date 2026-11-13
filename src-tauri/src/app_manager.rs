@@ -5,8 +5,6 @@ use std::path::{Component, Path, PathBuf};
 #[cfg(target_os = "windows")]
 use std::process::Command;
 use tauri::AppHandle;
-#[cfg(target_os = "windows")]
-use tauri::Emitter;
 
 #[cfg(target_os = "windows")]
 use crate::launch_registry::{self, LaunchKind, LaunchWatch};
@@ -293,9 +291,8 @@ pub(crate) fn launch_managed_app_blocking(app: AppHandle, id: String) -> Result<
         // grant this, and VELORA is foreground because the user just launched it.
         window_broker::grant_foreground_handoff(&[child_id, existing_process_id.unwrap_or(0)]);
         let watch = managed_app_watch(spec, child_id, steam_pid_before);
-        if let Err(error) = launch_registry::track_launch(&app, watch) {
-            let _ = app.emit("velora-launch-error", error);
-        }
+        launch_registry::track_launch(&app, watch)
+            .map_err(|error| untracked_launch_message(spec.name, &error))?;
         Ok(LaunchReceipt {
             id,
             already_running,
@@ -308,6 +305,14 @@ pub(crate) fn launch_managed_app_blocking(app: AppHandle, id: String) -> Result<
         let _ = (app, spec);
         Err("App Manager jest dostępny tylko w natywnej aplikacji Windows.".into())
     }
+}
+
+/// Error for a launch whose process started but could not be tracked. The app is
+/// already running, so the user must hear about it; a plain success would hide an
+/// untracked app and its session state.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn untracked_launch_message(name: &str, cause: &str) -> String {
+    format!("{name} uruchomiono, ale VELORA nie może śledzić jej sesji: {cause}")
 }
 
 #[cfg(target_os = "windows")]
@@ -405,9 +410,9 @@ fn launch_managed_game_blocking(app: AppHandle, id: String) -> Result<ManagedGam
             false,
             Some(SessionId::Game),
         );
-        if let Err(error) = launch_registry::capture_baseline(&app, &mut watch) {
-            let _ = app.emit("velora-launch-error", error);
-        }
+        // Before spawning: a failed baseline must stop the launch. Continuing would let
+        // register() capture the baseline after the game already started.
+        launch_registry::capture_baseline(&app, &mut watch)?;
         let child = Command::new(executable)
             .args(["-applaunch", game.id.as_str()])
             .spawn()
@@ -420,9 +425,8 @@ fn launch_managed_game_blocking(app: AppHandle, id: String) -> Result<ManagedGam
         if watch.root_process_id.is_none() {
             watch.root_process_id = Some(child_id);
         }
-        if let Err(error) = launch_registry::track_launch(&app, watch) {
-            let _ = app.emit("velora-launch-error", error);
-        }
+        launch_registry::track_launch(&app, watch)
+            .map_err(|error| untracked_launch_message(&game.name, &error))?;
         Ok(ManagedGameLaunchReceipt { id: game.id, launched: true })
     }
 
@@ -783,8 +787,16 @@ fn app_process_count_fresh(_id: &str, _process_name: &str) -> Result<usize, Stri
 mod tests {
     use super::{
         is_valid_steam_app_id, parse_steam_manifest, parse_vdf_pair, should_dispatch_when_running,
-        spec_for,
+        spec_for, untracked_launch_message,
     };
+
+    #[test]
+    fn untracked_launch_reports_the_app_and_the_cause() {
+        let message = untracked_launch_message("Steam", "Brak rejestru");
+        assert!(message.starts_with("Steam uruchomiono"));
+        assert!(message.ends_with("Brak rejestru"));
+        assert!(message.contains("nie może śledzić"));
+    }
 
     #[test]
     fn app_registry_rejects_unlisted_ids() {
