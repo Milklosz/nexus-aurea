@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { registerAureaGrid, resolveGridIndex, unregisterAureaGrid, type AureaGrid } from "../services/aureaNavigation";
 import { intentFromKeyboard } from "../services/navIntent";
+import { HOME_ACTIONS_SELECTOR } from "../services/homeActions";
 
 export function isTextEntryTarget(target: EventTarget | null): target is HTMLElement {
   return target instanceof HTMLElement && (
@@ -18,6 +19,11 @@ export interface UseNavigationOptions {
    * home zones. Returns true when it moved focus; false keeps the legacy behavior.
    */
   onVerticalZone?: (delta: -1 | 1) => boolean;
+  /**
+   * Handles ArrowLeft/ArrowRight before the dock does, for example inside the Home top bar.
+   * Returns true when it consumed the move; false keeps the dock behavior.
+   */
+  onHorizontalZone?: (delta: -1 | 1) => boolean;
 }
 
 export function useNavigation(
@@ -47,6 +53,11 @@ export function useNavigation(
   useEffect(() => {
     verticalRef.current = onVerticalZone;
   }, [onVerticalZone]);
+  const onHorizontalZone = options?.onHorizontalZone;
+  const horizontalRef = useRef(onHorizontalZone);
+  useEffect(() => {
+    horizontalRef.current = onHorizontalZone;
+  }, [onHorizontalZone]);
 
   const focusApp = useCallback(
     (index: number) => {
@@ -76,6 +87,8 @@ export function useNavigation(
       if (!intent) return;
 
       if (intent.kind === "select") {
+        // On a Home top-bar action the browser presses that button itself; the dock launch must not fire.
+        if (target instanceof Element && target.closest(HOME_ACTIONS_SELECTOR)) return;
         event.preventDefault();
         activateRef.current();
         return;
@@ -111,12 +124,11 @@ export function useNavigation(
             ? resolveGridIndex(activeIndexRef.current, "down", columns, count)
             : activeIndexRef.current);
         }
-      } else if (direction === "right") {
-        event.preventDefault();
-        focusApp(activeIndexRef.current + 1);
       } else {
+        const delta = direction === "right" ? 1 : -1;
         event.preventDefault();
-        focusApp(activeIndexRef.current - 1);
+        if (horizontalRef.current?.(delta)) return;
+        focusApp(activeIndexRef.current + delta);
       }
     };
 

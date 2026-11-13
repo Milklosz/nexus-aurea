@@ -1,5 +1,8 @@
 import { GamepadDiagnostics } from "./components/GamepadDiagnostics";
-import { ControlCenter } from "./components/ControlCenter";
+import { ControlCenter, type ControlPanelId } from "./components/ControlCenter";
+import { LivingRoomHome } from "./components/living-room/LivingRoomHome";
+import { readHomeTheme } from "./services/homeTheme";
+import { activateHomeAction, moveWithinHomeActions } from "./services/homeActions";
 import { AmbientScreen } from "./components/AmbientScreen";
 import { useAmbient } from "./hooks/useAmbient";
 import { readAmbientSettings, saveAmbientSettings, type AmbientSettings } from "./services/ambient";
@@ -68,6 +71,12 @@ export default function App() {
   const version = useAppVersion();
   const [diagnostics, setDiagnostics] = useState(false);
   const [controlCenterOpen, setControlCenterOpen] = useState(false);
+  // Which Home look is shown; "grand-cinema" is the previous design, kept as a fallback (see services/homeTheme.ts).
+  const [homeTheme] = useState(readHomeTheme);
+  const livingRoom = homeTheme === "living-room";
+  const [controlCenterPanel, setControlCenterPanel] = useState<ControlPanelId | undefined>(undefined);
+  // The Home top-bar action that opened Control Center, so closing it returns focus there.
+  const homeOpenerRef = useRef<HTMLElement | null>(null);
   const [controllerProfile, setControllerProfile] = useState<ControllerProfile>(savedControllerProfile);
   const [cinemaProfile, setCinemaProfile] = useState<CinemaProfile>(readCinemaProfile);
   const [musicBackgroundMode, setMusicBackgroundMode] = useState(readMusicBackgroundMode);
@@ -76,7 +85,11 @@ export default function App() {
   const mediaIsPlaying = musicStatus.appleSessionFound && musicStatus.playbackState === "playing";
   const ambient = useAmbient(ambientSettings, mediaIsPlaying);
   const suspendForForegroundOwner = useControllerOwnershipSuspension();
-  const { label: weatherLabel, title: weatherTitle } = useWeather();
+  const { label: weatherLabel, title: weatherTitle, temperatureText, condition: weatherCondition, stale: weatherStale } = useWeather();
+  useEffect(() => {
+    document.documentElement.classList.toggle("lr-theme", livingRoom);
+    return () => document.documentElement.classList.remove("lr-theme");
+  }, [livingRoom]);
   const { message, showToast } = useToast();
   // The recovery notice after an unclean exit or corrupt state is read from the snapshot; the native event fires before the WebView can listen.
   useStartupRecoveryNotice(getSessionState, showToast);
@@ -136,9 +149,15 @@ export default function App() {
   // the focus helpers exist, so the keyboard hook always calls the current version.
   const verticalZoneRef = useRef<(delta: -1 | 1) => boolean>(() => false);
   const handleVerticalZone = useCallback((delta: -1 | 1) => verticalZoneRef.current(delta), []);
+  // Left/right inside the Home top-bar actions stay in that row; everywhere else they move through the dock.
+  const handleHorizontalZone = useCallback(
+    (delta: -1 | 1) => document.querySelector("dialog[open]") === null && moveWithinHomeActions(document.activeElement, delta),
+    [],
+  );
   const navigation = useNavigation(streamingServices.length, activateSelected, showMenu, {
     gridId: "home-dock",
     onVerticalZone: handleVerticalZone,
+    onHorizontalZone: handleHorizontalZone,
   });
   const closeControlCenter = useCallback(() => setControlCenterOpen(false), []);
   // Native search over the home tiles. Games (Steam, Playnite) will join as more providers.
@@ -158,8 +177,20 @@ export default function App() {
       return;
     }
     setDiagnostics(false);
+    setControlCenterPanel(undefined);
     setControlCenterOpen(true);
   }, [closeControlCenter, controlCenterOpen]);
+  // Home entries (Szukaj, Pilot, Ustawienia) open Control Center directly on their tab.
+  const openControlCenterAt = useCallback((panel?: ControlPanelId) => {
+    const active = document.activeElement;
+    homeOpenerRef.current = active instanceof HTMLElement && active.closest(".home-actions") ? active : null;
+    setDiagnostics(false);
+    setControlCenterPanel(panel);
+    setControlCenterOpen(true);
+  }, []);
+  const openSearch = useCallback(() => openControlCenterAt("search"), [openControlCenterAt]);
+  const openRemote = useCallback(() => openControlCenterAt("remote"), [openControlCenterAt]);
+  const openSettings = useCallback(() => openControlCenterAt(undefined), [openControlCenterAt]);
   const returnToNexus = useCallback(() => {
     setControlCenterOpen(false);
     setDiagnostics(false);
@@ -185,10 +216,15 @@ export default function App() {
     setControlCenterOpen(false);
     setDiagnostics(true);
   }, []);
-  const restoreSelectedFocus = useCallback(
-    () => navigation.focusApp(activeServiceRef.current),
-    [navigation.focusApp],
-  );
+  const restoreSelectedFocus = useCallback(() => {
+    const opener = homeOpenerRef.current;
+    homeOpenerRef.current = null;
+    if (opener?.isConnected) {
+      opener.focus({ preventScroll: true });
+      return;
+    }
+    navigation.focusApp(activeServiceRef.current);
+  }, [navigation.focusApp]);
   useFocusRestoreOnClose(diagnostics, restoreSelectedFocus, !controlCenterOpen);
   useFocusRestoreOnClose(controlCenterOpen, restoreSelectedFocus, !diagnostics);
   const closeDiagnostics = useCallback(() => setDiagnostics(false), []);
@@ -198,6 +234,7 @@ export default function App() {
   const moveControllerFocus = useCallback((delta: -1 | 1) => {
     const dialog = document.querySelector("dialog[open]");
     if (!dialog) {
+      if (moveWithinHomeActions(document.activeElement, delta)) return;
       navigation.moveApp(delta);
       return;
     }
@@ -240,6 +277,7 @@ export default function App() {
       active.click();
       return;
     }
+    if (!dialog && activateHomeAction(active)) return;
     activateSelected();
   }, [activateSelected, openKeyboardFor]);
   // The paired remote must not reach administrative dialog controls through a
@@ -264,6 +302,7 @@ export default function App() {
       active.click();
       return;
     }
+    if (!dialog && activateHomeAction(active)) return;
     activateSelected();
   }, [activateSelected, openKeyboardFor, showToast]);
   const backControllerFocus = useCallback(() => {
@@ -441,6 +480,8 @@ export default function App() {
             moveVerticalFocus(direction === "up" ? -1 : 1);
             return;
           }
+          if (!document.querySelector("dialog[open]") && (direction === "left" || direction === "right") &&
+            moveWithinHomeActions(document.activeElement, direction === "left" ? -1 : 1)) return;
           if (!document.querySelector("dialog[open]") && moveAureaFocus(direction)) return;
           moveControllerFocus(direction === "left" ? -1 : 1);
         },
@@ -533,31 +574,50 @@ export default function App() {
   }, [showToast]);
 
   return (
-    <main className="screen" aria-label="VELORA — ekran główny">
-      <div className="sun" aria-hidden="true" />
-      <div className="ridge" aria-hidden="true" />
-      <div className="ridge back" aria-hidden="true" />
-      <StatusBar weatherLabel={weatherLabel} weatherTitle={weatherTitle} />
-      <button type="button" className="quick-settings-trigger" onClick={toggleControlCenter} aria-label="Otwórz Control Center">Control Center <kbd>F3</kbd></button>
-      <HeroPanel />
-      <AppDock
-        services={streamingServices}
-        activeIndex={navigation.activeIndex}
-        launchingIds={launchingIds}
-        buttonRefs={navigation.buttonRefs}
-        onFocus={handleFocus}
-        onActivate={handleActivate}
-        onUnavailable={handleUnavailable}
-      />
-      {musicBackgroundMode && <MusicMiniPlayer status={musicStatus} profile={cinemaProfile} onControl={handleMusicControl} />}
-      <footer className="controls">
-        <span>
-          ◯ / <kbd>←</kbd> <kbd>→</kbd> &nbsp;PORUSZAJ &nbsp;·&nbsp; ✕ / <kbd>ENTER</kbd> &nbsp;WYBIERZ
-          &nbsp;·&nbsp; OPTIONS / F2 &nbsp;PAD · F11 &nbsp;EKRAN · ESC &nbsp;OKNO
-        </span>
-        <span className="version">VELORA · BY MILKLOSH STUDIO &nbsp;/&nbsp; V{version}</span>
-      </footer>
-      <button className="diagnostics-trigger" onClick={showMenu}>Diagnostyka pada</button>
+    <main className={livingRoom ? "lr" : "screen"} aria-label="VELORA — ekran główny">
+      {livingRoom ? (
+        <LivingRoomHome
+          services={streamingServices}
+          activeIndex={navigation.activeIndex}
+          launchingIds={launchingIds}
+          buttonRefs={navigation.buttonRefs}
+          weather={{ temperatureText, condition: weatherCondition, title: weatherTitle, stale: weatherStale }}
+          onFocus={handleFocus}
+          onActivate={handleActivate}
+          onUnavailable={handleUnavailable}
+          onSearch={openSearch}
+          onRemote={openRemote}
+          onSettings={openSettings}
+          aside={musicBackgroundMode ? <MusicMiniPlayer status={musicStatus} profile={cinemaProfile} onControl={handleMusicControl} /> : undefined}
+        />
+      ) : (
+        <>
+          <div className="sun" aria-hidden="true" />
+          <div className="ridge" aria-hidden="true" />
+          <div className="ridge back" aria-hidden="true" />
+          <StatusBar weatherLabel={weatherLabel} weatherTitle={weatherTitle} />
+          <button type="button" className="quick-settings-trigger" onClick={toggleControlCenter} aria-label="Otwórz Control Center">Control Center <kbd>F3</kbd></button>
+          <HeroPanel />
+          <AppDock
+            services={streamingServices}
+            activeIndex={navigation.activeIndex}
+            launchingIds={launchingIds}
+            buttonRefs={navigation.buttonRefs}
+            onFocus={handleFocus}
+            onActivate={handleActivate}
+            onUnavailable={handleUnavailable}
+          />
+          {musicBackgroundMode && <MusicMiniPlayer status={musicStatus} profile={cinemaProfile} onControl={handleMusicControl} />}
+          <footer className="controls">
+            <span>
+              ◯ / <kbd>←</kbd> <kbd>→</kbd> &nbsp;PORUSZAJ &nbsp;·&nbsp; ✕ / <kbd>ENTER</kbd> &nbsp;WYBIERZ
+              &nbsp;·&nbsp; OPTIONS / F2 &nbsp;PAD · F11 &nbsp;EKRAN · ESC &nbsp;OKNO
+            </span>
+            <span className="version">VELORA · BY MILKLOSH STUDIO &nbsp;/&nbsp; V{version}</span>
+          </footer>
+          <button className="diagnostics-trigger" onClick={showMenu}>Diagnostyka pada</button>
+        </>
+      )}
       {controlCenterOpen && <ControlCenter
         profile={cinemaProfile}
         onProfileChange={changeCinemaProfile}
@@ -570,6 +630,8 @@ export default function App() {
         onReturnToNexus={returnToNexus}
         onClose={closeControlCenter}
         appSearch={appSearch}
+        initialPanel={controlCenterPanel}
+        livingRoom={livingRoom}
       />}
       {ambient.active && <AmbientScreen />}
       {diagnostics && <GamepadDiagnostics

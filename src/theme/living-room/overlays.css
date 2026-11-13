@@ -1,0 +1,156 @@
+/*
+ * Living Room theme for the overlays that sit on top of Home: Control Center, the on-screen
+ * keyboard, app search and the gamepad diagnostics. They keep their layout and behaviour;
+ * only surface, type and focus change, to the same language as Home: opaque dark sheets,
+ * the system font, no gold, no blur, no glow, and a light plate with dark text for focus.
+ */
+
+/* Old gold/cream tokens used by shared components (Playnite library, autostart) follow the new palette. */
+.lr {
+  --gold: var(--lr-ink);
+  --cream: var(--lr-ink);
+  --muted: var(--lr-ink-2);
+}
+
+/* ---------- shared surface ---------- */
+.lr .control-center,
+.lr .virtual-keyboard,
+.lr .diagnostics {
+  border: 0;
+  border-radius: var(--lr-r-pill);
+  background: var(--lr-sheet-bg);
+  color: var(--lr-ink);
+  box-shadow: inset 0 0 0 1px var(--lr-sheet-line);
+  backdrop-filter: none;
+  font-family: var(--lr-font);
+}
+.lr .control-center::backdrop,
+.lr .virtual-keyboard::backdrop,
+.lr .diagnostics::backdrop {
+  background: var(--lr-scrim);
+  backdrop-filter: none;
+}
+
+/* ---------- Control Center ---------- */
+/* A right-hand sheet on the TV safe area; Home stays visible on the left. Sized in reference px so it scales to 4K with the canvas. */
+.lr .control-center {
+  inset: 0 0 0 auto; margin: 0; width: calc(var(--lr-px) * 960); max-width: none; height: 100dvh; max-height: none;
+  border-radius: 0; padding: var(--lr-s64) var(--lr-safe-x) var(--lr-s72) var(--lr-s56); gap: var(--lr-s20);
+  animation: lr-sheet-in var(--lr-t-sheet) var(--lr-ease-out) both;
+}
+@keyframes lr-sheet-in { from { transform: translateX(100%); } to { transform: none; } }
+.lr .control-center::backdrop { background: rgba(0, 0, 0, .62); }
+.lr .cc-card-grid, .lr .cc-gaming-card .gaming-hub, .lr .cc-system-status, .lr .remote-access-status { grid-template-columns: minmax(0, 1fr); }
+.lr .cc-card-wide { grid-column: auto; }
+.lr .cc-card, .lr .cc-gaming-panel, .lr .cc-remote-panel, .lr .cc-remote-card { width: 100%; max-width: none; margin-inline: 0; }
+.lr .cc-gaming-card .gaming-hub > * { grid-column: auto !important; }
+.lr .cc-panel { scroll-padding-block: var(--lr-s24); padding: var(--lr-s4) var(--lr-s4) var(--lr-s48) 0; -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - var(--lr-s48)), transparent); mask-image: linear-gradient(180deg, #000 calc(100% - var(--lr-s48)), transparent); }
+.lr .cc-hint { display: none; }
+.lr .control-center-eyebrow { display: none; }
+.lr .control-center-header h2 {
+  margin: 0; font: 600 var(--lr-fs-sheet-title) / 1.15 var(--lr-font); letter-spacing: -.02em; color: var(--lr-ink);
+}
+.lr .control-center-header p { display: none; } /* repeats the heading */
+.lr .cc-tabs { padding: 0; border: 0; background: none; gap: var(--lr-s12); }
+.lr .cc-tabs button {
+  position: relative; min-width: 0; min-height: var(--lr-action-h); padding: 0 var(--lr-s32); border: 0; border-radius: var(--lr-r-pill);
+  background: none; color: var(--lr-ink-2); font-size: var(--lr-fs-row); font-weight: 500;
+}
+.lr .cc-tabs button[aria-selected="true"] { background: none; color: var(--lr-ink); font-weight: 600; box-shadow: none; }
+.lr .cc-tabs button[aria-selected="true"]::after {
+  content: ""; position: absolute; left: 50%; bottom: var(--lr-s4); width: var(--lr-s32); height: var(--lr-s4);
+  border-radius: var(--lr-s4); background: var(--lr-ink); transform: translateX(-50%);
+}
+.lr .cc-tabs button[aria-selected="true"]:focus::after, .lr .cc-tabs button[aria-selected="true"]:focus-visible::after { background: var(--lr-focus-ink); }
+.lr .cc-card {
+  border: 0; border-radius: var(--lr-r-row); background: var(--lr-sheet-raised); box-shadow: none;
+}
+.lr .cc-card-index { display: none; }
+.lr .cc-card-heading h3 { font: 600 var(--lr-fs-row) / 1.2 var(--lr-font); color: var(--lr-ink); }
+.lr .cc-card-heading p, .lr .cc-card > p, .lr .cc-card .gaming-hub > p, .lr .cc-remote-actions > p { color: var(--lr-ink-3); font-size: var(--lr-fs-small); }
+.lr .cc-card-note { color: var(--lr-ink-3) !important; }
+
+/* buttons: quiet by default, light plate on focus */
+.lr .cc-card button, .lr .cc-footer button, .lr .control-center .cc-close {
+  border: 0; border-radius: var(--lr-r-pill); background: var(--lr-action-bg); color: var(--lr-ink);
+  box-shadow: none; font-size: var(--lr-fs-label); font-weight: 500;
+  transition: transform var(--lr-t-focus) var(--lr-ease-out), background-color var(--lr-t-surface) linear;
+}
+.lr .cc-card button, .lr .cc-footer button { min-height: var(--lr-action-h); }
+.lr .cc-card button:hover:not(:disabled), .lr .cc-footer button:hover { background: var(--lr-action-bg); transform: none; border: 0; }
+.lr .control-center .cc-card button[aria-pressed="true"] { color: var(--lr-ink); font-weight: 600; box-shadow: none; }
+.lr .control-center .cc-card button[aria-pressed="true"]::before { content: "✓"; margin-right: var(--lr-s8); }
+.lr .cc-footer button:last-child { background: var(--lr-action-bg); color: var(--lr-ink); border: 0; }
+.lr .control-center button:focus-visible,
+.lr .control-center button:focus,
+.lr .control-center input:focus-visible {
+  outline: none; box-shadow: none; background: var(--lr-focus-bg); color: var(--lr-focus-ink); transform: scale(1.04);
+}
+.lr .cc-panel:focus-visible { outline: none; }
+.lr .control-center .cc-close { width: var(--lr-action-h); height: var(--lr-action-h); font-size: calc(var(--lr-px) * 36); line-height: 1; padding: 0; background: var(--lr-action-bg); color: var(--lr-ink-2); }
+.lr .cc-footer { border-top-color: var(--lr-sheet-line); }
+.lr .cc-footer-hint { color: var(--lr-ink-3); font-size: var(--lr-fs-small); }
+.lr .cc-status-dot { box-shadow: none; }
+.lr .cc-feedback { border: 0; background: rgba(156, 207, 156, .12); color: var(--lr-ok) !important; }
+.lr .cc-error { border: 0; background: rgba(240, 135, 122, .12); color: var(--lr-danger) !important; }
+.lr .remote-pairing-code { border: 0; background: var(--lr-action-bg); color: var(--lr-ink); }
+.lr .remote-access-status li { border: 0; background: var(--lr-action-bg); }
+.lr .remote-device-row { border: 0; background: var(--lr-action-bg); }
+.lr .gaming-launcher, .lr .gaming-game-row, .lr .managed-app-row { border: 0; background: var(--lr-action-bg); }
+.lr .gaming-hub-guidance, .lr .gaming-platform-guidance { border: 0; background: var(--lr-action-bg); }
+.lr .gaming-hub h4 { color: var(--lr-ink-3); letter-spacing: 0; text-transform: none; font-size: var(--lr-fs-small); }
+.lr .system-diagnostics { border-top-color: var(--lr-sheet-line); }
+.lr .system-diagnostics h3, .lr .system-diagnostics summary, .lr .system-diagnostics code { color: var(--lr-ink); letter-spacing: 0; }
+
+/* ---------- type floor: nothing below 20 reference px (legacy rules use clamp() in rem/vw) ---------- */
+.lr .control-center p, .lr .control-center li, .lr .control-center strong, .lr .control-center label,
+.lr .remote-access-status li, .lr .remote-access-status strong, .lr .remote-trust-confirmation,
+.lr .system-diagnostics-list, .lr .system-diagnostics details, .lr .fallback-hotkey, .lr .cc-system-status p,
+.lr .gaming-launcher span, .lr .gaming-game-row span, .lr .gaming-hub-guidance p, .lr .gaming-platform-guidance p {
+  font-size: max(var(--lr-fs-small), 1em);
+}
+.lr .control-center .cc-card-note, .lr .control-center .gaming-hub-note { font-size: var(--lr-fs-small) !important; }
+.lr .cc-card > p, .lr .cc-card .gaming-hub > p, .lr .cc-remote-actions > p { font-size: var(--lr-fs-small); line-height: 1.45; }
+.lr .remote-access-status li { min-height: var(--lr-s48); }
+
+/* ---------- app search + on-screen keyboard ---------- */
+.lr .app-search-input, .lr .virtual-keyboard-preview {
+  border: 0; border-radius: var(--lr-r-row); background: var(--lr-sheet-bg); color: var(--lr-ink);
+  box-shadow: inset 0 0 0 2px var(--lr-sheet-line);
+}
+.lr .app-search-input { min-height: var(--lr-s64); font-size: var(--lr-fs-row); padding: 0 var(--lr-s24); }
+.lr .app-search-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; } /* still announced to screen readers */
+.lr .app-search-results { grid-template-columns: minmax(0, 1fr); }
+.lr .app-search-results button small { display: none; }
+.lr .app-search-results button { min-height: var(--lr-s56); font-size: var(--lr-fs-row); }
+.lr .app-search-input:focus-visible { outline: none; background: var(--lr-focus-bg); color: var(--lr-focus-ink); }
+.lr .app-search-results button, .lr .virtual-keyboard-key {
+  border: 0; border-radius: var(--lr-r-row); background: var(--lr-action-bg); color: var(--lr-ink); box-shadow: none;
+  transition: transform var(--lr-t-focus) var(--lr-ease-out), background-color var(--lr-t-surface) linear;
+}
+.lr .app-search-results button:focus-visible,
+.lr .virtual-keyboard-key[data-focused],
+.lr .virtual-keyboard-key:focus-visible { outline: none; box-shadow: none; background: var(--lr-focus-bg); color: var(--lr-focus-ink); transform: scale(1.04); }
+.lr .virtual-keyboard-key-done { background: var(--lr-plate-sel); color: var(--lr-ink); }
+.lr .virtual-keyboard-key-done[data-focused], .lr .virtual-keyboard-key-done:focus-visible { background: var(--lr-focus-bg); color: var(--lr-focus-ink); }
+.lr .virtual-keyboard-eyebrow { display: none; }
+.lr .virtual-keyboard h2 { font: 600 var(--lr-fs-row) / 1.2 var(--lr-font); color: var(--lr-ink); }
+.lr .virtual-keyboard-placeholder, .lr .virtual-keyboard-count, .lr .app-search-status { color: var(--lr-ink-3); letter-spacing: 0; }
+
+/* ---------- gamepad diagnostics (support screen) ---------- */
+.lr .diagnostics { padding: var(--lr-s32); }
+.lr .diagnostics button {
+  border: 0; border-radius: var(--lr-r-pill); background: var(--lr-action-bg); color: var(--lr-ink); font: 500 var(--lr-fs-label) / 1 var(--lr-font);
+}
+.lr .diagnostics button:focus-visible, .lr .diagnostics button:focus { outline: none; background: var(--lr-focus-bg); color: var(--lr-focus-ink); }
+.lr .profile-active { border: 0 !important; color: var(--lr-ink); font-weight: 600; }
+.lr .profile-active::before { content: "✓"; margin-right: var(--lr-s8); }
+.lr .pad-values span { border-color: var(--lr-sheet-line); }
+.lr .pad-values [data-pressed="true"] { background: var(--lr-focus-bg); color: var(--lr-focus-ink); }
+.lr .launcher-panel, .lr .control-service, .lr .cinema-panel, .lr .app-manager, .lr .music-panel, .lr .system-audio { border-top-color: var(--lr-sheet-line); }
+
+@media (prefers-reduced-motion: reduce) {
+  .lr .control-center { animation: none; }
+  .lr .control-center button:focus-visible, .lr .control-center button:focus,
+  .lr .app-search-results button:focus-visible, .lr .virtual-keyboard-key[data-focused] { transform: none; }
+}

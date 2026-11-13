@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VELORA · C · Quiet Luxury</title>
+<!--
+=====================================================================================
+ VELORA 2.0 — Direction C: QUIET LUXURY
+=====================================================================================
+ RATIONALE
+   A dark room, a wall, and light falling through an unseen tall window. The art is
+   architectural, not illustrative: a graphite wall/floor plane and two soft light
+   shafts whose colour temperature follows the focused service. Everything you can
+   act on sits in one calm band in the lower half; the upper two-thirds are only
+   light and time. Luxury = restraint, matte materials, exact proportions, slow-ish
+   precise motion. No wordmark imitation at all: each service is a two-letter
+   monogram (like a label on a fine object) with its full name beneath.
+
+ TYPOGRAPHY
+   Segoe UI Variable Display at light weights for scale (clock 64/300, monograms
+   52/300), Segoe UI Variable Text for labels (names 22/500, context 24/400,
+   system row 22/500). Tight but not negative tracking. No uppercase.
+
+ PALETTE
+   Graphite wall #141416->#1A1A1D, floor #0B0B0C, matte tile #1E1E21->#18181B, ink
+   #ECE8E1, ink-2 #B8B3AA, ink-3 #8E8981 (5.3:1 on #141416), champagne focus ring
+   #E6D8BC. Service colour appears only as the light temperature and a 8px dot.
+
+ NAVIGATION MODEL
+   Three bands, but the top band is NOT focusable (clock + weather only — ambient).
+   Band 1 = dock (8 monogram tiles, centred). Band 2 = system row below the dock
+   (Szukaj · Pilot · Ustawienia, centred, quiet). Down from the dock -> system row,
+   Up -> back to the remembered tile. Everything reachable within 2 vertical presses;
+   the eye never has to travel to the screen corners. F3/Options = Control Center.
+
+ FOCUS BEHAVIOUR
+   Focused tile scales 1.10 and its matte surface brightens (#2C2C30); a 3px champagne
+   ring sits 6px outside the tile (pre-drawn pseudo-element, opacity only). The name
+   under the tile goes from ink-3 to ink. One context line under the whole dock tells
+   what the focused service is and how it opens. System row items focus as a
+   champagne-outlined pill.
+
+ MOTION LANGUAGE
+   Unhurried and exact: focus 280ms cubic-bezier(.25,.1,.25,1) (no overshoot), ring
+   fade 200ms, light temperature crossfade 900ms (debounced 250ms), context line
+   cross-dissolve 200ms. Nothing bounces; edges respond with a 4px nudge.
+
+ VISUAL RISKS
+   - Very low-contrast art can read as "nothing there" on a poorly calibrated TV or
+     in a bright room; it depends on black level of the Panasonic panel.
+   - Monograms (Nf, D+, HM...) cost a little recognition speed vs. wordmarks; the full
+     name under each tile compensates, but it is a real trade-off.
+   - Centred symmetric dock is the most "expected" launcher composition of the four;
+     its distinctiveness rests entirely on material and light quality.
+   - Thin champagne ring could be under-visible at 3 m if the TV over-sharpens/dims.
+
+ REACT / WEBVIEW2 FEASIBILITY (GPU compositing disabled)
+   The light shafts use an SVG Gaussian blur in this prototype — in production they
+   must be PRE-RENDERED to PNG/WebP (one per service, ~200 KB each at 1920, 2x for 4K)
+   so the WebView never computes blur. Then: one opacity crossfade, transform-only
+   focus. Highest "quiet" fidelity per CPU cycle of the four.
+
+ TEST HOOKS: #focus=N · #sys=N (focus system row item N) · #cc · #launch=N
+=====================================================================================
+-->
+<style>
+  :root {
+    --ink: #ECE8E1;
+    --ink-2: #B8B3AA;
+    --ink-3: #8E8981;
+    --ring: #E6D8BC;
+    --tile-a: #1F1F22;
+    --tile-b: #18181B;
+    --tile-focus: #2C2C30;
+    --ease: cubic-bezier(.25, .1, .25, 1);
+    --ease-std: cubic-bezier(.4, 0, .2, 1);
+    --display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+    --text: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  }
+  html { font-size: calc(10 * min(100vw / 1920, 100vh / 1080)); }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0c0c0d; }
+  body { color: var(--ink); font-family: var(--text); -webkit-font-smoothing: antialiased; cursor: none; }
+  .stage { position: fixed; inset: 0; overflow: hidden; }
+
+  .room svg, .light svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .light { position: absolute; inset: 0; opacity: 0; transition: opacity 900ms var(--ease-std); }
+  .light.on { opacity: 1; }
+  .grain { position: absolute; inset: 0; pointer-events: none; opacity: .06;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .5 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-size: 20rem 20rem; }
+
+  /* ambient top: time + weather, not focusable */
+  .ambient { position: absolute; left: 9.6rem; top: 6.4rem; }
+  .clock { font-family: var(--display); font-size: 6.4rem; font-weight: 300; line-height: 1; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+  .weather { margin-top: 1.2rem; font-size: 2.2rem; color: var(--ink-2); }
+
+  /* dock */
+  .dock { position: absolute; left: 50%; top: 59.2rem; transform: translateX(-50%); display: flex; gap: 3.2rem; }
+  .dock.bump-l { animation: bumpL 300ms var(--ease); } .dock.bump-r { animation: bumpR 300ms var(--ease); }
+  @keyframes bumpL { 40% { transform: translateX(calc(-50% - .4rem)); } }
+  @keyframes bumpR { 40% { transform: translateX(calc(-50% + .4rem)); } }
+  .cell { width: 15.2rem; text-align: center; }
+  .tile { position: relative; width: 15.2rem; height: 15.2rem; border-radius: 2.4rem;
+          background: linear-gradient(180deg, var(--tile-a), var(--tile-b));
+          box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 1.2rem 2.4rem rgba(0,0,0,.35);
+          display: grid; place-items: center; transition: transform 280ms var(--ease); }
+  .tile::before { content: ""; position: absolute; inset: 0; border-radius: inherit; background: var(--tile-focus); opacity: 0; transition: opacity 200ms linear; }
+  .tile::after { content: ""; position: absolute; inset: -.9rem; border-radius: 3.2rem; border: .3rem solid var(--ring); opacity: 0; transition: opacity 200ms linear; }
+  .mono { position: relative; font-family: var(--display); font-size: 5.2rem; font-weight: 300; letter-spacing: -.02em; line-height: 1; }
+  .mono sup { font-size: .5em; vertical-align: .9em; font-weight: 400; margin-left: .05em; }
+  .dot { position: absolute; top: 1.8rem; right: 1.8rem; width: .8rem; height: .8rem; border-radius: 50%; background: var(--acc); }
+  .name { margin-top: 2rem; font-size: 2.2rem; font-weight: 500; color: var(--ink-3); white-space: nowrap; transition: color 200ms linear; }
+  .cell.focus .tile { transform: scale(1.1); }
+  .cell.focus .tile::before, .cell.focus .tile::after { opacity: 1; }
+  .cell.focus .name { color: var(--ink); }
+  .cell.sel .tile::before { opacity: .55; }
+  .cell.sel .name { color: var(--ink-2); }
+  .cell.pressed .tile { transform: scale(1.04); transition-duration: 100ms; }
+  .tile .prog { position: absolute; left: 2.4rem; right: 2.4rem; bottom: 2rem; height: .3rem; background: var(--ring); transform-origin: left; transform: scaleX(0); opacity: 0; }
+  .cell.launching .mono { opacity: .5; }
+  .cell.launching .prog { opacity: 1; animation: load 2400ms var(--ease-std) forwards; }
+  .cell.launching.frozen .prog { animation: none; transform: scaleX(.45); }
+  @keyframes load { to { transform: scaleX(1); } }
+
+  .context { position: absolute; left: 0; right: 0; top: 83.2rem; text-align: center; font-size: 2.4rem; color: var(--ink-2); transition: opacity 200ms linear; }
+  .context.swap { opacity: 0; transition-duration: 100ms; }
+
+  /* system row (bottom band) */
+  .sys { position: absolute; left: 50%; top: 90.4rem; transform: translateX(-50%); display: flex; gap: 1.6rem; }
+  .sbtn { height: 5.2rem; padding: 0 2.4rem; border-radius: 2.6rem; display: flex; align-items: center; gap: 1rem; font-size: 2.2rem; font-weight: 500; color: var(--ink-2);
+          border: .2rem solid transparent; transition: transform 280ms var(--ease), border-color 200ms linear, color 200ms linear; }
+  .sbtn svg { width: 2.2rem; height: 2.2rem; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
+  .sbtn.focus { border-color: var(--ring); color: var(--ink); transform: scale(1.05); }
+
+  .toast { position: absolute; left: 50%; top: 6.4rem; transform: translate(-50%, -.8rem); opacity: 0; font-size: 2.2rem; color: var(--ink);
+           border: .2rem solid var(--ring); border-radius: 2.6rem; padding: 1.2rem 2.4rem; background: #141416; transition: opacity 200ms linear, transform 280ms var(--ease); white-space: nowrap; }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  /* control center: centred card, everything else dims */
+  .cc-dim { position: absolute; inset: 0; background: rgba(8,8,9,.72); opacity: 0; transition: opacity 280ms linear; }
+  .cc { position: absolute; left: 50%; top: 50%; width: 72rem; transform: translate(-50%, -48%) scale(.98); opacity: 0;
+        background: linear-gradient(180deg, #1D1D20, #161618); border-radius: 3.2rem; padding: 4.8rem; box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 3rem 8rem rgba(0,0,0,.6);
+        transition: opacity 240ms linear, transform 320ms var(--ease); }
+  .open .cc-dim { opacity: 1; } .open .cc { opacity: 1; transform: translate(-50%, -50%); }
+  .cc h2 { margin: 0 0 3.2rem; font-family: var(--display); font-size: 4rem; font-weight: 300; }
+  .row { display: flex; justify-content: space-between; align-items: center; padding: 2rem 2.4rem; border-radius: 1.6rem; border: .2rem solid transparent; }
+  .row .k { font-size: 2.6rem; font-weight: 500; } .row .v { font-size: 2.2rem; color: var(--ink-3); }
+  .row.focus { border-color: var(--ring); background: #232326; }
+  .row.focus .v { color: var(--ink-2); }
+  .cc .hint { margin-top: 2.4rem; font-size: 2rem; color: var(--ink-3); text-align: center; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cell.focus .tile, .sbtn.focus { transform: none; }
+    .dock.bump-l, .dock.bump-r { animation: none; }
+    .light { transition-duration: 150ms; }
+    .cc, .open .cc { transform: translate(-50%, -50%); }
+  }
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+  <div class="room" id="room"></div>
+  <div id="lights"></div>
+  <div class="grain"></div>
+
+  <div class="ambient">
+    <div class="clock" id="clock">--:--</div>
+    <div class="weather">2° · Częściowe zachmurzenie</div>
+  </div>
+
+  <nav class="dock" id="dock" aria-label="Aplikacje"></nav>
+  <p class="context" id="context" aria-live="polite"></p>
+
+  <nav class="sys" id="sys" aria-label="System">
+    <div class="sbtn"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 20 20"/></svg>Szukaj</div>
+    <div class="sbtn"><svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="3"/><circle cx="12" cy="8" r="1.6"/></svg>Pilot</div>
+    <div class="sbtn"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2.3" fill="#1a1a1c"/><circle cx="15" cy="17" r="2.3" fill="#1a1a1c"/></svg>Ustawienia</div>
+  </nav>
+
+  <div class="toast" id="toast"></div>
+  <div class="cc-dim"></div>
+  <aside class="cc" aria-label="Control Center">
+    <h2>Ustawienia</h2>
+    <div class="row"><span class="k">Pilot</span><span class="v">iPhone · velora.local</span></div>
+    <div class="row"><span class="k">Dźwięk</span><span class="v">Głośność systemu</span></div>
+    <div class="row"><span class="k">Tryb obrazu</span><span class="v">Kino</span></div>
+    <div class="row"><span class="k">Pokaż pulpit</span><span class="v">Windows</span></div>
+    <div class="hint">○ / Esc &nbsp;Zamknij</div>
+  </aside>
+</div>
+
+<script>
+const APPS = [
+  { name: "Netflix",     mono: "Nf",             ctx: "Filmy i seriale · okno Edge Cinema",           acc: "#E5484D", light: "#e0a48a" },
+  { name: "Disney+",     mono: "D<sup>+</sup>",  ctx: "Filmy, seriale i animacje · okno Edge Cinema", acc: "#5B8CFF", light: "#9fb6e8" },
+  { name: "HBO Max",     mono: "HM",             ctx: "Filmy i seriale · okno Edge Cinema",           acc: "#8C7DFF", light: "#b4a8e6" },
+  { name: "Prime Video", mono: "Pv",             ctx: "Filmy, seriale i sport · okno Edge Cinema",    acc: "#33B5E5", light: "#98d0e0" },
+  { name: "YouTube",     mono: "Yt",             ctx: "Wideo · okno Edge Cinema",                     acc: "#FF4B3E", light: "#e8b08c" },
+  { name: "Steam",       mono: "St",             ctx: "Gry · Steam Big Picture",                      acc: "#7DB8E3", light: "#c4d6e6" },
+  { name: "Playnite",    mono: "Pn",             ctx: "Biblioteka gier · pełny ekran Playnite",       acc: "#A989FF", light: "#a6d6c0" },
+  { name: "Apple Music", mono: "Am",             ctx: "Muzyka · aplikacja Apple Music",               acc: "#FF5A79", light: "#e6a6b8" },
+];
+const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+
+/* ---------- room (static) ---------- */
+$("#room").innerHTML = `<svg viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="wall" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d0d0f"/><stop offset="1" stop-color="#1a1a1d"/></linearGradient>
+    <linearGradient id="floor" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0e0e10"/><stop offset="1" stop-color="#060607"/></linearGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".6" stop-color="#fff" stop-opacity=".07"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+    <radialGradient id="vig" cx=".5" cy=".45" r=".8"><stop offset=".55" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".6"/></radialGradient>
+  </defs>
+  <rect width="1920" height="744" fill="url(#wall)"/>
+  <rect y="744" width="1920" height="336" fill="url(#floor)"/>
+  <rect y="743" width="1920" height="1.5" fill="url(#edge)"/>
+  <rect width="1920" height="1080" fill="url(#vig)"/>
+</svg>`;
+
+/* ---------- light (per service colour temperature) ---------- */
+function lightSVG(c, i) {
+  return `<svg viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="b${i}" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="26"/></filter>
+    <filter id="bb${i}" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="60"/></filter>
+    <linearGradient id="sh${i}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${c}" stop-opacity=".30"/><stop offset=".75" stop-color="${c}" stop-opacity=".10"/><stop offset="1" stop-color="${c}" stop-opacity=".04"/></linearGradient>
+    <linearGradient id="fl${i}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${c}" stop-opacity=".16"/><stop offset="1" stop-color="${c}" stop-opacity="0"/></linearGradient>
+    <radialGradient id="amb${i}" cx=".72" cy=".2" r=".7"><stop offset="0" stop-color="${c}" stop-opacity=".10"/><stop offset="1" stop-color="${c}" stop-opacity="0"/></radialGradient>
+  </defs>
+  <rect width="1920" height="1080" fill="url(#amb${i})"/>
+  <g filter="url(#b${i})">
+    <polygon points="1240,-40 1420,-40 1250,740 1040,740" fill="url(#sh${i})"/>
+    <polygon points="1500,-40 1560,-40 1400,740 1330,740" fill="url(#sh${i})" opacity=".7"/>
+  </g>
+  <g filter="url(#bb${i})">
+    <polygon points="1040,742 1250,742 1060,1100 760,1100" fill="url(#fl${i})"/>
+    <polygon points="1330,742 1400,742 1250,1100 1140,1100" fill="url(#fl${i})" opacity=".6"/>
+  </g>
+</svg>`;
+}
+$("#lights").innerHTML = APPS.map((a, i) => `<div class="light" data-i="${i}">${lightSVG(a.light, i)}</div>`).join("");
+$("#dock").innerHTML = APPS.map((a, i) => `<div class="cell" data-i="${i}" style="--acc:${a.acc}"><div class="tile"><span class="dot"></span><span class="mono">${a.mono}</span><span class="prog"></span></div><div class="name">${a.name}</div></div>`).join("");
+
+const tf = new Intl.DateTimeFormat("pl-PL", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Europe/Warsaw" });
+const tick = () => { $("#clock").textContent = tf.format(new Date()); }; tick(); setInterval(tick, 1000);
+
+const S = { zone: "dock", dock: 0, sys: 0, cc: false, cci: 0, launching: -1 };
+let lt = 0, ct = 0, shownCtx = "";
+function render() {
+  $$(".cell").forEach((el, i) => {
+    el.classList.toggle("focus", !S.cc && S.zone === "dock" && i === S.dock);
+    el.classList.toggle("sel", (S.cc || S.zone !== "dock") && i === S.dock);
+    el.classList.toggle("launching", i === S.launching);
+  });
+  $$(".sbtn").forEach((el, i) => el.classList.toggle("focus", !S.cc && S.zone === "sys" && i === S.sys));
+  $$(".row").forEach((el, i) => el.classList.toggle("focus", S.cc && i === S.cci));
+  $("#stage").classList.toggle("open", S.cc);
+  const a = APPS[S.dock], txt = S.launching === S.dock ? `Otwieranie ${a.name}…` : a.ctx;
+  if (txt !== shownCtx) {
+    const first = !shownCtx; shownCtx = txt; clearTimeout(ct);
+    if (first) $("#context").textContent = txt;
+    else { $("#context").classList.add("swap"); ct = setTimeout(() => { $("#context").textContent = txt; $("#context").classList.remove("swap"); }, 100); }
+  }
+  clearTimeout(lt); lt = setTimeout(() => $$(".light").forEach((el, i) => el.classList.toggle("on", i === S.dock)), 250);
+}
+function bump(d) { const x = $("#dock"); x.classList.remove("bump-l", "bump-r"); void x.offsetWidth; x.classList.add(d < 0 ? "bump-l" : "bump-r"); }
+function toast(m) { const t = $("#toast"); t.textContent = m; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 2600); }
+function move(dir) {
+  if (S.cc) { if (dir === "up") S.cci = Math.max(0, S.cci - 1); if (dir === "down") S.cci = Math.min(3, S.cci + 1); return render(); }
+  if (S.zone === "dock") {
+    if (dir === "left") { if (!S.dock) return bump(-1); S.dock--; }
+    else if (dir === "right") { if (S.dock === 7) return bump(1); S.dock++; }
+    else if (dir === "down") S.zone = "sys";
+    else return;
+  } else {
+    if (dir === "left") S.sys = Math.max(0, S.sys - 1);
+    else if (dir === "right") S.sys = Math.min(2, S.sys + 1);
+    else if (dir === "up") S.zone = "dock";
+    else return;
+  }
+  render();
+}
+function activate() {
+  if (S.cc) return toast(["Pilot: otwórz velora.local na iPhonie", "Dźwięk", "Tryb obrazu", "Pokaż pulpit"][S.cci]);
+  if (S.zone === "sys") { if (!S.sys) return toast("Szukaj — wyszukiwanie w aplikacjach"); S.cc = true; S.cci = S.sys === 1 ? 0 : 1; return render(); }
+  const i = S.dock; if (S.launching === i) return; S.launching = i; render();
+  setTimeout(() => { if (S.launching === i) { S.launching = -1; render(); } }, 2400);
+}
+function back() { if (S.cc) { S.cc = false; render(); } else if (S.zone === "sys") { S.zone = "dock"; render(); } }
+function press(on) { if (!S.cc && S.zone === "dock") $$(".cell")[S.dock].classList.toggle("pressed", on); }
+const KEYS = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
+addEventListener("keydown", e => {
+  if (KEYS[e.key]) { e.preventDefault(); move(KEYS[e.key]); }
+  else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); if (!e.repeat) press(true); }
+  else if (e.key === "Escape" || e.key === "Backspace") { e.preventDefault(); back(); }
+  else if (e.key === "F3") { e.preventDefault(); if (S.cc) back(); else { S.cc = true; S.cci = 0; render(); } }
+});
+addEventListener("keyup", e => { if (e.key === "Enter" || e.key === " ") { press(false); activate(); } });
+const pp = {}, pr = {};
+(function poll(ts) {
+  const gp = (navigator.getGamepads ? navigator.getGamepads() : []).find(Boolean);
+  if (gp) {
+    const map = { 12: "up", 13: "down", 14: "left", 15: "right" };
+    for (const b in map) { const d = gp.buttons[b] && gp.buttons[b].pressed;
+      if (d && !pp[b]) { move(map[b]); pr[b] = ts + 420; } else if (d && ts > pr[b]) { move(map[b]); pr[b] = ts + 110; } pp[b] = d; }
+    const x = gp.buttons[0]?.pressed, o = gp.buttons[1]?.pressed, opt = gp.buttons[9]?.pressed;
+    if (x && !pp.x) press(true); if (!x && pp.x) { press(false); activate(); }
+    if (o && !pp.o) back(); if (opt && !pp.opt) { if (S.cc) back(); else { S.cc = true; S.cci = 0; render(); } }
+    pp.x = x; pp.o = o; pp.opt = opt;
+  }
+  requestAnimationFrame(poll);
+})(0);
+
+const H = new URLSearchParams(location.hash.slice(1));
+if (H.has("focus")) S.dock = +H.get("focus");
+if (H.has("sys") || H.has("top")) { S.zone = "sys"; S.sys = +(H.get("sys") || H.get("top")); }
+if (H.has("cc")) { S.cc = true; S.cci = +(H.get("cc") || 0); }
+if (H.has("launch")) { S.launching = S.dock = +H.get("launch"); }
+render();
+if (H.has("launch")) $$(".cell")[S.launching].classList.add("frozen");
+$$(".light")[S.dock].classList.add("on");
+</script>
+</body>
+</html>
