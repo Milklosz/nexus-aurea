@@ -93,7 +93,7 @@ describe("System Intelligence panel", () => {
     mocks.snapshot = snapshot();
     render(<SystemDiagnosticsPanel />);
     expect(await screen.findByText(/Wersja 0.9.2/)).toBeTruthy();
-    expect(screen.getByText(/build 3a201da/)).toBeTruthy();
+    expect(screen.getByText(/build 36312486cebb5b523c24cf0754f4a317ad87f042/)).toBeTruthy();
     expect(screen.getByText(/rewizja 3/)).toBeTruthy();
     expect(screen.getByText(/Poprzednie uruchomienie/)).toBeTruthy();
     expect(screen.getByText(/DualSense · Bluetooth · raporty 42/)).toBeTruthy();

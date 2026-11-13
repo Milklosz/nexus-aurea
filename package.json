@@ -9,7 +9,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run",
-    "test:provenance": "node --test scripts/build-provenance.test.mjs",
+    "test:provenance": "node --test scripts/build-provenance-node-check.mjs",
     "tauri": "tauri",
     "tauri:windows": "tauri build --target x86_64-pc-windows-msvc"
   },

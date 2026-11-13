@@ -18,7 +18,7 @@ This change is based on the audited candidate `36312486cebb5b523c24cf0754f4a317a
 
 | Check | Result | Evidence |
 |---|---|---|
-| Provenance Node tests | PASS | `node --test scripts/build-provenance.test.mjs`: five tests for consecutive same-branch commits, detached HEAD, worktree, no-Git behavior, PR source vs synthetic merge, artifact hash verification, tampering, and stale SHA rejection. |
+| Provenance Node tests | PASS | `node --test scripts/build-provenance-node-check.mjs`: five tests for consecutive same-branch commits, detached HEAD, worktree, no-Git behavior, PR source vs synthetic merge, artifact hash verification, tampering, and stale SHA rejection. The file name avoids Vitest's default test discovery; it is invoked explicitly by the package script. |
 | Rust Git metadata and Cargo cache tests | PASS | `cargo test --locked --manifest-path src-tauri/Cargo.toml --lib build_support::tests`: seven tests covering full SHA validation, dirty state, detached HEAD, worktree, missing Git, and a real cached Cargo rebuild after a same-branch empty commit without cleaning `target`. |
 | Full Rust library suite | PASS | `cargo test --locked --manifest-path src-tauri/Cargo.toml --lib`: 271 passed, 0 failed. Existing unrelated compiler warnings remain. |
 | Full React/Vitest and TypeScript build | NOT RUN locally | The checkout has no `node_modules`; `pnpm` could not register the workspace because this sandbox denies creation of a pnpm-store symlink (`EPERM`). Direct Node tests ran without installing dependencies. CI on the S0b PR head must provide the full result. |
