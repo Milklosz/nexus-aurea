@@ -14,8 +14,11 @@ import { streamingServices } from "./data/streamingServices";
 import { useMusicStatusPolling } from "./hooks/useMusicStatusPolling";
 import { returnHomeFocusTarget, useReturnHomeListener } from "./hooks/useReturnHomeFocus";
 import { useGamepad, type ControllerActions } from "./hooks/useGamepad";
-import { dispatchControllerAction, intentFromKeyboard, isIgnoredShortcutEvent, type NavIntentHandlers } from "./services/navIntent";
+import { dispatchControllerAction, intentFromKeyboard, intentFromRemote, isIgnoredShortcutEvent, type NavIntentHandlers } from "./services/navIntent";
 import { shouldRestoreDockFocus } from "./services/windowFocusRestore";
+import { offerIntentToKeyboard, textEntryTargetFromFocus, withKeyboardFirst } from "./services/virtualKeyboardRouting";
+import { useVirtualKeyboardHost } from "./hooks/useVirtualKeyboardHost";
+import { VirtualKeyboard } from "./components/VirtualKeyboard";
 import { moveAureaFocus } from "./services/aureaNavigation";
 import { focusHomeZone, homeZoneAvailability, homeZoneOfElement, nextHomeZone } from "./services/homeZones";
 import { useControllerOwnershipSuspension } from "./hooks/useControllerOwnershipSuspension";
@@ -177,6 +180,9 @@ export default function App() {
   useFocusRestoreOnClose(diagnostics, restoreSelectedFocus, !controlCenterOpen);
   useFocusRestoreOnClose(controlCenterOpen, restoreSelectedFocus, !diagnostics);
   const closeDiagnostics = useCallback(() => setDiagnostics(false), []);
+  // On-screen keyboard: opens only for VELORA text fields marked data-velora-text-entry.
+  const keyboard = useVirtualKeyboardHost();
+  const openKeyboardFor = keyboard.openFor;
   const moveControllerFocus = useCallback((delta: -1 | 1) => {
     const dialog = document.querySelector("dialog[open]");
     if (!dialog) {
@@ -213,17 +219,31 @@ export default function App() {
   const confirmControllerFocus = useCallback(() => {
     const dialog = document.querySelector("dialog[open]");
     const active = document.activeElement;
+    const textField = textEntryTargetFromFocus(active);
+    if (textField) {
+      openKeyboardFor(textField);
+      return;
+    }
     if (dialog && active instanceof HTMLElement && dialog.contains(active)) {
       active.click();
       return;
     }
     activateSelected();
-  }, [activateSelected]);
+  }, [activateSelected, openKeyboardFor]);
   // The paired remote must not reach administrative dialog controls through a
   // generic active.click(). Dialog actions require an explicit allow marker.
   const confirmRemoteFocus = useCallback(() => {
     const dialog = document.querySelector("dialog[open]");
     const active = document.activeElement;
+    const textField = textEntryTargetFromFocus(active);
+    if (textField) {
+      if (dialog && !canRemoteSelect(textField)) {
+        showToast("Pilot nie ma uprawnień do tej operacji administracyjnej.");
+        return;
+      }
+      openKeyboardFor(textField);
+      return;
+    }
     if (dialog && active instanceof HTMLElement && dialog.contains(active)) {
       if (!canRemoteSelect(active)) {
         showToast("Pilot nie ma uprawnień do tej operacji administracyjnej.");
@@ -233,7 +253,7 @@ export default function App() {
       return;
     }
     activateSelected();
-  }, [activateSelected, showToast]);
+  }, [activateSelected, openKeyboardFor, showToast]);
   const backControllerFocus = useCallback(() => {
     if (controlCenterOpen) {
       closeControlCenter();
@@ -319,7 +339,7 @@ export default function App() {
   );
   // DualSense actions become shared navigation intents; the handlers below are the
   // only place that decides what each intent does on the home screen and in dialogs.
-  const controllerIntentHandlers = useMemo<NavIntentHandlers>(() => ({
+  const homeIntentHandlers = useMemo<NavIntentHandlers>(() => ({
     move: (direction) => {
       if (direction === "up" || direction === "down") {
         moveVerticalFocus(direction === "up" ? -1 : 1);
@@ -332,6 +352,11 @@ export default function App() {
     menu: toggleControlCenter,
     home: returnToNexus,
   }), [backControllerFocus, confirmControllerFocus, moveControllerFocus, moveVerticalFocus, returnToNexus, toggleControlCenter]);
+  // An open on-screen keyboard claims the intent first; otherwise the home handlers run unchanged.
+  const controllerIntentHandlers = useMemo<NavIntentHandlers>(
+    () => withKeyboardFirst(homeIntentHandlers, () => keyboard.sinkRef.current),
+    [homeIntentHandlers, keyboard.sinkRef],
+  );
   const controllerActions = useMemo<ControllerActions>(() => ({
     move: (delta) => dispatchControllerAction({ type: "move", delta }, controllerIntentHandlers),
     vertical: (delta) => dispatchControllerAction({ type: "vertical", delta }, controllerIntentHandlers),
@@ -393,6 +418,9 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     void listenForRemoteCommand((command) => {
       if (!active) return;
+      // An open on-screen keyboard claims navigation first; Home still reaches the handler below after cancelling it.
+      const remoteIntent = intentFromRemote(command);
+      if (remoteIntent && offerIntentToKeyboard(remoteIntent, keyboard.sinkRef.current)) return;
       dispatchRemoteCommand(command, {
         navigate: moveControllerFocus,
         // Up/down are zone moves; left/right keep the dock grid, then the linear fallback.
@@ -421,7 +449,7 @@ export default function App() {
       active = false;
       unlisten?.();
     };
-  }, [backControllerFocus, changeCinemaProfile, confirmControllerFocus, confirmRemoteFocus, handleSystemVolume, moveControllerFocus, moveVerticalFocus, returnToNexus, showToast]);
+  }, [backControllerFocus, changeCinemaProfile, confirmControllerFocus, confirmRemoteFocus, handleSystemVolume, keyboard.sinkRef, moveControllerFocus, moveVerticalFocus, returnToNexus, showToast]);
 
   useReturnHomeListener(useCallback((event: ReturnHomeEvent) => {
     setControlCenterOpen(false);
@@ -545,6 +573,12 @@ export default function App() {
         onSystemVolume={handleSystemVolume}
         onOpenAppleMusic={openAppleMusic}
         onClose={closeDiagnostics}
+      />}
+      {keyboard.field && <VirtualKeyboard
+        field={keyboard.field}
+        sinkRef={keyboard.sinkRef}
+        onDone={keyboard.commit}
+        onCancel={keyboard.cancel}
       />}
       <Toast message={message} />
     </main>
