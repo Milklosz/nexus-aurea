@@ -7,6 +7,8 @@ import type { SystemVolumeAction } from "../services/musicBridge";
 import { GamingHub } from "./GamingHub";
 import { AutostartPanel } from "./AutostartPanel";
 import { PlayniteLibrary } from "./PlayniteLibrary";
+import { AppSearchPanel } from "./AppSearchPanel";
+import type { SearchEntry } from "../services/appSearch";
 import {
   beginRemotePairing,
   disabledRemoteAccessStatus,
@@ -32,6 +34,8 @@ type ControlCenterProps = {
   onOpenDiagnostics: () => void;
   onReturnToNexus: () => void;
   onClose: () => void;
+  /** When present, the Szukaj tab is shown. Launching a result goes through onLaunch. */
+  appSearch?: { entries: readonly SearchEntry[]; onLaunch: (entryId: string) => void };
 };
 
 const profiles: Array<{ id: CinemaProfile; label: string }> = [
@@ -44,6 +48,7 @@ const controlPanels = [
   { id: "cinema", label: "Cinema" },
   { id: "gaming", label: "Gaming" },
   { id: "remote", label: "iPhone Remote" },
+  { id: "search", label: "Szukaj" },
 ] as const;
 
 type ControlPanelId = (typeof controlPanels)[number]["id"];
@@ -55,6 +60,8 @@ function delayLabel(seconds: number): string {
 export function ControlCenter(props: ControlCenterProps) {
   const dialog = useRef<HTMLDialogElement>(null);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  // The Szukaj tab exists only when the app passes search entries.
+  const panels = controlPanels.filter((panel) => panel.id !== "search" || props.appSearch !== undefined);
   const [activePanel, setActivePanel] = useState<ControlPanelId>("cinema");
   const [status, setStatus] = useState<ControlServiceStatus>(disabledControlServiceStatus);
   const [loading, setLoading] = useState(true);
@@ -221,7 +228,7 @@ export function ControlCenter(props: ControlCenterProps) {
   const selectPanel = (panel: ControlPanelId, focusTab = false) => {
     setActivePanel(panel);
     if (focusTab) {
-      const index = controlPanels.findIndex((item) => item.id === panel);
+      const index = panels.findIndex((item) => item.id === panel);
       tabRefs.current[index]?.focus({ preventScroll: true });
     }
   };
@@ -233,9 +240,9 @@ export function ControlCenter(props: ControlCenterProps) {
     const nextIndex = event.key === "Home"
       ? 0
       : event.key === "End"
-        ? controlPanels.length - 1
-        : (index + (event.key === "ArrowRight" ? 1 : -1) + controlPanels.length) % controlPanels.length;
-    selectPanel(controlPanels[nextIndex].id, true);
+        ? panels.length - 1
+        : (index + (event.key === "ArrowRight" ? 1 : -1) + panels.length) % panels.length;
+    selectPanel(panels[nextIndex].id, true);
   };
 
   return <dialog ref={dialog} className="control-center" aria-labelledby="control-center-title"
@@ -250,7 +257,7 @@ export function ControlCenter(props: ControlCenterProps) {
     </header>
 
     <nav className="cc-tabs" role="tablist" aria-label="Sekcje Control Center">
-      {controlPanels.map((panel, index) => <button
+      {panels.map((panel, index) => <button
         key={panel.id}
         ref={(element) => { tabRefs.current[index] = element; }}
         id={`cc-tab-${panel.id}`}
@@ -342,6 +349,10 @@ export function ControlCenter(props: ControlCenterProps) {
         </section>
       </section>
 
+      {props.appSearch && <section id="cc-panel-search" className="cc-panel cc-search-panel" role="tabpanel"
+        aria-labelledby="cc-tab-search" tabIndex={0} hidden={activePanel !== "search"}>
+        <AppSearchPanel entries={props.appSearch.entries} onLaunch={props.appSearch.onLaunch} />
+      </section>}
       <section id="cc-panel-remote" className="cc-panel cc-remote-panel" role="tabpanel"
         aria-labelledby="cc-tab-remote" tabIndex={0} hidden={activePanel !== "remote"}>
         <div className="cc-card cc-remote-card" data-remote-admin="">
