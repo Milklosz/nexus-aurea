@@ -11,7 +11,6 @@ import { HeroPanel } from "./components/HeroPanel";
 import { StatusBar } from "./components/StatusBar";
 import { Toast } from "./components/Toast";
 import { streamingServices } from "./data/streamingServices";
-import { useClock } from "./hooks/useClock";
 import { useMusicStatusPolling } from "./hooks/useMusicStatusPolling";
 import { useGamepad, type ControllerActions } from "./hooks/useGamepad";
 import { dispatchControllerAction, isIgnoredShortcutEvent, type NavIntentHandlers } from "./services/navIntent";
@@ -67,7 +66,6 @@ export default function App() {
   const mediaIsPlaying = musicStatus.appleSessionFound && musicStatus.playbackState === "playing";
   const ambient = useAmbient(ambientSettings, mediaIsPlaying);
   const suspendForForegroundOwner = useControllerOwnershipSuspension();
-  const { now, time } = useClock();
   const { label: weatherLabel, title: weatherTitle } = useWeather();
   const { message, showToast } = useToast();
   const { launchingIds, run: runServiceLaunch } = useLaunchGuard();
@@ -459,7 +457,7 @@ export default function App() {
       <div className="sun" aria-hidden="true" />
       <div className="ridge" aria-hidden="true" />
       <div className="ridge back" aria-hidden="true" />
-      <StatusBar now={now} time={time} weatherLabel={weatherLabel} weatherTitle={weatherTitle} />
+      <StatusBar weatherLabel={weatherLabel} weatherTitle={weatherTitle} />
       <button type="button" className="quick-settings-trigger" onClick={toggleControlCenter} aria-label="Otwórz Control Center">Control Center <kbd>F3</kbd></button>
       <HeroPanel />
       <AppDock
@@ -492,7 +490,7 @@ export default function App() {
         onReturnToNexus={returnToNexus}
         onClose={closeControlCenter}
       />}
-      {ambient.active && <AmbientScreen now={now} />}
+      {ambient.active && <AmbientScreen />}
       {diagnostics && <GamepadDiagnostics
         profile={controllerProfile}
         onProfileChange={updateControllerProfile}

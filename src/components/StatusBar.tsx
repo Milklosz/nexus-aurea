@@ -1,11 +1,16 @@
+import { useClock } from "../hooks/useClock";
+
 type StatusBarProps = {
-  time: string;
-  now: Date;
   weatherLabel: string;
   weatherTitle: string;
 };
 
-export function StatusBar({ time, now, weatherLabel, weatherTitle }: StatusBarProps) {
+/**
+ * The clock ticks every second. It subscribes here, not in App, so the
+ * once-per-second update re-renders only the top bar.
+ */
+export function StatusBar({ weatherLabel, weatherTitle }: StatusBarProps) {
+  const { now, time } = useClock();
   return (
     <header className="topbar">
       <div className="brand">
