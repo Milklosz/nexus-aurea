@@ -29,7 +29,12 @@ Punkt odniesienia dla S0 to pełny SHA `36312486cebb5b523c24cf0754f4a317ad87f042
 Gałąź `stabilization/velora-2-s0` została wyprowadzona dokładnie z tego kandydata;
 nie zmienia `main` ani bazowej gałęzi PR #48.
 
-Sprint S0 jest prowadzony na osobnych Draft PR-ach. S0a: [PR #49](https://github.com/Milklosz/nexus-aurea/pull/49), head `934fd664e4b21c2a3f342413aa89b277718e0ff6`; Windows i macOS CI zakończyły się sukcesem w runie `43467145834`. S0b ma osobną gałąź i Draft PR; wyniki będą przypisane do dokładnego SHA jego headu. `main`, PR #48 i działająca instalacja nie zostały zmienione.
+Sprint S0 jest prowadzony na osobnych Draft PR-ach, obu kierowanych do `stabilization/velora-2-s0`:
+
+- S0a — [PR #49](https://github.com/Milklosz/nexus-aurea/pull/49), `fix/velora-2-remote-credential-store`. Kodowy head `934fd664e4b21c2a3f342413aa89b277718e0ff6` przeszedł Windows i macOS CI w runie `43467145834`; późniejszy commit dokumentacji ma osobny run CI.
+- S0b — [PR #50](https://github.com/Milklosz/nexus-aurea/pull/50), `build/velora-2-build-provenance`. Pełne testy i provenance instalatora są weryfikowane przez CI na aktualnym headzie PR.
+
+`main`, PR #48 i działająca instalacja nie zostały zmienione. Oba PR-y pozostają Draft; nie było merge ani release.
 
 ## 2. Wyniki bazowe na SHA `36312486`
 
