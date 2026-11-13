@@ -15,6 +15,8 @@ import { useMusicStatusPolling } from "./hooks/useMusicStatusPolling";
 import { returnHomeFocusTarget, useReturnHomeListener } from "./hooks/useReturnHomeFocus";
 import { useGamepad, type ControllerActions } from "./hooks/useGamepad";
 import { dispatchControllerAction, isIgnoredShortcutEvent, type NavIntentHandlers } from "./services/navIntent";
+import { moveAureaFocus } from "./services/aureaNavigation";
+import { focusHomeZone, homeZoneAvailability, homeZoneOfElement, nextHomeZone } from "./services/homeZones";
 import { useControllerOwnershipSuspension } from "./hooks/useControllerOwnershipSuspension";
 import { isTextEntryTarget, useNavigation } from "./hooks/useNavigation";
 import { useFocusRestoreOnClose } from "./hooks/useFocusRestoreOnClose";
@@ -120,7 +122,14 @@ export default function App() {
   const activateSelected = useCallback(() => void openService(activeServiceRef.current), [openService]);
   // Rejestruje dock jako siatkę AUREA dla 2D poleceń iPhone Remote; bez `columns`
   // klawiatura zachowuje dotychczasowe skróty (ArrowUp -> Control Center).
-  const navigation = useNavigation(streamingServices.length, activateSelected, showMenu, { gridId: "home-dock" });
+  // Up/down on the home screen go through the zone handler. It is set below, once
+  // the focus helpers exist, so the keyboard hook always calls the current version.
+  const verticalZoneRef = useRef<(delta: -1 | 1) => boolean>(() => false);
+  const handleVerticalZone = useCallback((delta: -1 | 1) => verticalZoneRef.current(delta), []);
+  const navigation = useNavigation(streamingServices.length, activateSelected, showMenu, {
+    gridId: "home-dock",
+    onVerticalZone: handleVerticalZone,
+  });
   const closeControlCenter = useCallback(() => setControlCenterOpen(false), []);
   const toggleControlCenter = useCallback(() => {
     if (controlCenterOpen) {
@@ -175,6 +184,26 @@ export default function App() {
       : (index + delta + controls.length) % controls.length;
     controls[nextIndex]?.focus({ preventScroll: true });
   }, [navigation.moveApp]);
+  // Up/down on the home screen move between zones: Control Center, music, dock, Diagnostics.
+  const moveHomeZone = useCallback((delta: -1 | 1): boolean => {
+    const current = homeZoneOfElement(document.activeElement) ?? "dock";
+    const next = nextHomeZone(current, delta, homeZoneAvailability(document));
+    if (next === null) return false;
+    if (next === "dock") navigation.focusApp(activeServiceRef.current);
+    else focusHomeZone(document, next);
+    return true;
+  }, [navigation.focusApp]);
+  // Inside an open dialog, up/down move through its controls, just as left/right do.
+  const moveVerticalFocus = useCallback((delta: -1 | 1): boolean => {
+    if (document.querySelector("dialog[open]")) {
+      moveControllerFocus(delta);
+      return true;
+    }
+    return moveHomeZone(delta);
+  }, [moveControllerFocus, moveHomeZone]);
+  useEffect(() => {
+    verticalZoneRef.current = moveVerticalFocus;
+  }, [moveVerticalFocus]);
   const confirmControllerFocus = useCallback(() => {
     const dialog = document.querySelector("dialog[open]");
     const active = document.activeElement;
@@ -285,14 +314,21 @@ export default function App() {
   // DualSense actions become shared navigation intents; the handlers below are the
   // only place that decides what each intent does on the home screen and in dialogs.
   const controllerIntentHandlers = useMemo<NavIntentHandlers>(() => ({
-    move: (direction) => moveControllerFocus(direction === "left" || direction === "up" ? -1 : 1),
+    move: (direction) => {
+      if (direction === "up" || direction === "down") {
+        moveVerticalFocus(direction === "up" ? -1 : 1);
+        return;
+      }
+      moveControllerFocus(direction === "left" ? -1 : 1);
+    },
     select: confirmControllerFocus,
     back: backControllerFocus,
     menu: toggleControlCenter,
     home: returnToNexus,
-  }), [backControllerFocus, confirmControllerFocus, moveControllerFocus, returnToNexus, toggleControlCenter]);
+  }), [backControllerFocus, confirmControllerFocus, moveControllerFocus, moveVerticalFocus, returnToNexus, toggleControlCenter]);
   const controllerActions = useMemo<ControllerActions>(() => ({
     move: (delta) => dispatchControllerAction({ type: "move", delta }, controllerIntentHandlers),
+    vertical: (delta) => dispatchControllerAction({ type: "vertical", delta }, controllerIntentHandlers),
     confirm: () => dispatchControllerAction({ type: "confirm" }, controllerIntentHandlers),
     back: () => dispatchControllerAction({ type: "back" }, controllerIntentHandlers),
     options: () => dispatchControllerAction({ type: "options" }, controllerIntentHandlers),
@@ -354,6 +390,15 @@ export default function App() {
       if (!active) return;
       dispatchRemoteCommand(command, {
         navigate: moveControllerFocus,
+        // Up/down are zone moves; left/right keep the dock grid, then the linear fallback.
+        navigateDirection: (direction) => {
+          if (direction === "up" || direction === "down") {
+            moveVerticalFocus(direction === "up" ? -1 : 1);
+            return;
+          }
+          if (!document.querySelector("dialog[open]") && moveAureaFocus(direction)) return;
+          moveControllerFocus(direction === "left" ? -1 : 1);
+        },
         select: confirmControllerFocus,
         selectRemote: confirmRemoteFocus,
         back: backControllerFocus,
@@ -371,7 +416,7 @@ export default function App() {
       active = false;
       unlisten?.();
     };
-  }, [backControllerFocus, changeCinemaProfile, confirmControllerFocus, confirmRemoteFocus, handleSystemVolume, moveControllerFocus, returnToNexus, showToast]);
+  }, [backControllerFocus, changeCinemaProfile, confirmControllerFocus, confirmRemoteFocus, handleSystemVolume, moveControllerFocus, moveVerticalFocus, returnToNexus, showToast]);
 
   useReturnHomeListener(useCallback((event: ReturnHomeEvent) => {
     setControlCenterOpen(false);

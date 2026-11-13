@@ -49,11 +49,16 @@ export function isIgnoredShortcutEvent(event: NavKeyEvent): boolean {
   return event.repeat && ONE_SHOT_SHORTCUT_KEYS.has(event.key);
 }
 
-/** DualSense: D-pad left/right is the only linear move; the 2D grid uses up/down elsewhere. */
+/**
+ * DualSense: D-pad (or left stick) left/right is a linear move; up/down is a vertical
+ * move between home zones, and inside dialogs it moves the focus the same way.
+ */
 export function intentFromController(action: ControllerAction): NavIntent {
   switch (action.type) {
     case "move":
       return { kind: "move", direction: action.delta < 0 ? "left" : "right" };
+    case "vertical":
+      return { kind: "move", direction: action.delta < 0 ? "up" : "down" };
     case "confirm":
       return { kind: "select" };
     case "back":
