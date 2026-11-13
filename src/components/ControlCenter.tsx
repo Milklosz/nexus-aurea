@@ -9,6 +9,7 @@ import { AutostartPanel } from "./AutostartPanel";
 import { PlayniteLibrary } from "./PlayniteLibrary";
 import { AppSearchPanel } from "./AppSearchPanel";
 import type { SearchEntry } from "../services/appSearch";
+import { STATUS_READ_TIMEOUT_MS, withTimeout } from "../services/withTimeout";
 import {
   beginRemotePairing,
   disabledRemoteAccessStatus,
@@ -89,7 +90,7 @@ export function ControlCenter(props: ControlCenterProps) {
     setRemoteStatusLoading(true);
     setRemoteStatusError("");
     try {
-      const next = await getRemoteAccessStatus();
+      const next = await withTimeout(getRemoteAccessStatus(), STATUS_READ_TIMEOUT_MS, "Status iPhone Remote");
       if (isActive() && requestId === remoteStatusRequestId.current) {
         setRemoteStatus(next);
         setRemoteStatusReady(true);
@@ -114,7 +115,7 @@ export function ControlCenter(props: ControlCenterProps) {
     setLoading(true);
     setError("");
     try {
-      const next = await getControlServiceStatus();
+      const next = await withTimeout(getControlServiceStatus(), STATUS_READ_TIMEOUT_MS, "Status Windows");
       if (isActive() && requestId === controlStatusRequestId.current) {
         setStatus(next);
         setStatusReadFailed(false);
