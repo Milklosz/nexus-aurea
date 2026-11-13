@@ -95,7 +95,9 @@ Nie dodano (świadomie):
 
 - CI: krok „Build Windows x64 NSIS installer" przeszedł na `f82654c` (zadanie
   `windows-latest / React, Tauri, Rust` zielone).
-- Lokalnie: [WYNIK ZOSTANIE UZUPEŁNIONY PO ZAKOŃCZENIU BUDOWY]
+- Lokalnie: `pnpm tauri build --ci --target x86_64-pc-windows-msvc` zakończyło się kodem 0.
+  Artefakt `VELORA_0.9.2_x64-setup.exe` (3.84 MiB), SHA-256
+  `832da9adfd3f113aa51ee0327451cda9a000ca68fab6ba6d12ff02aea8af8934`.
 - Instalator **nie został zainstalowany**.
 
 ## 7. Możliwe regresje
