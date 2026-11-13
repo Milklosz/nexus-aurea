@@ -25,8 +25,16 @@ const MAX_STRING_CHARS: usize = 240;
 pub struct BuildInfo {
     pub version: String,
     pub build_sha: String,
+    pub checkout_sha: String,
+    pub branch: String,
+    pub build_ref: String,
+    pub dirty: String,
+    pub event: String,
+    pub pr_head_sha: Option<String>,
+    pub pr_base_sha: Option<String>,
     pub target: String,
     pub profile: String,
+    pub rustc_version: String,
     pub windows: bool,
 }
 
@@ -75,12 +83,44 @@ pub(crate) fn build_info() -> BuildInfo {
             .filter(|value| !value.is_empty() && *value != "unknown")
             .unwrap_or("unknown")
             .to_string(),
-        target: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
-        profile: if cfg!(debug_assertions) {
-            "debug".to_string()
-        } else {
-            "release".to_string()
-        },
+        checkout_sha: option_env!("VELORA_CHECKOUT_SHA")
+            .filter(|value| !value.is_empty())
+            .unwrap_or("unknown")
+            .to_string(),
+        branch: option_env!("VELORA_BUILD_BRANCH")
+            .filter(|value| !value.is_empty())
+            .unwrap_or("unknown")
+            .to_string(),
+        build_ref: option_env!("VELORA_BUILD_REF")
+            .filter(|value| !value.is_empty())
+            .unwrap_or("unknown")
+            .to_string(),
+        dirty: option_env!("VELORA_BUILD_DIRTY")
+            .filter(|value| !value.is_empty())
+            .unwrap_or("unknown")
+            .to_string(),
+        event: option_env!("VELORA_BUILD_EVENT")
+            .filter(|value| !value.is_empty())
+            .unwrap_or("local")
+            .to_string(),
+        pr_head_sha: option_env!("VELORA_PR_HEAD_SHA")
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        pr_base_sha: option_env!("VELORA_PR_BASE_SHA")
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        target: option_env!("VELORA_BUILD_TARGET")
+            .filter(|value| !value.is_empty())
+            .unwrap_or("unknown")
+            .to_string(),
+        profile: option_env!("VELORA_BUILD_PROFILE")
+            .filter(|value| !value.is_empty())
+            .unwrap_or("unknown")
+            .to_string(),
+        rustc_version: option_env!("VELORA_RUSTC_VERSION")
+            .filter(|value| !value.is_empty())
+            .unwrap_or("unknown")
+            .to_string(),
         windows: cfg!(target_os = "windows"),
     }
 }
@@ -229,7 +269,18 @@ fn sanitize_foreground(foreground: &mut crate::window_broker::ForegroundWindow) 
 }
 
 fn sanitize_snapshot(snapshot: &mut DiagnosticsSnapshot) {
+    snapshot.build.version = sanitize_text(&snapshot.build.version);
     snapshot.build.build_sha = sanitize_text(&snapshot.build.build_sha);
+    snapshot.build.checkout_sha = sanitize_text(&snapshot.build.checkout_sha);
+    snapshot.build.branch = sanitize_text(&snapshot.build.branch);
+    snapshot.build.build_ref = sanitize_text(&snapshot.build.build_ref);
+    snapshot.build.dirty = sanitize_text(&snapshot.build.dirty);
+    snapshot.build.event = sanitize_text(&snapshot.build.event);
+    sanitize_optional(&mut snapshot.build.pr_head_sha);
+    sanitize_optional(&mut snapshot.build.pr_base_sha);
+    snapshot.build.target = sanitize_text(&snapshot.build.target);
+    snapshot.build.profile = sanitize_text(&snapshot.build.profile);
+    snapshot.build.rustc_version = sanitize_text(&snapshot.build.rustc_version);
     sanitize_optional(&mut snapshot.persistence_error);
     if let Some(recovery) = snapshot.session.recovery.as_mut() {
         recovery.message = sanitize_text(&recovery.message);
@@ -344,8 +395,16 @@ mod tests {
             build: BuildInfo {
                 version: "0.9.2".into(),
                 build_sha: "abc123".into(),
+                checkout_sha: "abc123".into(),
+                branch: "test".into(),
+                build_ref: "refs/heads/test".into(),
+                dirty: "false".into(),
+                event: "test".into(),
+                pr_head_sha: None,
+                pr_base_sha: None,
                 target: "windows-x86_64".into(),
                 profile: "release".into(),
+                rustc_version: "rustc test".into(),
                 windows: true,
             },
             session: SessionSnapshot {
