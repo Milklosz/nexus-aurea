@@ -32,6 +32,23 @@ export function intentFromKeyboard(event: NavKeyEvent): NavIntent | null {
   return null;
 }
 
+/**
+ * Keys whose single press toggles or closes something (fullscreen, dialogs,
+ * menus). Holding them must not repeat the action: auto-repeat would flip
+ * fullscreen on and off while the key is held.
+ */
+const ONE_SHOT_SHORTCUT_KEYS: ReadonlySet<string> = new Set(["Escape", "F11", "F2", "F3"]);
+
+/**
+ * App-level shortcut guard. True when a keydown belongs to the OS or browser
+ * (Ctrl, Alt or Meta held: e.g. Ctrl+Escape opens Start) or is an auto-repeat
+ * of a one-shot shortcut. Arrow and Backspace auto-repeat are unaffected.
+ */
+export function isIgnoredShortcutEvent(event: NavKeyEvent): boolean {
+  if (event.ctrlKey || event.metaKey || event.altKey) return true;
+  return event.repeat && ONE_SHOT_SHORTCUT_KEYS.has(event.key);
+}
+
 /** DualSense: D-pad left/right is the only linear move; the 2D grid uses up/down elsewhere. */
 export function intentFromController(action: ControllerAction): NavIntent {
   switch (action.type) {
