@@ -1,12 +1,12 @@
 use tauri::{Emitter, Manager};
 
+mod app_manager;
 mod autostart;
 mod control_service;
+mod credential_store;
 mod diagnostics;
 mod display_audio;
 mod edge_cinema;
-mod remote_access;
-mod app_manager;
 mod gamepad_home;
 mod launch_registry;
 mod music_service;
@@ -16,6 +16,7 @@ mod playnite_library;
 #[allow(dead_code)]
 mod playnite_manifest;
 mod process_table;
+mod remote_access;
 #[allow(dead_code)]
 mod remote_reliability;
 mod session_monitor;
@@ -93,7 +94,9 @@ pub fn run() {
                     window_broker::attach_main_window(app.handle(), hwnd.0 as usize as u64);
                 }
             }
-            if let Ok(Some(recovery)) = session_orchestrator::restore_persisted_session(app.handle()) {
+            if let Ok(Some(recovery)) =
+                session_orchestrator::restore_persisted_session(app.handle())
+            {
                 let _ = app.emit("velora-session-recovery", recovery);
             }
             window_broker::start_foreground_monitor(app.handle().clone());
