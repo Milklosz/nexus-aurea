@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Milklosz/nexus-aurea/blob/main/docs/schemas/velora-build-provenance.schema.json",
+  "title": "VELORA Windows build provenance manifest",
+  "type": "object",
+  "required": ["schemaVersion", "app", "source", "build", "tools", "artifacts"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "app": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "const": "VELORA" },
+        "version": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "required": ["sourceSha", "checkoutSha", "branch", "headBranch", "ref", "dirty", "clean", "event", "pullRequest"],
+      "properties": {
+        "sourceSha": { "$ref": "#/$defs/gitSha" },
+        "checkoutSha": { "$ref": "#/$defs/gitSha" },
+        "branch": { "type": ["string", "null"] },
+        "headBranch": { "type": ["string", "null"] },
+        "ref": { "type": "string", "minLength": 1 },
+        "dirty": { "type": ["boolean", "null"] },
+        "clean": { "type": ["boolean", "null"] },
+        "event": { "type": "string", "minLength": 1 },
+        "pullRequest": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["headSha", "baseSha", "syntheticMergeSha"],
+              "properties": {
+                "headSha": { "$ref": "#/$defs/gitSha" },
+                "baseSha": { "$ref": "#/$defs/gitSha" },
+                "syntheticMergeSha": { "$ref": "#/$defs/gitSha" }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "build": {
+      "type": "object",
+      "required": ["generatedAt", "target", "profile", "runnerOs", "runId", "runAttempt"],
+      "properties": {
+        "generatedAt": { "type": "string", "format": "date-time" },
+        "target": { "type": "string", "minLength": 1 },
+        "profile": { "type": "string", "minLength": 1 },
+        "runnerOs": { "type": "string", "minLength": 1 },
+        "runId": { "type": ["string", "null"] },
+        "runAttempt": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "tools": {
+      "type": "object",
+      "required": ["node", "pnpm", "rustc", "cargo", "tauriCli", "msvc", "windowsSdk"],
+      "properties": {
+        "node": { "type": "string" },
+        "pnpm": { "type": "string" },
+        "rustc": { "type": "string" },
+        "cargo": { "type": "string" },
+        "tauriCli": { "type": "string" },
+        "msvc": { "type": "string" },
+        "windowsSdk": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "artifacts": {
+      "type": "object",
+      "required": ["installer", "builtExe", "packagedExe"],
+      "properties": {
+        "installer": { "$ref": "#/$defs/artifact" },
+        "builtExe": { "$ref": "#/$defs/artifact" },
+        "packagedExe": { "$ref": "#/$defs/artifact" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "gitSha": { "type": "string", "pattern": "^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$" },
+    "artifact": {
+      "type": "object",
+      "required": ["name", "sizeBytes", "sha256"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "sizeBytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

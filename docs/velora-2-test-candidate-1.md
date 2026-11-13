@@ -9,7 +9,7 @@ wyraźnej zgody właściciela po zapoznaniu się z wynikami.
 |---|---|
 | Gałąź oznaczona | `test/velora-2-candidate-1` |
 | Gałąź PR | `test/velora-rc-stabilization` (Draft PR #48 → `test/velora-2-combined`) |
-| Kod kandydata (SHA) | `9b23ecabaa1045e9f3cb88b2cd692137e4621408` |
+| Kod kandydata (SHA) | `36312486cebb5b523c24cf0754f4a317ad87f042` |
 | Wersja aplikacji | 0.9.2 (`package.json`, `tauri.conf.json`) |
 | Główna gałąź | `main` — nietknięta |
 
@@ -25,47 +25,58 @@ Zawartość (sprawdzone `git merge-base --is-ancestor`, wszystkie obecne w kandy
 | #48 stabilizacja RC (timeout odczytu statusu, testy integracyjne) | `f54d6c429` (+ `9b23eca`) | tak |
 | `test/velora-2-combined` (baza) | `f82654c79` | tak |
 
-Autorstwo istniejących commitów nie zostało zmienione. Commity dodane w tej sesji
-mają autora `Claude Code <noreply@anthropic.com>` ustawionego tylko dla danego
-polecenia, bez zmiany konfiguracji git.
+Punkt odniesienia dla S0 to pełny SHA `36312486cebb5b523c24cf0754f4a317ad87f042`.
+Gałąź `stabilization/velora-2-s0` została wyprowadzona dokładnie z tego kandydata;
+nie zmienia `main` ani bazowej gałęzi PR #48.
 
-## 2. Wyniki weryfikacji na SHA `9b23eca`
+Sprint S0 jest prowadzony na osobnych Draft PR-ach. S0a: [PR #49](https://github.com/Milklosz/nexus-aurea/pull/49), head `934fd664e4b21c2a3f342413aa89b277718e0ff6`; Windows i macOS CI zakończyły się sukcesem w runie `43467145834`. S0b ma osobną gałąź i Draft PR; wyniki będą przypisane do dokładnego SHA jego headu. `main`, PR #48 i działająca instalacja nie zostały zmienione.
+
+## 2. Wyniki bazowe na SHA `36312486`
 
 | Sprawdzenie | Wynik |
 |---|---|
-| `pnpm test` (vitest) | PASS: 75 plików, 651 testów |
-| `pnpm build` (`tsc -b` + vite) | PASS |
-| `cargo test --locked --lib` (src-tauri) | PASS: 264 testy |
-| `git diff --check` | czysto |
-| Instalator NSIS (`pnpm tauri build --ci --target x86_64-pc-windows-msvc`) | exit 0 |
-| CI na PR #48 (`f54d6c4`) | run 43421457521 (PR): **success**, wszystkie joby |
-| CI na `9b23eca` | w toku w chwili pisania; patrz raport |
+| `pnpm test` (vitest) | PASS: 75 plików, 651 testów w runie #43422380871 |
+| `pnpm build` (`tsc -b` + vite) | PASS w runach #43422385690 i #43422380871 |
+| `cargo test --locked --lib` (src-tauri) | PASS: 264 testy na SHA `36312486` |
+| Windows MSVC check i NSIS build | PASS na SHA `36312486` w runie #43422380871 |
+| PR #48 i push jego head | PASS: runy #43422385690 i #43422381045, oba na SHA `36312486` |
+| F01 — Windows Credential Manager | Nadal występuje: feature `windows-native` nie jest włączony, a nowy uchwyt nie odczytuje testowego wpisu mock backendu |
+| F12 — build provenance | Nadal występuje: build.rs zapisuje krótki SHA i śledzi tylko `.git/HEAD` |
 
-Uwaga o SHA-256: instalator zbudowany z tego samego kodu Rust dwa razy dał różne
-skróty (`832da9ad…` wcześniej, `89ca2e46…` teraz). NSIS osadza metadane czasu
-budowy. Skrót identyfikuje konkretny plik, nie kod. Dlatego zapisujemy skrót
-dla KONKRETNEGO pliku, który trafi na MSI.
+Są to wyniki bazowego commita i nie są zaliczane jako testy zmian S0.
 
 ## 3. Integralność instalatora
 
-Kandydat (zbudowany lokalnie, nie instalowany):
+Zapis bazowy CI z runu #43422380871:
 
-- Plik: `VELORA_0.9.2_x64-setup.exe`, 4 027 543 B
-- SHA-256: `89ca2e46e8be6ba7782305d2280ff79a0e06c15da100602d450355f98a613423`
-- Binarka w środku: `nexus-aurea.exe`, SHA-256 `cd8857591091b8d1c091e5aa5c80bca84dd427184c485f912ea81a863057bd64`
-  (plik w `src-tauri/target/x86_64-pc-windows-msvc/release/`)
+- Commit: `36312486cebb5b523c24cf0754f4a317ad87f042`
+- SHA-256 instalatora z tego runu: `484da73086e17b711aa6f4e38d2d763372198a9bc8120987722767d099e2a26c`
+- Drugi build tego samego commita zapisał SHA-256 `6578bf309d3be220dcb8667bb3e0adc456d726f918aaeb69e1d0648b9b0e6dc5`
+- GitHub Actions artifact ZIP: `sha256:e085ced658f7f3053222b2803c28df84d2128b3cf4f175bd2f540a3aaa98c163`
+
+SHA pliku instalatora różni się między kolejnymi buildami tego samego commita;
+nie zakładamy deterministycznego wyniku NSIS. Bazowy CI nie zapisał hasha EXE
+wyciągniętego z instalatora, więc ten zestaw dowodów nie wiąże instalatora z
+konkretnym payloadem. SHA artifact ZIP Actions to osobny hash i nie zastępuje
+SHA instalatora.
 
 Procedura sprawdzenia przed uruchomieniem (PowerShell, bez instalacji):
 
 ```powershell
 Get-FileHash -LiteralPath "<ścieżka>\VELORA_0.9.2_x64-setup.exe" -Algorithm SHA256
-Get-AuthenticodeSignature -LiteralPath "<ścieżka>\VELORA_0.9.2_x64-setup.exe"   # instalator nie jest podpisany (README)
+Get-AuthenticodeSignature -LiteralPath "<ścieżka>\VELORA_0.9.2_x64-setup.exe"
 ```
 
-Skrót musi być równy `89ca2e46…`. Dla CI: artefakt `VELORA-Windows-x64-9b23ecab…`
-zawiera ten sam plik; jego skrót jest w podsumowaniu kroku „Record Windows installer SHA-256".
+Powyższe hashe są dowodem historycznym dokładnie tych dwóch plików i nie są
+kandydatem do instalacji. S0b dodaje manifest wytwarzany przy buildzie, który
+zapisuje SHA setup.exe oraz rzeczywistego EXE i porównuje EXE z payloadem NSIS.
 
 ## 4. Plan bezpiecznej instalacji testowej (NIE WYKONYWAĆ bez zgody)
+
+Ta procedura nie została wykonana i nie wskazuje obecnie instalatora S0. Wartości
+z sekcji 3 są wyłącznie historycznymi hashami bazowego commita i nie mogą służyć
+do weryfikacji ani uruchomienia nowego builda. Przyszły test może użyć wyłącznie
+instalatora wraz z manifestem z ukończonego CI S0b, po osobnej wyraźnej zgodzie.
 
 Zasada: nic poza VELORĄ nie jest dotykane (Steam, gry, Edge, Playnite, inne aplikacje).
 
