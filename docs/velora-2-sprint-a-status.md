@@ -91,9 +91,54 @@ Each fix was proven first, either by a failing test or by reading the code path.
 - DualSense, DualShock 4, iPhone remote and TV input with real hardware.
 - Installed MSI build. No new build was installed; the rollback folder was not touched.
 
+## Update 2026-11-13 (second pass)
+
+Added since the first status above:
+
+- **#40 (WebView2 and Edge launch)**: `launch_managed_app` and
+  `launch_managed_game` now return an error when `track_launch` fails after a
+  spawn. Before, the error went to an event nothing listened to, and the UI showed
+  "Uruchamiam…" for an untracked app. A failed Steam baseline stops the launch
+  before the spawn. Test covers the message helper only; the launch path needs a
+  real AppHandle and is NOT RUN.
+- **#41 (home zones)**: up and down move between Control Center, music, dock and
+  Diagnostics on the shared intent model. This also fixes remote up and down on
+  the dock, which used to do nothing.
+- **#42 (keyboard model)**: the keyboard logic from PR #22, unchanged, plus
+  `applyKeyboardIntent`. No UI yet.
+- **Keyboard UI** (`feat/velora-2-virtual-keyboard-ui`): a modal dialog that opens
+  only for fields marked `data-velora-text-entry`. No VELORA field is marked yet,
+  so the keyboard is not reachable in the shipped UI. Password, read-only and
+  external-service fields are never captured.
+- **DualSense normalization** (`fix/velora-2-dualsense-input-normalization`): the
+  PlayStation D-pad was read from buttons 14 and 15, which is not a documented
+  D-pad on the raw Sony layout. Now the Sony hat on axis 9 is decoded when present,
+  and buttons 14 and 15 are only a fallback. The hat table is NOT verified on
+  hardware.
+
+Still open, not changed:
+
+- Edge window spawned before `track_launch`; if registration fails the browser
+  window stays untracked. Needs a decision on whether VELORA may close its own
+  spawned Edge process.
+- Sleep detection uses `Instant`; behaviour across Windows sleep is NOT RUN.
+- Watcher and session-monitor threads have no panic guard; the `*_STARTED` flags
+  would stay set if a thread died.
+- `useLaunchGuard` releases its lock in `finally`, so a tile stays locked only if
+  the invoke never settles. The Rust launch returns after spawn, so this is
+  unconfirmed and not changed.
+- The PlayStation confirm and back buttons are Circle and Square. The standard
+  profile uses A and B. The Cross-confirm convention is a product decision.
+- DS4 (matched by the same PlayStation profile) goes through the same Sony hat
+  decoder. That is code-path sharing only; it is NOT verified on DS4 hardware. The
+  PS+Options chord is not implemented.
+- `velora-launch-error`, `velora-session-error` and `velora-gamepad-home` have no
+  listener in the UI.
+- If WebView2 is missing at runtime, the `.expect` in `lib.rs` exits without a UI.
+
 ## How to continue
 
-1. Confirm CI on #34–#38 before merging anything.
+1. Confirm CI on the new Draft PRs before merging anything.
 2. Decide on PR #22 (see `velora-pr22-recommendation.md`).
 3. Run the NOT RUN checks above on hardware and update this document.
-4. Start Sprint B items from `velora-2.0-audit.md`, section 4.
+4. Choose the keyboard's first field and the Edge orphan policy.
