@@ -29,6 +29,7 @@ export function intentFromKeyboard(event: NavKeyEvent): NavIntent | null {
   if (direction) return { kind: "move", direction };
   if (event.key.toLowerCase() === "x") return event.repeat ? null : { kind: "select" };
   if (event.key === "F2") return event.repeat ? null : { kind: "menu" };
+  if (event.key === "Backspace" || event.key === "BrowserBack") return event.repeat ? null : { kind: "back" };
   return null;
 }
 
