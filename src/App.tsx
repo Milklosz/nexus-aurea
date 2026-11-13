@@ -25,7 +25,8 @@ import { useWeather } from "./hooks/useWeather";
 import { openStreamingService, streamingServiceErrorMessage } from "./services/openStreamingService";
 import { getControlServiceStatus, setControlGameMode } from "./services/controlService";
 import { launchManagedApp, listenForLaunchEvent, listenForManagedAppExit, managedAppErrorMessage } from "./services/appManager";
-import { requestSessionTransition, returnVeloraHome, type ReturnHomeEvent, type SessionId } from "./services/sessionOrchestrator";
+import { getSessionState, requestSessionTransition, returnVeloraHome, type ReturnHomeEvent, type SessionId } from "./services/sessionOrchestrator";
+import { useStartupRecoveryNotice } from "./hooks/useStartupRecoveryNotice";
 import { readCinemaProfile, saveCinemaProfile, type CinemaProfile } from "./services/cinemaMode";
 import {
   adjustSystemVolume,
@@ -69,6 +70,8 @@ export default function App() {
   const suspendForForegroundOwner = useControllerOwnershipSuspension();
   const { label: weatherLabel, title: weatherTitle } = useWeather();
   const { message, showToast } = useToast();
+  // The recovery notice after an unclean exit or corrupt state is read from the snapshot; the native event fires before the WebView can listen.
+  useStartupRecoveryNotice(getSessionState, showToast);
   const { launchingIds, run: runServiceLaunch } = useLaunchGuard();
   const activeServiceRef = useRef(0);
   const ambientSessionActive = useRef(false);
