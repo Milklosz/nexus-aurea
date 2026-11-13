@@ -19,6 +19,8 @@ mod process_table;
 mod remote_access;
 #[allow(dead_code)]
 mod remote_reliability;
+#[cfg(windows)]
+mod remote_state_lock;
 mod session_monitor;
 mod session_orchestrator;
 mod session_store;
@@ -56,6 +58,8 @@ pub fn run() {
             remote_access::stop_remote_access,
             remote_access::revoke_all_remote_devices,
             remote_access::revoke_remote_device,
+            remote_access::inspect_remote_recovery,
+            remote_access::run_remote_recovery,
             app_manager::get_app_manager_status,
             app_manager::get_gaming_diagnostics,
             app_manager::launch_managed_app,
