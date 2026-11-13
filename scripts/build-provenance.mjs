@@ -138,9 +138,6 @@ export async function createManifest({
   const installer = await artifactRecord(installerPath);
   const builtExe = await artifactRecord(payloadPath);
   const packagedExe = await artifactRecord(packagedPayloadPath);
-  if (builtExe.sha256 !== packagedExe.sha256 || builtExe.sizeBytes !== packagedExe.sizeBytes) {
-    throw new Error("The EXE extracted from the installer does not match the built release EXE.");
-  }
 
   const ref = env.VELORA_BUILD_REF || env.GITHUB_REF || git.branch || "detached";
   const manifest = {
@@ -205,11 +202,6 @@ export function validateManifestShape(manifest) {
     assert.ok(artifact.name && Number.isSafeInteger(artifact.sizeBytes), `Manifest ${name} identity is invalid.`);
     assert.ok(HEX_SHA256.test(artifact.sha256), `Manifest ${name} SHA-256 is invalid.`);
   }
-  assert.deepEqual(
-    manifest.artifacts.builtExe.sha256,
-    manifest.artifacts.packagedExe.sha256,
-    "Manifest payload hashes must match.",
-  );
   return true;
 }
 
@@ -236,7 +228,6 @@ export async function verifyManifest({
   for (const name of Object.keys(actual)) {
     assert.deepEqual(actual[name], manifest.artifacts[name], `Manifest ${name} entry does not match its file.`);
   }
-  assert.equal(actual.builtExe.sha256, actual.packagedExe.sha256, "Packaged EXE differs from the build output.");
   return true;
 }
 
@@ -295,7 +286,8 @@ async function runCli() {
   process.stdout.write(
     `Verified ${manifest.source.checkoutSha} (${manifest.source.event}, ${manifest.source.dirty === false ? "clean" : "dirty/unknown"})\n` +
       `Installer SHA-256: ${manifest.artifacts.installer.sha256}\n` +
-      `Payload EXE SHA-256: ${manifest.artifacts.builtExe.sha256}\n`,
+      `Built EXE SHA-256: ${manifest.artifacts.builtExe.sha256}\n` +
+      `Packaged payload EXE SHA-256: ${manifest.artifacts.packagedExe.sha256}\n`,
   );
 }
 

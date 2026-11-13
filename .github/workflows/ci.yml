@@ -146,8 +146,10 @@ jobs:
             "- Dirty: $($provenance.source.dirty)"
             "- Installer: $($provenance.artifacts.installer.name) ($($provenance.artifacts.installer.sizeBytes) bytes)"
             "- Installer SHA-256: $($provenance.artifacts.installer.sha256)"
-            "- Payload EXE: $($provenance.artifacts.builtExe.name) ($($provenance.artifacts.builtExe.sizeBytes) bytes)"
-            "- Payload EXE SHA-256: $($provenance.artifacts.builtExe.sha256)"
+            "- Built EXE: $($provenance.artifacts.builtExe.name) ($($provenance.artifacts.builtExe.sizeBytes) bytes)"
+            "- Built EXE SHA-256: $($provenance.artifacts.builtExe.sha256)"
+            "- Packaged payload EXE: $($provenance.artifacts.packagedExe.name) ($($provenance.artifacts.packagedExe.sizeBytes) bytes)"
+            "- Packaged payload EXE SHA-256: $($provenance.artifacts.packagedExe.sha256)"
             '- The Actions artifact ZIP digest is reported separately by GitHub.'
           ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 

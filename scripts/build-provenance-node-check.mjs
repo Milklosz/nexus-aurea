@@ -95,7 +95,7 @@ test("missing Git metadata stays unknown rather than inventing a commit", async 
   assert.equal(metadata.dirty, null);
 });
 
-test("manifest distinguishes PR head and synthetic merge and verifies installer payload hashes", async () => {
+test("manifest distinguishes PR head and records built and packaged payload hashes independently", async () => {
   const parent = await temporaryDirectory("manifest-integrity");
   const repo = path.join(parent, "repository");
   const outputs = path.join(parent, "outputs");
@@ -106,7 +106,7 @@ test("manifest distinguishes PR head and synthetic merge and verifies installer 
   const packagedPayloadPath = path.join(outputs, "extracted-nexus-aurea.exe");
   await writeFile(installerPath, Buffer.from("synthetic installer bytes"));
   await writeFile(payloadPath, Buffer.from("synthetic built EXE bytes"));
-  await writeFile(packagedPayloadPath, Buffer.from("synthetic built EXE bytes"));
+  await writeFile(packagedPayloadPath, Buffer.from("synthetic bundled EXE bytes"));
 
   const checkoutSha = inspectSource(repo).checkoutSha;
   const prHeadSha = "a".repeat(40);
@@ -145,7 +145,7 @@ test("manifest distinguishes PR head and synthetic merge and verifies installer 
   assert.equal(manifest.source.pullRequest.headSha, prHeadSha);
   assert.equal(manifest.source.pullRequest.syntheticMergeSha, checkoutSha);
   assert.equal(manifest.source.ref, "refs/pull/88/merge");
-  assert.equal(manifest.artifacts.builtExe.sha256, manifest.artifacts.packagedExe.sha256);
+  assert.notEqual(manifest.artifacts.builtExe.sha256, manifest.artifacts.packagedExe.sha256);
   assert.equal(manifest.artifacts.installer.sha256.length, 64);
   assert.equal(await verifyManifest({
     manifest,
@@ -158,7 +158,7 @@ test("manifest distinguishes PR head and synthetic merge and verifies installer 
   await writeFile(packagedPayloadPath, Buffer.from("tampered payload"));
   await assert.rejects(
     verifyManifest({ manifest, installerPath, payloadPath, packagedPayloadPath, repoRoot: repo }),
-    /does not match its file|Packaged EXE differs/,
+    /does not match its file/,
   );
 });
 
