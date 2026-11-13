@@ -519,13 +519,22 @@ pub fn launch_edge_cinema(app: AppHandle, url: String) -> Result<EdgeCinemaRecei
             .map_err(|_| SPAWN_ERROR.to_string())?;
         let child_id = child.id();
         drop(child);
+        // Identity of the spawned process, taken right away. It is the only proof
+        // of ownership if the launch cannot be tracked and has to be rolled back.
+        let spawned_identity = crate::process_table::identity(child_id);
         watch.root_process_id = Some(child_id);
         // Explicit AllowSetForegroundWindow hand-off while VELORA still holds
         // the foreground, so the browser window it creates is allowed to come
         // forward. A no-op if VELORA is not foreground (reported, not forced).
         window_broker::grant_foreground_handoff(&[child_id]);
 
-        let launch = launch_registry::track_launch(&app, watch)?;
+        let launch = match launch_registry::track_launch(&app, watch) {
+            Ok(launch) => launch,
+            Err(error) => {
+                rollback_failed_spawn(&app, spawned_identity);
+                return Err(error);
+            }
+        };
         // A marker failure must not fail an otherwise successful launch.
         let _ = store_marker(&app, &launch.id, child_id, canonical);
         let session = session_from_launch(
@@ -735,6 +744,124 @@ pub(crate) fn reconcile_edge_marker(app: &AppHandle) {
     #[cfg(not(target_os = "windows"))]
     {
         let _ = app;
+    }
+}
+
+/// What a failed Edge launch may do with the process it spawned. Decided from
+/// plain data, so the ownership rule can be tested on any platform.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum SpawnRollback {
+    /// Same PID, same creation time and image msedge.exe: the process is ours.
+    /// Only the windows of that process may be asked to close (WM_CLOSE).
+    CloseOwnWindows { process_id: u32 },
+    /// The spawned process has already exited, for example it handed off to an
+    /// Edge that was already running. Nothing of ours is left to close.
+    NothingLeft,
+    /// Identity cannot be proven. Nothing is touched and the state is reported.
+    Refuse,
+}
+
+/// `spawned` is captured right after the spawn, `current` is read at rollback
+/// time. Only an exact (PID, creation time) match plus the msedge.exe image
+/// counts as ours, so a recycled PID or another browser is never closed.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn spawn_rollback(
+    spawned: Option<(u32, u64)>,
+    current: Option<(u32, u64)>,
+    image: Option<&str>,
+) -> SpawnRollback {
+    let Some(spawned) = spawned else {
+        return SpawnRollback::Refuse;
+    };
+    let Some(current) = current else {
+        return SpawnRollback::NothingLeft;
+    };
+    let is_edge = image.is_some_and(|name| name.eq_ignore_ascii_case("msedge.exe"));
+    if spawned == current && is_edge {
+        SpawnRollback::CloseOwnWindows { process_id: spawned.0 }
+    } else {
+        SpawnRollback::Refuse
+    }
+}
+
+/// Runs only after `track_launch` failed for a process VELORA spawned. Closes
+/// that process's windows gracefully (WM_CLOSE through the window broker). It
+/// never terminates a process and never touches windows of other processes.
+#[cfg(target_os = "windows")]
+fn rollback_failed_spawn(app: &AppHandle, spawned: Option<crate::process_table::ProcessIdentity>) {
+    let current = spawned.and_then(|identity| crate::process_table::identity(identity.process_id));
+    let image = spawned.and_then(|identity| {
+        crate::process_table::snapshot(true)
+            .ok()
+            .and_then(|table| table.image_name(identity.process_id).map(str::to_owned))
+    });
+    let decision = spawn_rollback(
+        spawned.map(|identity| (identity.process_id, identity.created_at_100ns)),
+        current.map(|identity| (identity.process_id, identity.created_at_100ns)),
+        image.as_deref(),
+    );
+    if let SpawnRollback::CloseOwnWindows { process_id } = decision {
+        window_broker::track_process(app, process_id);
+        let processes = HashSet::from([process_id]);
+        for window in window_broker::windows_for_processes(app, &processes) {
+            let _ = window_broker::close_tracked_window(app, window.hwnd);
+        }
+    }
+}
+
+#[cfg(test)]
+mod rollback_tests {
+    use super::{spawn_rollback, SpawnRollback};
+
+    #[test]
+    fn rollback_closes_only_a_proven_msedge_process() {
+        assert_eq!(
+            spawn_rollback(Some((4242, 99)), Some((4242, 99)), Some("msedge.exe")),
+            SpawnRollback::CloseOwnWindows { process_id: 4242 },
+        );
+        // Image names are compared case-insensitively, as Windows reports them.
+        assert_eq!(
+            spawn_rollback(Some((4242, 99)), Some((4242, 99)), Some("MSEDGE.EXE")),
+            SpawnRollback::CloseOwnWindows { process_id: 4242 },
+        );
+    }
+
+    #[test]
+    fn rollback_refuses_a_recycled_pid() {
+        // Same PID, different creation time: a different process now owns the number.
+        assert_eq!(
+            spawn_rollback(Some((4242, 99)), Some((4242, 100)), Some("msedge.exe")),
+            SpawnRollback::Refuse,
+        );
+    }
+
+    #[test]
+    fn rollback_refuses_another_browser_or_unknown_image() {
+        assert_eq!(
+            spawn_rollback(Some((4242, 99)), Some((4242, 99)), Some("chrome.exe")),
+            SpawnRollback::Refuse,
+        );
+        assert_eq!(
+            spawn_rollback(Some((4242, 99)), Some((4242, 99)), None),
+            SpawnRollback::Refuse,
+        );
+    }
+
+    #[test]
+    fn rollback_without_a_spawn_identity_touches_nothing() {
+        assert_eq!(
+            spawn_rollback(None, Some((4242, 99)), Some("msedge.exe")),
+            SpawnRollback::Refuse,
+        );
+    }
+
+    #[test]
+    fn rollback_after_a_handoff_exit_leaves_nothing_to_close() {
+        assert_eq!(
+            spawn_rollback(Some((4242, 99)), None, None),
+            SpawnRollback::NothingLeft,
+        );
     }
 }
 
