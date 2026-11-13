@@ -13,10 +13,13 @@ export function useToast() {
     }, 2400);
   }, []);
 
+  // Runs only on unmount. Without the empty dependency list the cleanup also ran
+  // before every re-render, which cleared the dismiss timer right after showToast.
   useEffect(
     () => () => {
       if (timer.current !== undefined) window.clearTimeout(timer.current);
     },
+    [],
   );
 
   return { message, showToast };
