@@ -26,6 +26,7 @@ import { openStreamingService, streamingServiceErrorMessage } from "./services/o
 import { getControlServiceStatus, setControlGameMode } from "./services/controlService";
 import { launchManagedApp, listenForLaunchEvent, listenForManagedAppExit, managedAppErrorMessage } from "./services/appManager";
 import { requestSessionTransition, returnVeloraHome, type ReturnHomeEvent, type SessionId } from "./services/sessionOrchestrator";
+import { sessionTransitionFailureNotice } from "./services/sessionTransitionNotice";
 import { readCinemaProfile, saveCinemaProfile, type CinemaProfile } from "./services/cinemaMode";
 import {
   adjustSystemVolume,
@@ -82,12 +83,13 @@ export default function App() {
         try {
           await requestSessionTransition({ target: "veloraHome", cause: "system" });
           await requestSessionTransition({ target, cause });
-        } catch {
-          // The local profile remains usable; the native error event is authoritative.
+        } catch (error) {
+          // The local profile remains usable, but the user must learn that the native session did not change.
+          showToast(sessionTransitionFailureNotice(error));
         }
       }
     })();
-  }, []);
+  }, [showToast]);
   useEffect(() => {
     if (ambient.active === ambientSessionActive.current) return;
     ambientSessionActive.current = ambient.active;
