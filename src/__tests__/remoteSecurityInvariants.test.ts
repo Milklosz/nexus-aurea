@@ -120,3 +120,49 @@ describe("iPhone Remote security regression guard", () => {
     }
   });
 });
+
+describe("iPhone Remote credential-state invariants (S0 audit F01/F02)", () => {
+  // The checkout may use CRLF line endings (Windows CI); search normalised text.
+  const source = rust.replace(/\r\n/g, "\n");
+  const section = (from: string, to: string) => {
+    const start = source.indexOf(from);
+    expect(start).toBeGreaterThan(-1);
+    const end = source.indexOf(to, start);
+    expect(end).toBeGreaterThan(start);
+    return source.slice(start, end);
+  };
+
+  it("takes the cross-process lock and re-reads the store before every state write", () => {
+    for (const [from, to] of [
+      ["fn authenticate_command", "fn rollback_command_reservation"],
+      ["fn rollback_command_reservation", "fn record_command_receipt"],
+      ["pub fn revoke_all", "pub fn revoke_device"],
+      ["pub fn revoke_device(&self, device_id: &str)", "pub fn revoke_device(&self, _device_id"],
+      ["    fn pair(\n", "fn authenticate_command"],
+    ] as const) {
+      expect(section(from, to)).toContain("locked_fresh");
+    }
+    // The audited bug: a whole index written back from a stale in-memory cache.
+    expect(rust).not.toMatch(/save_device_index\(\s*self\.inner\.credential_store\.as_ref\(\),\s*&vault\s*\)/);
+  });
+
+  it("serves the unauthenticated LAN status endpoint from memory only", () => {
+    expect(section("async fn remote_status", "async fn pair_device")).toContain("status_cached()");
+  });
+
+  it("keeps recovery reachable only through local Tauri commands", () => {
+    expect(rust).toContain("pub fn inspect_remote_recovery");
+    expect(rust).toContain("pub fn run_remote_recovery");
+    for (const name of ["inspect_remote_recovery", "run_remote_recovery", "recovery", "reset-trust"]) {
+      expect(app).not.toContain(name);
+      expect(sw).not.toContain(name);
+    }
+  });
+
+  it("never rotates or replaces trust material without the explicit recovery", () => {
+    expect(section("fn persist_trust_material", "fn index_text")).toContain("nie zostanie automatycznie zastąpiony");
+    expect(section("fn ensure_trust_material", "pub fn prepare_trust_profile")).toContain(
+      "vault.ca_cert_pem.is_none() && vault.ca_key_pem.is_none()",
+    );
+  });
+});

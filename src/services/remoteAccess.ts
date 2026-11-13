@@ -20,6 +20,37 @@ export type RemoteAccessStatus = {
   trustProfilePath: string | null;
   pairingCode: string | null;
   pairingExpiresInSeconds: number;
+  /** State of the system credential store, distinct from "no paired devices". */
+  storeState?: RemoteStoreState;
+  storeMessage?: string | null;
+  /** True only when the local, user-initiated recovery can restore the store. */
+  recoveryRequired?: boolean;
+};
+
+export type RemoteStoreState =
+  | "unknown"
+  | "ok"
+  | "unavailable"
+  | "locked"
+  | "damaged"
+  | "rolled-back"
+  | "recovery-pending";
+
+export type RemoteRecoveryMode = "revoke-all-devices" | "reset-trust";
+
+export type RemoteRecoveryOption = {
+  mode: RemoteRecoveryMode;
+  summary: string;
+};
+
+export type RemoteRecoveryPlan = {
+  storeState: RemoteStoreState;
+  message: string | null;
+  recoveryRequired: boolean;
+  options: RemoteRecoveryOption[];
+  /** One-time code the local UI sends back to run a recovery. */
+  confirmation: string;
+  confirmationExpiresInSeconds: number;
 };
 
 export const disabledRemoteAccessStatus: RemoteAccessStatus = {
@@ -33,6 +64,9 @@ export const disabledRemoteAccessStatus: RemoteAccessStatus = {
   trustProfilePath: null,
   pairingCode: null,
   pairingExpiresInSeconds: 0,
+  storeState: "unknown",
+  storeMessage: null,
+  recoveryRequired: false,
 };
 
 export const REMOTE_ACCESS_DISABLED_REASON =
@@ -71,6 +105,25 @@ export async function revokeAllRemoteDevices(): Promise<RemoteAccessStatus> {
 export async function revokeRemoteDevice(deviceId: string): Promise<RemoteAccessStatus> {
   if (!isTauri()) throw new Error("Dostęp można odwołać tylko w aplikacji VELORA na Windows.");
   return invoke<RemoteAccessStatus>("revoke_remote_device", { deviceId });
+}
+
+/**
+ * Local recovery of a damaged or incomplete credential state. Both calls go
+ * through Tauri IPC only; the LAN HTTPS server has no route for them, so a
+ * paired or unpaired iPhone can never start a recovery.
+ */
+export async function inspectRemoteRecovery(): Promise<RemoteRecoveryPlan> {
+  if (!isTauri()) throw new Error("Odzyskiwanie zaufania działa tylko w aplikacji VELORA na Windows.");
+  return invoke<RemoteRecoveryPlan>("inspect_remote_recovery");
+}
+
+export async function runRemoteRecovery(
+  mode: RemoteRecoveryMode,
+  confirmation: string,
+): Promise<RemoteAccessStatus> {
+  if (!isTauri()) throw new Error("Odzyskiwanie zaufania działa tylko w aplikacji VELORA na Windows.");
+  if (!confirmation) throw new Error("Najpierw odczytaj stan i potwierdź odzyskiwanie.");
+  return invoke<RemoteAccessStatus>("run_remote_recovery", { mode, confirmation });
 }
 
 export async function listenForRemoteAccessStatus(

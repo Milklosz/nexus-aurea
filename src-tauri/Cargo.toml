@@ -27,7 +27,7 @@ windows = { version = "0.62.2", features = ["Foundation", "Foundation_Collection
 axum = { version = "0.7", features = ["json"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 base64 = "0.22"
-keyring = "3"
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
 rand = "0.8"
 rcgen = { version = "0.13", features = ["pem", "x509-parser"] }
 time = "0.3"
