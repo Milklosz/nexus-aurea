@@ -66,6 +66,6 @@ review.
 
 - It rewrites `controllerEngine.ts` (276 changed lines) and changes Options
   timing for every pad.
-- Its base is an old chain (PR #21). Its CI result is not on the current head.
+- Its base is an old chain (PR #21). Its own head (`e509d4d`) passed CI, but that run does not include the integration base or the navigation PRs.
 - Its documentation says hardware checks are NOT RUN, so all controller
   behavior is unverified on real hardware.
