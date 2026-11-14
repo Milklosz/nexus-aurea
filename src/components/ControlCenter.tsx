@@ -49,6 +49,10 @@ type ControlCenterProps = {
   onClose: () => void;
   /** When present, the Szukaj tab is shown. Launching a result goes through onLaunch. */
   appSearch?: { entries: readonly SearchEntry[]; onLaunch: (entryId: string) => void };
+  /** Tab shown first. Home entries (Szukaj, Pilot) open Control Center directly on their tab. */
+  initialPanel?: ControlPanelId;
+  /** Living Room Home: Polish section names, "Ustawienia" heading, and focus starts on the open section tab. */
+  livingRoom?: boolean;
 };
 
 const profiles: Array<{ id: CinemaProfile; label: string }> = [
@@ -57,6 +61,8 @@ const profiles: Array<{ id: CinemaProfile; label: string }> = [
   { id: "desktop", label: "Desktop" },
 ];
 
+const livingRoomPanelLabels: Record<string, string> = { cinema: "Kino", gaming: "Gry", remote: "Pilot", search: "Szukaj" };
+
 const controlPanels = [
   { id: "cinema", label: "Cinema" },
   { id: "gaming", label: "Gaming" },
@@ -64,7 +70,7 @@ const controlPanels = [
   { id: "search", label: "Szukaj" },
 ] as const;
 
-type ControlPanelId = (typeof controlPanels)[number]["id"];
+export type ControlPanelId = (typeof controlPanels)[number]["id"];
 
 function delayLabel(seconds: number): string {
   return Math.round(seconds / 60) + " min";
@@ -75,7 +81,8 @@ export function ControlCenter(props: ControlCenterProps) {
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   // The Szukaj tab exists only when the app passes search entries.
   const panels = controlPanels.filter((panel) => panel.id !== "search" || props.appSearch !== undefined);
-  const [activePanel, setActivePanel] = useState<ControlPanelId>("cinema");
+  const [activePanel, setActivePanel] = useState<ControlPanelId>(() =>
+    props.initialPanel !== undefined && (props.initialPanel !== "search" || props.appSearch !== undefined) ? props.initialPanel : "cinema");
   const [status, setStatus] = useState<ControlServiceStatus>(disabledControlServiceStatus);
   const [loading, setLoading] = useState(true);
   const [statusReadFailed, setStatusReadFailed] = useState(false);
@@ -152,9 +159,14 @@ export function ControlCenter(props: ControlCenterProps) {
   useEffect(() => {
     const element = dialog.current;
     if (element && !element.open && typeof element.showModal === "function") element.showModal();
+    // showModal focuses the first control (the close button). In the Living Room the open section tab is the natural start.
+    const focusFrame = props.livingRoom
+      ? window.requestAnimationFrame(() => element?.querySelector<HTMLElement>('.cc-tabs [aria-selected="true"]')?.focus({ preventScroll: true }))
+      : 0;
     let active = true;
     void readControlStatus(() => active);
     return () => {
+      window.cancelAnimationFrame(focusFrame);
       active = false;
       controlStatusRequestId.current += 1;
       controlStatusRequestInFlight.current = false;
@@ -304,10 +316,10 @@ export function ControlCenter(props: ControlCenterProps) {
     <header className="control-center-header">
       <div>
         <span className="control-center-eyebrow">VELORA · GRAND CINEMA</span>
-        <h2 id="control-center-title">Control Center</h2>
+        <h2 id="control-center-title">{props.livingRoom ? "Ustawienia" : "Control Center"}</h2>
         <p>Ustawienia konsoli multimedialnej</p>
       </div>
-      <button className="cc-close" type="button" data-remote-allow="" onClick={props.onClose} aria-label="Zamknij Control Center">×</button>
+      <button className="cc-close" type="button" data-remote-allow="" onClick={props.onClose} aria-label={props.livingRoom ? "Zamknij ustawienia" : "Zamknij Control Center"}>×</button>
     </header>
 
     <nav className="cc-tabs" role="tablist" aria-label="Sekcje Control Center">
@@ -323,7 +335,7 @@ export function ControlCenter(props: ControlCenterProps) {
         tabIndex={activePanel === panel.id ? 0 : -1}
         onClick={() => selectPanel(panel.id)}
         onKeyDown={(event) => handleTabKeyDown(event, index)}
-      >{panel.label}</button>)}
+      >{props.livingRoom ? livingRoomPanelLabels[panel.id] ?? panel.label : panel.label}</button>)}
     </nav>
 
     <div className="cc-stage">
@@ -331,7 +343,7 @@ export function ControlCenter(props: ControlCenterProps) {
         aria-labelledby="cc-tab-cinema" tabIndex={0} hidden={activePanel !== "cinema"}>
         <div className="cc-card-grid">
           <section className="cc-card" aria-label="Profil kina">
-            <div className="cc-card-heading"><span className="cc-card-index">01</span><div><h3>Profil kina</h3><p>Wybierz nastrój dla tej sesji.</p></div></div>
+            <div className="cc-card-heading"><span className="cc-card-index">01</span><div><h3>Profil kina</h3><p>{props.livingRoom ? "Profil obrazu i sterowania." : "Wybierz nastrój dla tej sesji."}</p></div></div>
             <div className="cc-actions cc-profile-actions">
               {profiles.map((profile) => <button key={profile.id} type="button" data-remote-allow=""
                 className={props.profile === profile.id ? "profile-active" : ""}
@@ -349,7 +361,7 @@ export function ControlCenter(props: ControlCenterProps) {
                 <button type="button" data-remote-allow="" disabled={busy} onClick={() => void changeVolume("mute")}>Wycisz</button>
                 <button type="button" data-remote-allow="" disabled={busy} onClick={() => void changeVolume("up")} aria-label="Głośność +">+</button>
               </div>
-              : <p>Regulacja głośności wymaga natywnego backendu Windows.</p>}
+              : <p>{props.livingRoom ? "Regulacja głośności jest niedostępna." : "Regulacja głośności wymaga natywnego backendu Windows."}</p>}
           </section>
 
           <section className="cc-card cc-card-wide" aria-label="VELORA Ambient">
@@ -410,7 +422,7 @@ export function ControlCenter(props: ControlCenterProps) {
       <section id="cc-panel-remote" className="cc-panel cc-remote-panel" role="tabpanel"
         aria-labelledby="cc-tab-remote" tabIndex={0} hidden={activePanel !== "remote"}>
         <div className="cc-card cc-remote-card" data-remote-admin="">
-          <div className="cc-card-heading"><span className="cc-card-index">06</span><div><h3>iPhone Remote</h3><p>Pilot pozostaje wyłączony do czasu ręcznego, bezpiecznego sparowania.</p></div></div>
+          <div className="cc-card-heading"><span className="cc-card-index">06</span><div><h3>{props.livingRoom ? "Pilot iPhone" : "iPhone Remote"}</h3><p>Pilot pozostaje wyłączony do czasu ręcznego, bezpiecznego sparowania.</p></div></div>
           <ul className="remote-access-status" aria-label="Stan iPhone Remote">
             <li><span>Serwer LAN</span><strong>{remoteStatusReady ? remoteStatus.enabled ? "włączony" : "wyłączony" : "stan nieznany"}</strong></li>
             <li><span>HTTPS</span><strong>{remoteStatusReady ? remoteStatus.secureOriginAvailable ? "aktywny · wymaga zaufanego certyfikatu" : "wyłączony" : "stan nieznany"}</strong></li>
@@ -490,17 +502,25 @@ export function ControlCenter(props: ControlCenterProps) {
           )}>Odwołaj wszystkie urządzenia</button>}
           {remoteError && <p className="cc-feedback cc-error" role="alert">{remoteError}</p>}
           {remoteNotice && <p className="cc-feedback" role="status">{remoteNotice}</p>}
-          <p className="cc-card-note">Pilot obsługuje nawigację, wybór, Wstecz, Home, głośność i profile. Nie omijaj ostrzeżeń TLS w Safari.</p>
+          <p className="cc-card-note">{props.livingRoom
+            ? "Pilot obsługuje nawigację, wybór, Wstecz, Home, głośność i profile."
+            : "Pilot obsługuje nawigację, wybór, Wstecz, Home, głośność i profile. Nie omijaj ostrzeżeń TLS w Safari."}</p>
         </div>
       </section>
     </div>
 
     <footer className="cc-footer">
-      <span className="cc-footer-hint">F3 otwiera panel · Esc wraca · ← → przełączają sekcję</span>
-      <div>
-        <button type="button" data-remote-allow="" onClick={props.onOpenDiagnostics}>Diagnostyka</button>
-      <button type="button" data-remote-allow="" onClick={props.onShowDesktop}>Pokaż pulpit</button>
-      <button type="button" data-remote-allow="" onClick={props.onReturnToNexus}>Wróć do VELORA</button>
+      <span className="cc-footer-hint">{props.livingRoom
+        ? <>Zamknij · Esc / <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /></svg></>
+        : "F3 otwiera panel · Esc wraca · ← → przełączają sekcję"}</span>
+      <div className="cc-footer-actions">
+        <div className="cc-footer-group" role="group" aria-label="Wyjście">
+          <button type="button" data-remote-allow="" onClick={props.onShowDesktop}>{props.livingRoom ? "Pulpit Windows" : "Pokaż pulpit"}</button>
+          <button type="button" data-remote-allow="" onClick={props.onReturnToNexus}>{props.livingRoom ? "Ekran główny" : "Wróć do VELORA"}</button>
+        </div>
+        <div className="cc-footer-group cc-footer-group-help" role="group" aria-label="Pomoc">
+          <button type="button" data-remote-allow="" onClick={props.onOpenDiagnostics}>Diagnostyka</button>
+        </div>
       </div>
     </footer>
     <p className="cc-hint">Sterowanie z kanapy: strzałki wybierają · Enter zatwierdza · Escape wraca</p>

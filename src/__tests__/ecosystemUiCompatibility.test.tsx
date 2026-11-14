@@ -60,7 +60,7 @@ afterEach(() => {
 });
 
 describe("Ecosystem — kompatybilność z dotychczasowym UI", () => {
-  it("home dock nadal renderuje siedem kafelków AUREA bez błędów", () => {
+  it("home dock nadal renderuje osiem kafelków AUREA bez błędów", () => {
     const buttonRefs = { current: [] } as RefObject<Array<HTMLButtonElement | null>>;
     const { container } = render(
       <AppDock
@@ -73,9 +73,9 @@ describe("Ecosystem — kompatybilność z dotychczasowym UI", () => {
         onUnavailable={vi.fn()}
       />,
     );
-    expect(streamingServices).toHaveLength(7);
-    expect(container.querySelectorAll("[data-aurea-item]")).toHaveLength(7);
-    expect(container.querySelectorAll("button")).toHaveLength(7);
+    expect(streamingServices).toHaveLength(8);
+    expect(container.querySelectorAll("[data-aurea-item]")).toHaveLength(8);
+    expect(container.querySelectorAll("button")).toHaveLength(8);
   });
 
   it("allowlista pięciu adresów HTTPS i walidacja hosta pozostają niezmienione", () => {

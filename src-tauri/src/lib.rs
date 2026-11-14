@@ -5,9 +5,12 @@ mod autostart;
 mod control_service;
 mod credential_store;
 mod diagnostics;
+#[allow(dead_code)]
+mod ds4;
 mod display_audio;
 mod edge_cinema;
 mod gamepad_home;
+mod pad_hub;
 mod launch_registry;
 mod music_service;
 mod operation_registry;
@@ -42,10 +45,12 @@ pub fn run() {
         .manage(remote_access::RemoteAccess::default())
         .manage(session_orchestrator::SessionOrchestrator::default())
         .manage(window_broker::WindowBroker::default())
+        .manage(pad_hub::PadHub::default())
         .manage(launch_registry::LaunchRegistry::default())
         .invoke_handler(tauri::generate_handler![
             platform_launchers::get_platform_launcher_status,
             platform_launchers::launch_platform,
+            pad_hub::get_native_controller_status,
             control_service::get_control_service_status,
             control_service::start_control_service,
             control_service::set_control_game_mode,
@@ -107,6 +112,8 @@ pub fn run() {
             {
                 let _ = app.emit("velora-session-recovery", recovery);
             }
+            // The one Raw Input sink for the whole app (DualShock 4 navigation, DualSense chord).
+            app.state::<pad_hub::PadHub>().start(app.handle().clone());
             window_broker::start_foreground_monitor(app.handle().clone());
             edge_cinema::reconcile_edge_marker(app.handle());
             display_audio::start_monitor(app.handle().clone());
@@ -125,6 +132,7 @@ pub fn run() {
     app.run(|app, event| {
         if let tauri::RunEvent::Exit = event {
             session_orchestrator::mark_clean_shutdown(app);
+            app.state::<pad_hub::PadHub>().stop();
             launch_registry::stop_watcher();
             window_broker::stop_foreground_monitor();
             display_audio::stop_monitor();
