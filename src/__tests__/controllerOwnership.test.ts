@@ -6,6 +6,11 @@ describe("foreground process classification", () => {
     expect(classifyForegroundProcess("NEXUS-AUREA.EXE")).toBe("velora");
   });
 
+  it("also recognizes the product executable name, so the pad is not suspended inside VELORA", () => {
+    expect(classifyForegroundProcess("C:/Program Files/VELORA/velora.exe")).toBe("velora");
+    expect(shouldSuspendLocalControllerInput(true, "velora.exe")).toBe(false);
+  });
+
   it("classifies Steam client and overlay processes without claiming input ownership", () => {
     expect(classifyForegroundProcess("C:\\Program Files (x86)\\Steam\\steam.exe")).toBe("steam");
     expect(classifyForegroundProcess("gameoverlayui.exe")).toBe("steam");

@@ -17,6 +17,11 @@ import { streamingServices } from "./data/streamingServices";
 import { useMusicStatusPolling } from "./hooks/useMusicStatusPolling";
 import { returnHomeFocusTarget, useReturnHomeListener } from "./hooks/useReturnHomeFocus";
 import { useGamepad, type ControllerActions } from "./hooks/useGamepad";
+import { useNativeController } from "./hooks/useNativeController";
+import { useFocusOwner } from "./hooks/useFocusOwner";
+import { focusOpenerFrom } from "./services/focusOwnership";
+import { isDualShock4GamepadId } from "./services/nativeController";
+import { nativeControllerStore } from "./services/nativeControllerStore";
 import { dispatchControllerAction, intentFromKeyboard, intentFromRemote, isIgnoredShortcutEvent, type NavIntentHandlers } from "./services/navIntent";
 import { shouldRestoreDockFocus } from "./services/windowFocusRestore";
 import { offerIntentToKeyboard, textEntryTargetFromFocus, withKeyboardFirst } from "./services/virtualKeyboardRouting";
@@ -54,7 +59,7 @@ import { MusicMiniPlayer } from "./components/MusicPanel";
 import { listenForRemoteCommand } from "./services/remoteAccess";
 import { dispatchRemoteCommand } from "./services/remoteCommand";
 import { canRemoteSelect } from "./services/remotePermissions";
-import type { ControllerProfile } from "./services/controllerEngine";
+import type { ControllerAction, ControllerProfile } from "./services/controllerEngine";
 import "./styles.css";
 
 function savedControllerProfile(): ControllerProfile {
@@ -75,8 +80,16 @@ export default function App() {
   const [homeTheme] = useState(readHomeTheme);
   const livingRoom = homeTheme === "living-room";
   const [controlCenterPanel, setControlCenterPanel] = useState<ControlPanelId | undefined>(undefined);
-  // The Home top-bar action that opened Control Center, so closing it returns focus there.
+  // The Home control (top-bar action, music, diagnostics trigger) that opened an overlay, so closing it returns focus there.
   const homeOpenerRef = useRef<HTMLElement | null>(null);
+  const overlayOpenRef = useRef(false);
+  // Remembered only when no overlay is open yet: hopping Control Center -> Diagnostics keeps the original opener.
+  const captureOpener = useCallback(() => {
+    if (overlayOpenRef.current) return;
+    const opener = focusOpenerFrom(document.activeElement);
+    // The dock is restored through its selected index, so only the other zones are remembered.
+    homeOpenerRef.current = opener && homeZoneOfElement(opener) !== "dock" ? opener : null;
+  }, []);
   const [controllerProfile, setControllerProfile] = useState<ControllerProfile>(savedControllerProfile);
   const [cinemaProfile, setCinemaProfile] = useState<CinemaProfile>(readCinemaProfile);
   const [musicBackgroundMode, setMusicBackgroundMode] = useState(readMusicBackgroundMode);
@@ -118,7 +131,7 @@ export default function App() {
     ambientSessionActive.current = ambient.active;
     recordSession(ambient.active ? "ambient" : "veloraHome", "system");
   }, [ambient.active, recordSession]);
-  const showMenu = useCallback(() => { setControlCenterOpen(false); setDiagnostics(true); }, []);
+  const showMenu = useCallback(() => { captureOpener(); setControlCenterOpen(false); setDiagnostics(true); }, [captureOpener]);
   const openService = useCallback(
     async (index: number) => {
       const service = streamingServices[index];
@@ -176,18 +189,18 @@ export default function App() {
       closeControlCenter();
       return;
     }
+    captureOpener();
     setDiagnostics(false);
     setControlCenterPanel(undefined);
     setControlCenterOpen(true);
-  }, [closeControlCenter, controlCenterOpen]);
+  }, [captureOpener, closeControlCenter, controlCenterOpen]);
   // Home entries (Szukaj, Pilot, Ustawienia) open Control Center directly on their tab.
   const openControlCenterAt = useCallback((panel?: ControlPanelId) => {
-    const active = document.activeElement;
-    homeOpenerRef.current = active instanceof HTMLElement && active.closest(".home-actions") ? active : null;
+    captureOpener();
     setDiagnostics(false);
     setControlCenterPanel(panel);
     setControlCenterOpen(true);
-  }, []);
+  }, [captureOpener]);
   const openSearch = useCallback(() => openControlCenterAt("search"), [openControlCenterAt]);
   const openRemote = useCallback(() => openControlCenterAt("remote"), [openControlCenterAt]);
   const openSettings = useCallback(() => openControlCenterAt(undefined), [openControlCenterAt]);
@@ -227,6 +240,7 @@ export default function App() {
   }, [navigation.focusApp]);
   useFocusRestoreOnClose(diagnostics, restoreSelectedFocus, !controlCenterOpen);
   useFocusRestoreOnClose(controlCenterOpen, restoreSelectedFocus, !diagnostics);
+  useEffect(() => { overlayOpenRef.current = controlCenterOpen || diagnostics; }, [controlCenterOpen, diagnostics]);
   const closeDiagnostics = useCallback(() => setDiagnostics(false), []);
   // On-screen keyboard: opens only for VELORA text fields marked data-velora-text-entry.
   const keyboard = useVirtualKeyboardHost();
@@ -408,14 +422,37 @@ export default function App() {
     () => withKeyboardFirst(homeIntentHandlers, () => keyboard.sinkRef.current),
     [homeIntentHandlers, keyboard.sinkRef],
   );
-  const controllerActions = useMemo<ControllerActions>(() => ({
-    move: (delta) => dispatchControllerAction({ type: "move", delta }, controllerIntentHandlers),
-    vertical: (delta) => dispatchControllerAction({ type: "vertical", delta }, controllerIntentHandlers),
-    confirm: () => dispatchControllerAction({ type: "confirm" }, controllerIntentHandlers),
-    back: () => dispatchControllerAction({ type: "back" }, controllerIntentHandlers),
-    options: () => dispatchControllerAction({ type: "options" }, controllerIntentHandlers),
-  }), [controllerIntentHandlers]);
-  useGamepad(controllerActions, !ambient.active && !ambient.controllerSuppressed, controllerProfile, shouldSuspendControllerInput);
+  // One owner decides whether a controller action is interpreted at all (and swallows a confirm that
+  // lands in the hand-over gap after a panel closes). Both input sources pass through it.
+  const focusOwner = useFocusOwner({
+    ambientActive: ambient.active,
+    keyboardOpen: keyboard.field !== null,
+    diagnosticsOpen: diagnostics,
+    controlCenterOpen,
+    controlCenterPanel,
+  });
+  const allowControllerAction = focusOwner.allows;
+  const controllerActions = useMemo<ControllerActions>(() => {
+    const send = (action: ControllerAction) => {
+      if (allowControllerAction(action)) dispatchControllerAction(action, controllerIntentHandlers);
+    };
+    return {
+      move: (delta) => send({ type: "move", delta }),
+      vertical: (delta) => send({ type: "vertical", delta }),
+      confirm: () => send({ type: "confirm" }),
+      back: () => send({ type: "back" }),
+      options: () => send({ type: "options" }),
+    };
+  }, [allowControllerAction, controllerIntentHandlers]);
+  const inputEnabled = !ambient.active && !ambient.controllerSuppressed;
+  // While the native layer owns a DualShock 4, the browser path skips it so one press is never two actions.
+  // Other pads (Xbox, DualSense) and a DualShock 4 without a working native layer stay on the browser path.
+  const nativeOwnsPad = useCallback((pad: Gamepad) => {
+    const model = nativeControllerStore.getModel();
+    return !model.unavailableReason && model.pads.length > 0 && isDualShock4GamepadId(pad.id);
+  }, []);
+  useNativeController(controllerActions, inputEnabled, shouldSuspendControllerInput);
+  useGamepad(controllerActions, inputEnabled, controllerProfile, shouldSuspendControllerInput, nativeOwnsPad);
   useEffect(() => {
     const recover = (event: KeyboardEvent) => {
       // OS/browser combinations (Ctrl+Escape, Alt+…) and auto-repeat of one-shot
@@ -450,7 +487,7 @@ export default function App() {
           .catch(() => showToast("Nie udało się zmienić trybu okna. Uruchom z --windowed."));
       }
       if (event.key === "F2") showMenu();
-      if (event.key === "F3") { setDiagnostics(false); setControlCenterOpen(true); }
+      if (event.key === "F3") { captureOpener(); setDiagnostics(false); setControlCenterOpen(true); }
     };
     const restore = () => {
       // Window focus returns while an overlay may be open; the dock must not take the highlight under it.
@@ -462,7 +499,7 @@ export default function App() {
     window.addEventListener("keydown", recover);
     window.addEventListener("focus", restore);
     return () => { window.removeEventListener("keydown", recover); window.removeEventListener("focus", restore); };
-  }, [closeControlCenter, closeDiagnostics, controlCenterOpen, controllerIntentHandlers, diagnostics, moveControllerFocus, navigation.focusApp, showMenu, showToast]);
+  }, [captureOpener, closeControlCenter, closeDiagnostics, controlCenterOpen, controllerIntentHandlers, diagnostics, moveControllerFocus, navigation.focusApp, showMenu, showToast]);
 
   useEffect(() => {
     let active = true;

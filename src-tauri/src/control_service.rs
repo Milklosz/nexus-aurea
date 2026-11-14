@@ -452,7 +452,7 @@ mod windows {
     use std::sync::{Arc, RwLock};
     use std::thread;
     use std::time::{Duration, Instant};
-    use tauri::{AppHandle, Emitter};
+    use tauri::{AppHandle, Emitter, Manager};
 
     const RIM_TYPE_HID: u32 = 2;
     const RIDI_DEVICE_INFO: u32 = 0x2000_000b;
@@ -624,8 +624,9 @@ mod windows {
             }
         };
 
+        let pad_hub = app.state::<crate::pad_hub::PadHub>();
         let (mut gamepad_home, gamepad_start_error) =
-            match crate::gamepad_home::GamepadHomeRuntime::start() {
+            match crate::gamepad_home::GamepadHomeRuntime::start(&pad_hub) {
                 Ok(runtime) => (Some(runtime), None),
                 Err(error) => {
                     // Keyboard return remains available. The failure is surfaced
@@ -635,6 +636,8 @@ mod windows {
                 }
             };
         let gamepad_started_at = gamepad_home.as_ref().map(|_| Instant::now());
+        // The global PS + Options chord for DualShock 4 is armed only while this service runs.
+        pad_hub.set_chord_enabled(true);
         let mut status = ControlServiceStatus {
             windows: true,
             running: true,
@@ -779,6 +782,11 @@ mod windows {
                 publish_status(&app, &status);
             }
 
+            // Reports for the DualSense chord arrive from the shared Raw Input sink
+            // (pad_hub), not from this thread's message queue.
+            if let Some(runtime) = gamepad_home.as_mut() {
+                runtime.drain(&app);
+            }
             loop {
                 let mut queued = MaybeUninit::<Message>::zeroed();
                 let has_message = unsafe {
@@ -788,21 +796,6 @@ mod windows {
                     break;
                 }
                 let message = unsafe { queued.assume_init() };
-                if matches!(
-                    message.message,
-                    crate::gamepad_home::WM_INPUT_MESSAGE
-                        | crate::gamepad_home::WM_INPUT_DEVICE_CHANGE_MESSAGE
-                ) {
-                    if let Some(runtime) = gamepad_home.as_mut() {
-                        runtime.handle_message(
-                            &app,
-                            message.message,
-                            message.w_param,
-                            message.l_param,
-                        );
-                    }
-                    continue;
-                }
                 if message.message != WM_HOTKEY {
                     continue;
                 }
@@ -861,7 +854,8 @@ mod windows {
                             status.gamepad_home_last_chord = gamepad.last_chord;
                             status.gamepad_home_warning = super::input_isolation_warning(
                                 status.playstation_controller_count,
-                                gamepad.device_count,
+                                // DualShock 4 pads are read by the shared sink, not by the DualSense runtime.
+                                gamepad.device_count + pad_hub.ds4_pad_count(),
                                 gamepad_started_at
                                     .map(|started| started.elapsed().as_millis() as u64)
                                     .unwrap_or(0),
@@ -891,6 +885,7 @@ mod windows {
             thread::sleep(Duration::from_millis(40));
         }
 
+        pad_hub.set_chord_enabled(false);
         unsafe {
             if return_key_registered {
                 UnregisterHotKey(null_mut(), RETURN_HOTKEY_ID);

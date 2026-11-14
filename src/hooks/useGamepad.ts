@@ -5,6 +5,7 @@ import {
   type ControllerAction,
   type ControllerProfile,
 } from "../services/controllerEngine";
+import { crossSourceGate } from "../services/crossSourceGate";
 
 export type ControllerActions = {
   move: (delta: -1 | 1) => void;
@@ -15,18 +16,30 @@ export type ControllerActions = {
   options: () => void;
 };
 
+/**
+ * Browser Gamepad API source. It stays the path for every pad the native layer does not
+ * own (Xbox, DualSense, ...) and the fallback for a DualShock 4 when the native layer is
+ * unavailable. `ignorePad` lets the caller hand a specific pad to the native source so one
+ * physical press never reaches the handlers twice.
+ */
 export function useGamepad(
   actions: ControllerActions,
   enabled = true,
   profile: ControllerProfile = "auto",
   suspendInput?: () => boolean,
+  ignorePad?: (pad: Gamepad) => boolean,
 ) {
   const actionsRef = useRef(actions);
   const suspendRef = useRef(suspendInput);
+  const ignoreRef = useRef(ignorePad);
 
   useEffect(() => {
     suspendRef.current = suspendInput;
   }, [suspendInput]);
+
+  useEffect(() => {
+    ignoreRef.current = ignorePad;
+  }, [ignorePad]);
 
   useEffect(() => {
     actionsRef.current = actions;
@@ -39,6 +52,7 @@ export function useGamepad(
     let selectedPad = "";
     const engine = new ControllerEngine();
     const dispatch = (action: ControllerAction) => {
+      if (!crossSourceGate.accept("gamepad-api", action, performance.now())) return;
       if (action.type === "move") actionsRef.current.move(action.delta);
       else if (action.type === "vertical") actionsRef.current.vertical?.(action.delta);
       else actionsRef.current[action.type]();
@@ -55,7 +69,7 @@ export function useGamepad(
       let pads: Gamepad[] = [];
       try {
         pads = Array.from(navigator.getGamepads() ?? []).filter(
-          (pad): pad is Gamepad => Boolean(pad?.connected),
+          (pad): pad is Gamepad => Boolean(pad?.connected) && !ignoreRef.current?.(pad as Gamepad),
         );
       } catch {
         engine.reset();
