@@ -22,8 +22,9 @@ DualShock 4 ──(HID)──► Windows Raw Input ──► pad_hub (jeden wąt
 
 - Rust **nie zapisuje nic do pada** i nie otwiera uchwytu urządzenia. Nie wysyła raportów feature ani wyjściowych, więc nie przełącza trybu raportów (USB / BT podstawowy / BT pełny).
 - Zdarzenia stanu są wysyłane **tylko gdy okno VELORA jest na wierzchu** (gra działająca z padem nie zalewa IPC). Po odzyskaniu fokusu frontend dostaje bieżący stan. Zdarzenia połączenia (rzadkie) są zawsze wysyłane.
-- Trzymane wejście jest odświeżane **heartbeatem co 250 ms**; frontend uznaje ciszę dłuższą niż 700 ms za zwolnienie (nigdy „zablokowany kierunek").
-- Pad bez raportów przez 3 s jest uznawany za utracony (Windows nie zawsze zgłasza odłączenie BT).
+- Trzymane wejście jest odświeżane **heartbeatem co 250 ms**; frontend uznaje ciszę dłuższą niż 700 ms za zwolnienie.
+- Pad, który **przestał nadawać** w trakcie trzymania (np. zerwane łącze BT), dostaje po 750 ms **jednorazowy neutralny stan** i nie jest już „heartbeatowany"; pad bez raportów przez 3 s jest uznawany za utracony (Windows nie zawsze zgłasza odłączenie BT). Założenie: DS4 nadaje raporty w sposób ciągły także przy niezmienionym stanie (licznik w raporcie rośnie) **[NIEZWERYFIKOWANE, zwłaszcza w trybie BT podstawowym]**. Gdyby pad nadawał tylko przy zmianie, trzymany przycisk przestałby powtarzać po 750 ms. Test sprzętowy #3 to rozstrzygnie.
+- Adapter USB Sony bez sparowanego pada nie jest padem (flaga „brak kontrolera" w bajcie 31, bit 0x04, wg sterownika Linux **[NIEZWERYFIKOWANE]**).
 
 ## 2. Mapowanie (domyślne, semantyczne)
 
@@ -50,7 +51,7 @@ W danej chwili **dokładnie jeden właściciel** interpretuje wejście nawigacyj
 | # | Właściciel | Kiedy |
 |---|---|---|
 | 1 | `external` | VELORA nie jest oknem na wierzchu (Netflix, YouTube, Steam, Playnite, gra, przeglądarka): **wejście nie jest interpretowane** |
-| 2 | `ambient` | ekran Ambient (pad wyciszony, budzi go istniejąca ścieżka Gamepad API) |
+| 2 | `ambient` | ekran Ambient (nawigacja wyciszona; wejście natywne **resetuje licznik bezczynności i budzi** Ambient, bez zależności od Gamepad API) |
 | 3 | `keyboard` | klawiatura ekranowa (zabiera każdy intent, także Options) |
 | 4 | `diagnostics` | ekran diagnostyki |
 | 5 | `search` / `control-center` | Control Center (Szukaj to jego zakładka) |
@@ -59,9 +60,10 @@ W danej chwili **dokładnie jeden właściciel** interpretuje wejście nawigacyj
 
 Zasady:
 
-- **Jedno źródło:** gdy natywna warstwa ma pada DS4, Gamepad API pomija ten pad (`isDualShock4GamepadId`); inne pady (Xbox, DualSense) zostają na Gamepad API; bez natywnej warstwy DS4 wraca do Gamepad API. Dodatkowo `CrossSourceGate` odrzuca tę samą akcję z drugiego źródła w ciągu 90 ms (okno przekazania).
+- **Jedno źródło:** gdy natywna warstwa ma pada DS4, Gamepad API pomija ten pad (`isDualShock4GamepadId`); inne pady (Xbox, DualSense) zostają na Gamepad API; bez natywnej warstwy DS4 wraca do Gamepad API.
+- **Priorytet natywny (bramka `CrossSourceGate`):** dopóki natywny pad trzyma jakieś wejście (i 400 ms po nim), akcje z Gamepad API są odrzucane. Chroni to przed **wirtualnym padem** utworzonym z tego samego DS4 (DS4Windows/ViGEm, wirtualny XInput Steam), którego id nie da się odróżnić od prawdziwego Xboxa. Skutek uboczny: prawdziwy drugi pad (Xbox) jest ignorowany przez ułamek sekundy po ruchu DS4. Dodatkowo ta sama akcja z drugiego źródła w ciągu 90 ms jest odrzucana (okno przekazania).
 - **Potwierdzenie w szczelinie przekazania:** `confirm` w ciągu 180 ms od zmiany warstwy (zamknięcie panelu, powrót fokusu z aplikacji zewnętrznej) jest połykany. Zapobiega to uruchomieniu aplikacji z doku, gdy użytkownik chciał tylko zamknąć panel. Ruch i wstecz nie są opóźniane. Przejście dok ↔ górne akcje to zwykła nawigacja, nie przekazanie.
-- **Powrót do otwierającego:** przy otwarciu panelu (Options, F3, Szukaj/Pilot/Ustawienia, F2, przycisk diagnostyki) zapamiętywany jest element Home z fokusem, o ile nie jest dokiem; zamknięcie przywraca fokus tam, jeśli element nadal istnieje i nie jest wyłączony, inaczej do wybranego kafla doku. Przeskok Control Center → Diagnostyka zachowuje pierwotnego otwierającego.
+- **Powrót do otwierającego:** przy otwarciu panelu (Options, F3, Szukaj/Pilot/Ustawienia, F2, przycisk diagnostyki) zapamiętywany jest element Home z fokusem, o ile nie jest dokiem; zamknięcie przywraca fokus tam, jeśli element nadal istnieje, nie jest wyłączony i faktycznie przyjął fokus, inaczej do wybranego kafla doku. Przeskok Control Center → Diagnostyka zachowuje pierwotnego otwierającego.
 - **Po powrocie z aplikacji zewnętrznej** zachowana jest ostatnio wybrana pozycja doku (istniejący mechanizm `activeServiceRef` / `useReturnHomeListener`).
 - **Brak sterowania ukrytym interfejsem:** w `external` i `ambient` handlery nie są wołane.
 - **Listenery:** jedna subskrypcja Tauri na proces (licznik referencji w `NativeControllerStore`), niezależnie od liczby ekranów/rerenderów; zwalniana, gdy znika ostatni konsument; opóźnione `unlisten` po wyścigu mount/unmount jest obsłużone.
@@ -100,7 +102,7 @@ Domyślny powrót **nigdy** nie zabija gry, Steam ani przeglądarki i **nie** u�
 VELORA **nie** wyłącza Steam Input, **nie** czyta ani nie zmienia konfiguracji Steam, **nie** otwiera uchwytu HID i nie wysyła raportów do pada. Znane ryzyka (wszystkie **[NIEZWERYFIKOWANE]**, w planie testów):
 
 - podwójne zdarzenia, jeśli Steam Desktop Configuration zamienia pad w klawisze (strzałki/Enter/Escape) — klawiatura VELORY reaguje obok pada; `Escape` bez otwartego dialogu wychodzi z pełnego ekranu;
-- wirtualny pad XInput Steam obok fizycznego DS4 (dwa pady; arbiter wybiera jednego);
+- wirtualny pad XInput Steam / DS4Windows / ViGEm obok fizycznego DS4 (dwa pady: natywny odczyt czyta surowy DS4, a Gamepad API widzi wirtualnego Xboxa). Chronią przed tym tylko **priorytet natywny 400 ms** i okno 90 ms bramki; skuteczność zależy od opóźnienia wirtualnego pada **[NIEZWERYFIKOWANE]**;
 - przełączenie BT DS4 na raport 0x11 przez Steam/DS4Windows (Gamepad API może „oślepnąć", natywna warstwa obsługuje 0x11);
 - PS otwierający Big Picture.
 
@@ -108,7 +110,7 @@ Jeśli test sprzętowy potwierdzi problem, zalecenie dla użytkownika (tylko tek
 
 ## 7. Diagnostyka
 
-Ekran diagnostyki (F2 / przycisk „Diagnostyka pada" / przycisk w Control Center) ma sekcję **Kontroler natywny**: stan (`brak kontrolera` / `połączony` / `aktywny` / `natywny odczyt niedostępny`), typ (v1/v2/adapter), połączenie USB/Bluetooth, aktywne źródło wejścia, ostatni przycisk, bieżący właściciel fokusu i cel powrotu. Pokazuje **wyłącznie** dane zgłoszone przez warstwę natywną lub przeglądarkę. Nie wyświetla ani nie zapisuje bajtów HID, ścieżek urządzeń ani numerów seryjnych; urządzenie to nieprzejrzysta etykieta haszowana (FNV-1a) żyjąca tylko w pamięci. Nic nie jest zapisywane w logach trwałych.
+Ekran diagnostyki (F2 / przycisk „Diagnostyka pada" / przycisk w Control Center) ma sekcję **Kontroler natywny**: stan (`brak kontrolera` / `połączony` / `aktywny` / `natywny odczyt niedostępny`), typ (v1/v2/adapter), połączenie USB/Bluetooth, aktywne źródło wejścia, ostatni przycisk, bieżący właściciel fokusu i cel powrotu. Pokazuje **wyłącznie** dane zgłoszone przez warstwę natywną lub przeglądarkę. Nie wyświetla ani nie zapisuje bajtów HID, ścieżek urządzeń ani numerów seryjnych; urządzenie to nieprzejrzysta etykieta: **niesolony** skrót FNV-1a ścieżki urządzenia (stabilny między sesjami dla tego samego portu/parowania, więc to nie jest etykieta „per sesja"), żyjący tylko w pamięci i nigdzie niewyświetlany. Nic nie jest zapisywane w logach trwałych.
 
 ## 8. Znane ograniczenia i problemy poza zakresem S1
 
@@ -120,3 +122,8 @@ Ekran diagnostyki (F2 / przycisk „Diagnostyka pada" / przycisk w Control Cente
 6. **Podwójne obsłużenie F2 / Escape w dialogu** (klawiatura): idempotentne dziś; poza zakresem.
 7. **Fokus po powrocie** ma kilku piszących (`useReturnHomeListener`, rAF przywracania, `focus` okna). Nie zmieniono; ownership zmniejsza ryzyko, nie eliminuje go.
 8. Fałszywe ostrzeżenie „Steam Input" dla użytkownika samego DS4 zostało usunięte przez doliczenie padów DS4 huba do licznika urządzeń surowych.
+9. **Zmiany dla innych padów na ścieżce Gamepad API:** reguła osi dominującej drążka (przekątna = jedna oś) oraz połykanie `confirm` przez 180 ms po zmianie warstwy dotyczą także Xboxa/DualSense. Zamierzone, ale to zmiana zachowania istniejącej ścieżki.
+10. **Popup WebView2** (np. rozwijana lista `<select>`, jeśli kiedyś się pojawi): Rust uznaje okno za „na wierzchu" po procesie, a frontend po `document.hasFocus()`; przy ich rozbieżności natywny pad nie steruje popupem.
+11. **Częstość zdarzeń:** stan drążka jest kwantyzowany do 1/16 i wysyłany przy każdej zmianie, bez limitu częstotliwości; przy wolnym ruchu drążkiem możliwy jest strumień rzędu setek zdarzeń/s przez IPC (**[NIEZWERYFIKOWANE]**, do obserwacji w teście #3a). Ewentualne rozwiązanie: koalescencja 60–120 Hz.
+12. **Akord DS4 przy zajętej kolejce powrotu** jest cicho pomijany (DualSense zapisuje to w `last_error`); kolejne naciśnięcie ponawia.
+13. **Wygaszanie pada po ciszy:** jeśli pad w trybie BT podstawowym nadaje tylko przy zmianie stanu, pad bezczynny migałby między „połączony" a „brak" co ~3 s, a pierwsze naciśnięcie po bezczynności mogłoby zostać połknięte albo zdublowane (ochrona: bramka 90 ms). **[NIEZWERYFIKOWANE]**, test sprzętowy #2/#11.

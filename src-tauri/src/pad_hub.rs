@@ -146,6 +146,11 @@ impl HubCore {
             events.push(event.into());
         }
         self.chord.prune(at_ms);
+        // A silent pad that was holding an input is released, never heartbeated.
+        let released = self.tracker.release_silent(at_ms, crate::ds4::SILENCE_RELEASE_MS);
+        if foreground {
+            events.extend(released.into_iter().map(ControllerEvent::State));
+        }
         let gained = foreground && !self.foreground;
         self.foreground = foreground;
         if gained {
@@ -224,21 +229,29 @@ mod runtime {
     #[derive(Default)]
     struct Shared {
         running: AtomicBool,
+        /// Set by `stop()`; checked every loop turn so a stop that races thread start-up still ends it.
+        quit: AtomicBool,
         chord_enabled: AtomicBool,
         thread_id: AtomicU32,
         status: RwLock<NativeControllerStatus>,
-        subscriber: Mutex<Option<Sender<RawMessage>>>,
+        /// (subscription id, sender). The id lets a dropped old subscription leave a newer one alone.
+        subscriber: Mutex<Option<(u64, Sender<RawMessage>)>>,
+        next_subscription: std::sync::atomic::AtomicU64,
     }
 
     /// Held by the one consumer of forwarded reports. Dropping it unsubscribes.
     pub(crate) struct RawSubscription {
         pub(crate) receiver: Receiver<RawMessage>,
+        id: u64,
         shared: Arc<Shared>,
     }
 
     impl Drop for RawSubscription {
         fn drop(&mut self) {
-            *self.shared.subscriber.lock().unwrap_or_else(PoisonError::into_inner) = None;
+            let mut guard = self.shared.subscriber.lock().unwrap_or_else(PoisonError::into_inner);
+            if guard.as_ref().is_some_and(|(id, _)| *id == self.id) {
+                *guard = None;
+            }
         }
     }
 
@@ -287,6 +300,7 @@ mod runtime {
         }
 
         pub(crate) fn stop(&self) {
+            self.shared.quit.store(true, Ordering::Release);
             let thread_id = self.shared.thread_id.load(Ordering::Acquire);
             if thread_id != 0 {
                 native::post_quit(thread_id);
@@ -325,8 +339,9 @@ mod runtime {
                     .unwrap_or_else(|| "Odbiór Raw Input nie jest uruchomiony.".to_string()));
             }
             let (tx, rx) = channel();
-            *self.shared.subscriber.lock().unwrap_or_else(PoisonError::into_inner) = Some(tx);
-            Ok(RawSubscription { receiver: rx, shared: Arc::clone(&self.shared) })
+            let id = self.shared.next_subscription.fetch_add(1, Ordering::Relaxed);
+            *self.shared.subscriber.lock().unwrap_or_else(PoisonError::into_inner) = Some((id, tx));
+            Ok(RawSubscription { receiver: rx, id, shared: Arc::clone(&self.shared) })
         }
     }
 
@@ -345,6 +360,8 @@ mod runtime {
         }
         shared.thread_id.store(native::current_thread_id(), Ordering::Release);
         shared.running.store(true, Ordering::Release);
+        // If the pump ever unwinds, the status must not keep claiming the sink is alive.
+        let mut guard = RunGuard { app: app.clone(), shared: Arc::clone(&shared), clean: false };
         {
             let mut status = shared.status.write().unwrap_or_else(PoisonError::into_inner);
             *status = NativeControllerStatus { supported: true, running: true, ..Default::default() };
@@ -356,6 +373,9 @@ mod runtime {
         let mut devices: std::collections::HashMap<usize, DeviceEntry> = std::collections::HashMap::new();
         'pump: loop {
             native::wait_for_messages(50);
+            if shared.quit.load(Ordering::Acquire) {
+                break 'pump;
+            }
             while let Some(message) = native::next_message() {
                 match message.message {
                     native::WM_QUIT => break 'pump,
@@ -391,9 +411,36 @@ mod runtime {
         emit_all(&app, core.shutdown());
         native::unregister_raw_input();
         native::destroy_message_window(window);
-        let mut status = shared.status.write().unwrap_or_else(PoisonError::into_inner);
-        status.running = false;
-        status.pads.clear();
+        {
+            let mut status = shared.status.write().unwrap_or_else(PoisonError::into_inner);
+            status.running = false;
+            status.pads.clear();
+        }
+        guard.clean = true;
+    }
+
+    struct RunGuard {
+        app: AppHandle,
+        shared: Arc<Shared>,
+        clean: bool,
+    }
+
+    impl Drop for RunGuard {
+        fn drop(&mut self) {
+            if self.clean {
+                return;
+            }
+            self.shared.running.store(false, Ordering::Release);
+            self.shared.thread_id.store(0, Ordering::Release);
+            let reason = "Odbiór pada zatrzymał się nieoczekiwanie.".to_string();
+            {
+                let mut status = self.shared.status.write().unwrap_or_else(PoisonError::into_inner);
+                status.running = false;
+                status.pads.clear();
+                status.last_error = Some(reason.clone());
+            }
+            let _ = self.app.emit(CONTROLLER_EVENT, ControllerEvent::Unavailable { reason });
+        }
     }
 
     struct DeviceEntry {
@@ -469,22 +516,20 @@ mod runtime {
 
     fn trigger_home(app: &AppHandle) {
         use crate::session_orchestrator::{request_return_home, HomeRequestSource, TransitionCause};
-        let app_for_event = app.clone();
-        // Same pipeline and the same policy as the DualSense chord: one explicit attempt,
-        // no focus tricks. The result is reported through the existing return-home event.
-        let _ = request_return_home(
+        // Same pipeline and the same policy as the DualSense chord: one explicit attempt, no focus
+        // tricks. The orchestrator reports the outcome through the existing return-home event; a
+        // busy queue (false) simply drops this press, and a second press can retry.
+        let _queued = request_return_home(
             app.clone(),
             TransitionCause::GamepadHome,
             HomeRequestSource::Device,
-            move |_result| {
-                let _ = &app_for_event;
-            },
+            |_result| {},
         );
     }
 
     fn forward(shared: &Shared, message: RawMessage) {
         let mut guard = shared.subscriber.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(sender) = guard.as_ref() {
+        if let Some((_, sender)) = guard.as_ref() {
             if sender.send(message).is_err() {
                 *guard = None;
             }
@@ -507,7 +552,7 @@ mod runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ds4::{Ds4Button, Ds4Transport};
+    use crate::ds4::Ds4Button;
 
     const USB_PATH: &str = r"\\?\HID#VID_054C&PID_09CC#7&2a3b4c5d&0&0000#{4d1e55b2}";
 
@@ -646,10 +691,48 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_and_transport_are_plain_data() {
+    fn status_serializes_to_the_frontend_contract() {
         let status = NativeControllerStatus::default();
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains(r#""supported":false"#) && json.contains(r#""ignoredReports":0"#));
-        let _ = Ds4Transport::Usb;
+        assert!(json.contains(r#""pads":[]"#) && json.contains(r#""lastError":null"#));
+    }
+
+    #[test]
+    fn a_pad_that_goes_silent_while_holding_is_released_once_and_never_heartbeated() {
+        let mut core = HubCore::default();
+        core.tick(0, true);
+        let mut right = usb(0, 0, 0);
+        right[5] = 0x02; // hat east
+        core.on_report(USB_PATH, Ds4Revision::V2, &right, 1);
+        // Reports stop (Bluetooth drop). Within the silence window heartbeats still flow.
+        assert_eq!(states(&core.tick(HEARTBEAT_MS + 2, true)), 1);
+        // Past the silence window: exactly one neutral state, then nothing while it stays silent.
+        let released = core.tick(1 + crate::ds4::SILENCE_RELEASE_MS, true);
+        assert_eq!(states(&released), 1);
+        match &released[0] {
+            ControllerEvent::State(snapshot) => assert!(crate::ds4::is_neutral(snapshot)),
+            other => panic!("unexpected {other:?}"),
+        }
+        for at in [2_000, 2_500, 2_900] {
+            assert_eq!(states(&core.tick(at, true)), 0, "no heartbeat for a silent pad at {at}");
+        }
+        // The pad returns and presses again: the change is reported normally.
+        assert_eq!(states(&core.on_report(USB_PATH, Ds4Revision::V2, &right, 2_950).events), 1);
+    }
+
+    #[test]
+    fn the_usb_adapter_without_a_paired_pad_is_not_a_pad() {
+        let mut core = HubCore::default();
+        let adapter = r"\?HID#VID_054C&PID_0BA0#adapter";
+        let mut idle = usb(0, 0, 0);
+        idle[31] |= 0x04; // "no controller" flag
+        let out = core.on_report(adapter, Ds4Revision::UsbAdapter, &idle, 0);
+        assert!(out.events.is_empty() && !out.chord);
+        assert_eq!(core.pad_count(), 0);
+        // With a paired pad the flag is clear and it connects.
+        let live = usb(0, 0, 0);
+        assert!(!core.on_report(adapter, Ds4Revision::UsbAdapter, &live, 10).events.is_empty());
+        assert_eq!(core.pad_count(), 1);
     }
 }

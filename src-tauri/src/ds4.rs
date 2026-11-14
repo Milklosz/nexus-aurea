@@ -39,6 +39,10 @@ pub(crate) const MAX_TRACKED_PADS: usize = 4;
 /// A pad that has sent nothing for this long is treated as gone. Windows does not
 /// always emit a removal notification when a Bluetooth pad goes out of range.
 pub(crate) const PAD_STALE_MS: u64 = 3_000;
+/// A pad that streams reports continuously but has gone silent while an input is held is treated
+/// as released after this long (three heartbeats), so a Bluetooth drop can never keep repeating
+/// a direction until the full stale timeout.
+pub(crate) const SILENCE_RELEASE_MS: u64 = 750;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -334,8 +338,9 @@ pub fn parse_report(report: &[u8]) -> Option<Ds4Report> {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Ds4Snapshot {
-    /// Opaque per-session label (see `gamepad_home::device_label`), stable while the
-    /// pad stays connected. Not a hardware identifier.
+    /// Opaque label: an unsalted FNV-1a hash of the device path (see `gamepad_home::device_label`).
+    /// It is stable across sessions for the same USB port or pairing, lives in memory only, and
+    /// is never logged, persisted or shown. Not a hardware serial.
     pub device: String,
     pub revision: Ds4Revision,
     pub transport: Ds4Transport,
@@ -400,8 +405,8 @@ pub(crate) struct Ds4Tracker {
 }
 
 fn snapshot_of(label: &str, revision: Ds4Revision, report: &Ds4Report) -> Ds4Snapshot {
-    // Sticks are quantised so sensor noise of one count does not emit events.
-    let quantise = |value: f32| (value * 32.0).round() / 32.0;
+    // Sticks are quantised (1/16) so sensor noise and slow drift do not emit an event per report.
+    let quantise = |value: f32| (value * 16.0).round() / 16.0;
     Ds4Snapshot {
         device: label.to_string(),
         revision,
@@ -433,6 +438,12 @@ impl Ds4Tracker {
         at_ms: u64,
     ) -> Ingest {
         let mut out = Ingest::default();
+        // The Sony USB adapter keeps streaming when no pad is paired and flags it in byte 31
+        // (bit 0x04, per the Linux hid-sony driver). [UNVERIFIED on hardware] Such a report is not
+        // a pad: it must neither connect one nor keep a vanished one alive.
+        if revision == Ds4Revision::UsbAdapter && report.len() >= USB_REPORT_LEN && report[31] & 0x04 != 0 {
+            return out;
+        }
         let Some(parsed) = parse_report(report) else {
             self.ignored_reports = self.ignored_reports.saturating_add(1);
             return out;
@@ -468,6 +479,31 @@ impl Ds4Tracker {
         out.label = Some(label);
         out.buttons = Some(parsed.buttons);
         out
+    }
+
+    /// Pads that are holding an input but have sent nothing for `silence_ms`: their stored state
+    /// becomes neutral and that neutral snapshot is returned once. If the pad speaks again, its
+    /// real state differs from neutral and is emitted as usual.
+    pub(crate) fn release_silent(&mut self, at_ms: u64, silence_ms: u64) -> Vec<Ds4Snapshot> {
+        let mut released = Vec::new();
+        for pad in self.pads.values_mut() {
+            if at_ms.saturating_sub(pad.last_seen_ms) < silence_ms {
+                continue;
+            }
+            let Some(last) = pad.last.as_ref().filter(|snapshot| !is_neutral(snapshot)) else {
+                continue;
+            };
+            let neutral = Ds4Snapshot {
+                dpad: Ds4Dpad::default(),
+                left_x: 0.0,
+                left_y: 0.0,
+                buttons: Vec::new(),
+                ..last.clone()
+            };
+            pad.last = Some(neutral.clone());
+            released.push(neutral);
+        }
+        released
     }
 
     /// Latest snapshot of every tracked pad, for resynchronising the frontend (window

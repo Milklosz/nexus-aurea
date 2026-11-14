@@ -136,6 +136,26 @@ describe("NativeControllerStore", () => {
     expect(h.store.getModel().pads.map((pad) => pad.device)).not.toContain("ghost");
   });
 
+  it("a status reply that raced a disconnect never resurrects the pad", async () => {
+    const h = harness({ pads: [{ device: "a", revision: "v2", transport: "usb" }] });
+    h.store.acquire();
+    await flush();
+    expect(h.store.getModel().pads).toHaveLength(1);
+    // The next status request is answered with a pad list taken BEFORE the pad vanished.
+    let calls = 0;
+    (h.deps.getStatus as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) {
+        h.fire({ kind: "disconnected", device: "a" }); // the event overtakes the stale reply
+        return { supported: true, running: true, lastError: null, pads: [{ device: "a", revision: "v2", transport: "usb" }], ignoredReports: 0 };
+      }
+      return { supported: true, running: true, lastError: null, pads: [], ignoredReports: 0 };
+    });
+    await h.store.reconcile();
+    expect(calls).toBe(2); // asked again because an event arrived in flight
+    expect(h.store.getModel().pads).toEqual([]);
+  });
+
   it("resets the model when the last consumer leaves", async () => {
     const h = harness();
     const release = h.store.acquire();

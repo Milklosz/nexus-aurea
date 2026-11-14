@@ -236,7 +236,7 @@ export const initialNativeControllerModel: NativeControllerModel = {
   snapshotAt: null,
 };
 
-function isNeutral(snapshot: NativeSnapshot | null): boolean {
+export function isNeutral(snapshot: NativeSnapshot | null): boolean {
   if (!snapshot) return true;
   return snapshot.buttons.length === 0
     && !snapshot.dpad.up && !snapshot.dpad.down && !snapshot.dpad.left && !snapshot.dpad.right

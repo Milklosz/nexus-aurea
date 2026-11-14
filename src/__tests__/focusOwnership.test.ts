@@ -123,6 +123,20 @@ describe("CrossSourceGate", () => {
     expect(gate.accept("native", { type: "confirm" }, 1095)).toBe(true);
   });
 
+  it("gives the browser path no say while the native pad is in use (virtual pads)", () => {
+    const gate = new CrossSourceGate(90, 400);
+    gate.noteNativeActivity(1000);
+    expect(gate.accept("gamepad-api", { type: "confirm" }, 1100)).toBe(false);
+    expect(gate.accept("gamepad-api", { type: "move", delta: 1 }, 1390)).toBe(false);
+    expect(gate.accept("native", { type: "confirm" }, 1100)).toBe(true);
+    // Native went quiet: the browser path (a real Xbox pad) works again.
+    expect(gate.accept("gamepad-api", { type: "confirm" }, 1401)).toBe(true);
+    gate.reset();
+    gate.noteNativeActivity(5000);
+    gate.reset();
+    expect(gate.accept("gamepad-api", { type: "confirm" }, 5001)).toBe(true);
+  });
+
   it("never throttles a single source and keeps directions independent", () => {
     const gate = new CrossSourceGate(90);
     expect(gate.accept("native", { type: "move", delta: 1 }, 0)).toBe(true);

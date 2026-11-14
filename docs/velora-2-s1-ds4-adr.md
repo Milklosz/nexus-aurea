@@ -40,9 +40,10 @@ Rozszerzyć istniejące podejście **Raw Input** do jednego procesowego właści
 | Rekomendacja Opusa | Co zrobiono | Dlaczego |
 |---|---|---|
 | Akord DualSense przeniesiony do wątku huba, Control Service tylko przełącza `chord_enabled` | DualSense nadal działa w wątku Control Service, raporty dostaje przez kanał; flaga `chord_enabled` dotyczy tylko DS4 | Mniejszy zakres zmian w 1,9 tys. wierszy przetestowanego kodu; zachowuje dotychczasową semantykę „akord działa, gdy działa usługa". Opóźnienie akordu DualSense ≤ pętla 40 ms usługi (jak dotąd). |
-| Publisher ≤120 Hz z koalescencją | Zmiana-tylko + kwantyzacja drążka do 1/32 + heartbeat 250 ms | Kwantyzacja eliminuje szum czujnika bez timera; heartbeat chroni przed utraconym zwolnieniem. |
+| Publisher ≤120 Hz z koalescencją | Zmiana-tylko + kwantyzacja drążka do 1/16 + heartbeat 250 ms | Kwantyzacja eliminuje szum czujnika bez timera; heartbeat chroni przed utraconym zwolnieniem. |
 | Klasyfikacja po `RIDI_DEVICEINFO` | Tak, z fallbackiem na parser ścieżki (VID/PID także w postaci BT `VID&0002054c_PID&05c4`) | Zgodnie z zaleceniem; fallback na wypadek błędu zapytania. |
 | Poprawka indeksów Cross/Circle w surowym profilu PlayStation (F8) | **Nie zmieniono** | Wcześniejszy commit `1781e6a` świadomie ustawił Cross=0/Circle=1 dla surowego profilu. Chromium mapuje DS4 jako `standard`, więc ścieżka DS4 jej nie dotyka. Rozbieżność z etykietami diagnostyki zapisana jako znany problem. |
+| Priorytet natywny nad Gamepad API (drugi audyt, M2) | Dodany w `CrossSourceGate` (400 ms) | Wirtualny pad z tego samego DS4 nie jest odróżnialny po id od prawdziwego Xboxa. |
 | Wzmocnienie przeciw klawiszom syntetycznym Steam (F12, „pad echo") | **Nie zaimplementowano** | Wymaga potwierdzenia na sprzęcie, czy Steam w ogóle zamienia pad w klawisze. Ujęte w planie testów. |
 
 ## 4. Fakty o DualShock 4 użyte w parserze
@@ -73,11 +74,11 @@ Rozszerzyć istniejące podejście **Raw Input** do jednego procesowego właści
 ## 6. Ryzyka (priorytetowo)
 
 1. **Wysokie:** kształt/dopełnienie raportów BT inny niż w specyfikacji → parser z minimami + CRC; diagnostyka pokazuje tylko potwierdzone dane. Test sprzętowy konieczny.
-2. **Wysokie:** natywne i Gamepad API jednocześnie reagują na jedno naciśnięcie → arbiter jednego źródła (`ignorePad`), `CrossSourceGate` (90 ms), prime po zmianie źródła.
+2. **Wysokie:** natywne i Gamepad API jednocześnie reagują na jedno naciśnięcie → `ignorePad` (pomija DS4 w Gamepad API), `CrossSourceGate` (odrzuca tę samą akcję z drugiego źródła w 90 ms **oraz wszystkie akcje Gamepad API przez 400 ms po aktywności natywnego pada**), prime po zmianie źródła. To **nie** jest twardy arbiter: wirtualny pad z tego samego DS4 jest chroniony tylko oknami czasowymi **[NIEZWERYFIKOWANE]**.
 3. **Wysokie:** nadpisanie/usunięcie rejestracji Raw Input → jeden właściciel; start/stop Control Service nie rejestruje niczego.
 4. **Średnie-wysokie:** Steam zamienia pad w klawisze (podwójne ruchy) → [NIEZWERYFIKOWANE], plan testów.
 5. **Średnie:** odmowa aktywacji okna przez Windows → uczciwy toast + skrót awaryjny, brak sztuczek Alt/AttachThreadInput.
-6. **Średnie:** utracone zwolnienie → heartbeat 250 ms + wygaszanie po 700 ms.
+6. **Średnie:** utracone zwolnienie → heartbeat 250 ms + wygaszanie po 700 ms po stronie frontendu; po stronie Rust pad, który przestał nadawać, dostaje neutralny stan po 750 ms (wynik drugiego audytu: wcześniej heartbeat powtarzał wciśnięty kierunek do 3 s).
 7. **Niskie-średnie:** klony DS4, adapter bez sparowanego pada, wznowienie po uśpieniu [NIEZWERYFIKOWANE].
 
 ## 7. Cele poza zakresem S1

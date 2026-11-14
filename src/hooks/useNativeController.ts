@@ -5,6 +5,7 @@ import {
   BumperEdges,
   DEFAULT_DS4_BINDINGS,
   NEUTRAL_SNAPSHOT,
+  isNeutral,
   sampleFromNative,
   type ControllerBindings,
   type NativeControllerModel,
@@ -67,7 +68,10 @@ export function useNativeController(
       // Native state is change-only plus a heartbeat while held. Silence while something is
       // pressed means a release was lost, so the snapshot is treated as released, never held forever.
       const stale = model.snapshotAt !== null && performance.now() - model.snapshotAt > NATIVE_STALE_MS;
-      const sample = sampleFromNative(stale ? NEUTRAL_SNAPSHOT : model.snapshot, bindingsRef.current);
+      const live = stale ? NEUTRAL_SNAPSHOT : model.snapshot;
+      // While the native pad is in use the browser path is secondary (virtual pads, same press).
+      if (!isNeutral(live)) crossSourceGate.noteNativeActivity(performance.now());
+      const sample = sampleFromNative(live, bindingsRef.current);
       for (const action of engine.update(sample, performance.now(), true)) dispatch(action);
       const held = new Set((stale ? NEUTRAL_SNAPSHOT : model.snapshot)?.buttons ?? []);
       for (const delta of bumpers.update(held.has("l1"), held.has("r1"))) actionsRef.current.section?.(delta);

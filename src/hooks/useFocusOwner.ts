@@ -34,7 +34,7 @@ export function useFocusOwner(state: FocusOwnerState) {
   useEffect(() => {
     stateRef.current = state;
     sync();
-  }, [state.ambientActive, state.keyboardOpen, state.diagnosticsOpen, state.controlCenterOpen, state.controlCenterPanel, state, sync]);
+  }, [state.ambientActive, state.keyboardOpen, state.diagnosticsOpen, state.controlCenterOpen, state.controlCenterPanel, sync]);
 
   useEffect(() => {
     window.addEventListener("focus", sync);

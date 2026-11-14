@@ -150,6 +150,21 @@ describe("App driven by a native DualShock 4", () => {
     expect(mocks.openService).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back to the dock when the opener became disabled while the panel was open", async () => {
+    await boot();
+    await tap([], { up: true });
+    const opener = focused() as HTMLElement;
+    expect(opener.closest(".home-actions, .quick-settings-trigger")).not.toBeNull();
+    await tap(["options"]);
+    expect(dialogOpen()).toBe(true);
+    (opener as HTMLButtonElement).disabled = true;
+    await tap(["circle"]);
+    expect(dialogOpen()).toBe(false);
+    await act(async () => { vi.advanceTimersByTime(64); });
+    expect(focused()).not.toBe(opener);
+    expect(focused()?.hasAttribute("data-aurea-item")).toBe(true);
+  });
+
   it("a Cross pressed in the gap right after a panel closes does not launch the dock app", async () => {
     await boot();
     await tap(["options"]);

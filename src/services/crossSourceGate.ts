@@ -10,13 +10,26 @@ export type ControllerSourceName = "native" | "gamepad-api";
  * An action is dropped only when the SAME action type was just accepted from a
  * DIFFERENT source. The same source is never throttled here: its own repeat logic owns
  * its timing. A human cannot press the same button twice within `windowMs`.
+ *
+ * Native priority: while the native pad is being used (reported through
+ * `noteNativeActivity`) the browser path is secondary and its actions are dropped. This
+ * covers a virtual pad created from the same physical DualShock 4 (DS4Windows, ViGEm, a
+ * Steam virtual XInput pad), whose id the browser path cannot tell apart from a real Xbox
+ * pad. Repeats of a held direction would otherwise run on two independent timelines.
  */
 export class CrossSourceGate {
   private last = new Map<string, { source: ControllerSourceName; at: number }>();
+  private nativeActiveAt = Number.NEGATIVE_INFINITY;
 
-  constructor(private readonly windowMs = 90) {}
+  constructor(private readonly windowMs = 90, private readonly nativePriorityMs = 400) {}
+
+  /** The native pad currently holds an input (non-neutral state). */
+  noteNativeActivity(now: number): void {
+    this.nativeActiveAt = now;
+  }
 
   accept(source: ControllerSourceName, action: ControllerAction, now: number): boolean {
+    if (source === "gamepad-api" && now - this.nativeActiveAt < this.nativePriorityMs) return false;
     const key = action.type === "move" || action.type === "vertical"
       ? `${action.type}:${action.delta}`
       : action.type;
@@ -28,6 +41,7 @@ export class CrossSourceGate {
 
   reset(): void {
     this.last.clear();
+    this.nativeActiveAt = Number.NEGATIVE_INFINITY;
   }
 }
 

@@ -375,6 +375,25 @@ describe("single source of truth between native and the Gamepad API", () => {
     expect(actions.confirm).toHaveBeenCalledTimes(1);
   });
 
+  it("a virtual XInput pad made from the same DualShock 4 is dropped while native is in use", async () => {
+    const actions = makeActions();
+    const virtualPad = makePad("Xbox 360 Controller (XInput STANDARD GAMEPAD)", 0, []);
+    pads = [virtualPad];
+    renderHook(() => {
+      useNativeController(actions, true);
+      useGamepad(actions, true, "auto", undefined, (pad) => isDualShock4GamepadId(pad.id)); // does not match
+    });
+    await flush();
+    await emit(connected());
+    pump(); advance(50);
+    // The virtual pad echoes Cross 200 ms late, beyond the 90 ms cross-source window.
+    await emit(state(["cross"]));
+    advance(200);
+    pads = [makePad("Xbox 360 Controller (XInput STANDARD GAMEPAD)", 0, [0])];
+    pump(); pump(60);
+    expect(actions.confirm).toHaveBeenCalledTimes(1);
+  });
+
   it("the cross-source gate drops the second source in a hand-over window", async () => {
     const actions = makeActions();
     pads = [makePad(DS4_ID, 0, [])];

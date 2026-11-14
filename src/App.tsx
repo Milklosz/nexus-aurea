@@ -19,7 +19,7 @@ import { returnHomeFocusTarget, useReturnHomeListener } from "./hooks/useReturnH
 import { useGamepad, type ControllerActions } from "./hooks/useGamepad";
 import { useNativeController } from "./hooks/useNativeController";
 import { useFocusOwner } from "./hooks/useFocusOwner";
-import { focusOpenerFrom } from "./services/focusOwnership";
+import { canRestoreFocusTo, focusOpenerFrom } from "./services/focusOwnership";
 import { isDualShock4GamepadId } from "./services/nativeController";
 import { nativeControllerStore } from "./services/nativeControllerStore";
 import { dispatchControllerAction, intentFromKeyboard, intentFromRemote, isIgnoredShortcutEvent, type NavIntentHandlers } from "./services/navIntent";
@@ -244,9 +244,10 @@ export default function App() {
   const restoreSelectedFocus = useCallback(() => {
     const opener = homeOpenerRef.current;
     homeOpenerRef.current = null;
-    if (opener?.isConnected) {
+    if (canRestoreFocusTo(opener)) {
       opener.focus({ preventScroll: true });
-      return;
+      // A hidden or otherwise unfocusable opener silently ignores focus(): fall back to the dock.
+      if (document.activeElement === opener) return;
     }
     navigation.focusApp(activeServiceRef.current);
   }, [navigation.focusApp]);

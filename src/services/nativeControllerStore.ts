@@ -31,6 +31,8 @@ export class NativeControllerStore {
   private readonly subscribers = new Set<() => void>();
   private refs = 0;
   private generation = 0;
+  /** Counts every applied event, so a status reply that raced an event can be recognised. */
+  private eventSeq = 0;
   private unlisten: (() => void) | null = null;
 
   constructor(private readonly deps: NativeControllerDeps = defaultDeps) {}
@@ -62,12 +64,20 @@ export class NativeControllerStore {
   /** Re-reads the native status, e.g. when the window regains focus after a missed event. */
   async reconcile(): Promise<void> {
     const generation = this.generation;
-    try {
-      const status = await this.deps.getStatus();
-      if (generation !== this.generation) return;
-      this.applyStatus(status);
-    } catch {
-      // Status is best effort; events remain the source of truth.
+    // A status taken before an event but delivered after it would undo that event (a disconnected
+    // pad coming back as a ghost). If any event arrived while the reply was in flight, ask again.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const seq = this.eventSeq;
+      try {
+        const status = await this.deps.getStatus();
+        if (generation !== this.generation) return;
+        if (seq !== this.eventSeq) continue;
+        this.applyStatus(status);
+        return;
+      } catch {
+        // Status is best effort; events remain the source of truth.
+        return;
+      }
     }
   }
 
@@ -117,6 +127,7 @@ export class NativeControllerStore {
   }
 
   private apply(event: NativeControllerEvent): void {
+    this.eventSeq += 1;
     const next = reduceNativeController(this.model, event, this.deps.now());
     if (next === this.model) return;
     this.model = next;

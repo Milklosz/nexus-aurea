@@ -27,7 +27,7 @@ Skróty: **DS** = sekcja „Kontroler natywny" w Diagnostyce.
 | 5 | **Control Center** | Options (tap) z doku; D-pad po zakładkach; L1/R1; Circle. | Panel otwiera się **po puszczeniu** Options; L1/R1 przełączają zakładki; Circle zamyka, fokus wraca do elementu, który otworzył (kafel/górne akcje). | Zapisz, gdzie wylądował fokus po zamknięciu. |
 | 5a | Options + PS | Przytrzymaj PS i naciśnij Options. | Panel **nie** otwiera się; (z działającym Control Service) VELORA wraca na wierzch. | — |
 | 6 | **Search** | Otwórz Szukaj (górne akcje → Cross); wybierz pole tekstowe (Cross); klawiatura ekranowa; Circle. | Klawiatura ekranowa przejmuje pada; Circle anuluje; po zamknięciu fokus wraca do pola/akcji. | Zapisz, czy Options otworzył coś pod klawiaturą (nie powinien). |
-| 7 | **Netflix** | Cross na kaflu Netflix (Edge). | Aplikacja startuje **raz**. Podczas gdy Edge jest na wierzchu, pad **nie** porusza fokusem w VELORZE (DS: źródło „natywne", ale właściciel „inna aplikacja"; brak reakcji kafli). | Zapisz, czy pad nawigował w tle (to błąd). |
+| 7 | **Netflix** | Cross na kaflu Netflix (Edge). | Aplikacja startuje **raz**. Podczas gdy Edge jest na wierzchu, pad **nie** porusza fokusem w VELORZE. (Diagnostyka nie jest wtedy widoczna: sprawdź po powrocie do VELORY, że fokus i wybrany kafel są **takie same jak przed** naciśnięciami w Edge.) | Zapisz, czy po powrocie fokus się przesunął (to błąd: pad nawigował w tle). |
 | 7a | Powrót z Netflix | Włącz Control Service; PS+Options. | VELORA na wierzchu **albo** migotanie na pasku zadań + toast (dopuszczalne wg polityki). Edge **nie** jest zamykany. Zapisz, które. | Skrót awaryjny powrotu z Control Service. |
 | 8 | **YouTube** | Jak #7 dla YouTube. | Jak #7/#7a. | Jak #7a. |
 | 9 | **Steam** | Uruchom Steam (kafel), potem PS+Options. Powtórz z Big Picture. | Odnotuj: czy PS solo otwiera Big Picture (spodziewane, poza kontrolą VELORY); czy PS+Options przywraca VELORĘ; czy VELORA reaguje na pada, gdy Steam jest na wierzchu (**nie powinna**). | Zapisz konfigurację Steam Input (włączone/wyłączone „PlayStation Configuration Support"). **Nie zmieniaj jej automatycznie.** |
@@ -40,7 +40,9 @@ Skróty: **DS** = sekcja „Kontroler natywny" w Diagnostyce.
 | 14 | **1080p** | Rozdzielczość 1920×1080. | Jak #13. | — |
 | 15 | **4K** | Rozdzielczość 3840×2160 (jeśli TV/HDMI pozwala; TX-49EX610E to 4K). | Jak #13; brak spadku płynności nawigacji. | Zapisz wersję HDMI/odświeżanie. |
 | 16 | **Fallback Gamepad API** | (Jeśli możliwe) uruchom VELORĘ w trybie bez natywnej warstwy lub z pozostałym błędem startu. | DS4 działa przez Gamepad API: nawigacja i Cross/Circle; **brak** podwójnych akcji. | — |
-| 17 | **Dwa pady** | Podłącz drugiego DS4/Xbox. | Steruje jeden aktywny pad; drugi przejmuje dopiero po zwolnieniu pierwszego. | Zapisz zachowanie. |
+| 17 | **Dwa pady** | Podłącz drugiego DS4/Xbox. | Steruje jeden aktywny pad; drugi przejmuje dopiero po zwolnieniu pierwszego. (Xbox może być ignorowany przez ~0,4 s po ruchu DS4: priorytet natywny.) | Zapisz zachowanie. |
+| 17a | **Wirtualny pad (DS4Windows / ViGEm)** | Uruchom DS4Windows (z i bez HidHide) lub Steam z konfiguracją tworzącą wirtualny pad XInput z tego samego DS4. Przytrzymaj D-pad w prawo przez 2 s; naciśnij Cross. | **Jedno** przesunięcie na krok powtarzania i **jedno** potwierdzenie. Jeśli podwójne: **zapisz opóźnienie/zachowanie** (krytyczne), bo ochrona to tylko okna 90/400 ms. | Zamknij DS4Windows/wyłącz wirtualny pad; zapisz konfigurację. |
+| 17b | **Brak ciągłych raportów** | Przytrzymaj D-pad przez 3 s bez ruchu (USB, potem BT). | Powtarzanie trwa przez cały czas trzymania (> 750 ms). Jeśli ustaje po ~0,75 s: pad nadaje tylko przy zmianie stanu (**ważny wynik**, zmień założenie w `ds4.rs`). | — |
 | 18 | **Diagnostyka** | Naciskaj kolejno przyciski. | „Ostatni przycisk" zgadza się z naciśniętym; brak danych, których nie da się potwierdzić. | — |
 
 ## 2. Co zebrać w razie błędu
