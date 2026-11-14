@@ -2,6 +2,7 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import { ControllerEngine, type ControllerAction } from "../services/controllerEngine";
 import { crossSourceGate } from "../services/crossSourceGate";
 import {
+  BumperEdges,
   DEFAULT_DS4_BINDINGS,
   NEUTRAL_SNAPSHOT,
   sampleFromNative,
@@ -45,6 +46,7 @@ export function useNativeController(
     const release = nativeControllerStore.acquire();
     // Options fires on release and never together with PS, so the Home chord cannot also open a panel.
     const engine = new ControllerEngine({ optionsOnRelease: true });
+    const bumpers = new BumperEdges();
     const dispatch = (action: ControllerAction) => {
       if (!crossSourceGate.accept("native", action, performance.now())) return;
       const handlers = actionsRef.current;
@@ -59,6 +61,7 @@ export function useNativeController(
       // re-primed on return, so a button held across a focus change never fires late.
       if (!focused || suspendRef.current?.() || model.unavailableReason || !model.activeDevice) {
         engine.reset();
+        bumpers.reset();
         return;
       }
       // Native state is change-only plus a heartbeat while held. Silence while something is
@@ -66,6 +69,8 @@ export function useNativeController(
       const stale = model.snapshotAt !== null && performance.now() - model.snapshotAt > NATIVE_STALE_MS;
       const sample = sampleFromNative(stale ? NEUTRAL_SNAPSHOT : model.snapshot, bindingsRef.current);
       for (const action of engine.update(sample, performance.now(), true)) dispatch(action);
+      const held = new Set((stale ? NEUTRAL_SNAPSHOT : model.snapshot)?.buttons ?? []);
+      for (const delta of bumpers.update(held.has("l1"), held.has("r1"))) actionsRef.current.section?.(delta);
     };
     const timer = window.setInterval(tick, NATIVE_TICK_MS);
     const reconcile = () => { void nativeControllerStore.reconcile(); };
@@ -74,6 +79,7 @@ export function useNativeController(
       window.clearInterval(timer);
       window.removeEventListener("focus", reconcile);
       engine.reset();
+      bumpers.reset();
       release();
     };
   }, [enabled]);

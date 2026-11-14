@@ -14,6 +14,8 @@ export type ControllerActions = {
   confirm: () => void;
   back: () => void;
   options: () => void;
+  /** L1 (-1) / R1 (+1): previous or next section. Only the native source produces it. */
+  section?: (delta: -1 | 1) => void;
 };
 
 /**

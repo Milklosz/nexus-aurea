@@ -139,6 +139,34 @@ export const DEFAULT_DS4_BINDINGS: ControllerBindings = {
   options: ["options"],
 };
 
+/**
+ * Rising edges of L1 (previous section, -1) and R1 (next section, +1). The first sample after a
+ * reset only records the held state, so a bumper held across a focus change never fires late.
+ */
+export class BumperEdges {
+  private primed = false;
+  private l1 = false;
+  private r1 = false;
+
+  update(l1: boolean, r1: boolean): Array<-1 | 1> {
+    const edges: Array<-1 | 1> = [];
+    if (this.primed) {
+      if (l1 && !this.l1) edges.push(-1);
+      if (r1 && !this.r1) edges.push(1);
+    }
+    this.primed = true;
+    this.l1 = l1;
+    this.r1 = r1;
+    return edges;
+  }
+
+  reset(): void {
+    this.primed = false;
+    this.l1 = false;
+    this.r1 = false;
+  }
+}
+
 export interface NativeSnapshot {
   dpad: NativeDpad;
   leftX: number;

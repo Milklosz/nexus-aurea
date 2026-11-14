@@ -72,6 +72,18 @@ function savedControllerProfile(): ControllerProfile {
   return "auto";
 }
 
+const focusReturnLabels: Record<string, string> = {
+  controlCenter: "górne akcje Home",
+  music: "odtwarzacz",
+  diagnostics: "przycisk diagnostyki",
+};
+
+/** Names the Home zone focus returns to when an overlay closes, for the diagnostics panel. */
+function focusReturnLabel(opener: HTMLElement | null): string {
+  const zone = opener?.isConnected ? homeZoneOfElement(opener) : null;
+  return (zone && focusReturnLabels[zone]) || "dok Home";
+}
+
 export default function App() {
   const version = useAppVersion();
   const [diagnostics, setDiagnostics] = useState(false);
@@ -442,8 +454,19 @@ export default function App() {
       confirm: () => send({ type: "confirm" }),
       back: () => send({ type: "back" }),
       options: () => send({ type: "options" }),
+      section: (delta) => {
+        // L1/R1 switch Control Center sections. Anywhere else they do nothing, and an open on-screen keyboard owns the pad.
+        if (keyboard.sinkRef.current || !allowControllerAction({ type: "move", delta })) return;
+        const dialog = document.querySelector("dialog.control-center[open]");
+        const tabs = dialog ? Array.from(dialog.querySelectorAll<HTMLElement>('.cc-tabs [role="tab"]')) : [];
+        if (tabs.length < 2) return;
+        const current = tabs.findIndex((tab) => tab.getAttribute("aria-selected") === "true");
+        const next = tabs[(current + delta + tabs.length) % tabs.length];
+        next.click();
+        next.focus({ preventScroll: true });
+      },
     };
-  }, [allowControllerAction, controllerIntentHandlers]);
+  }, [allowControllerAction, controllerIntentHandlers, keyboard.sinkRef]);
   const inputEnabled = !ambient.active && !ambient.controllerSuppressed;
   // While the native layer owns a DualShock 4, the browser path skips it so one press is never two actions.
   // Other pads (Xbox, DualSense) and a DualShock 4 without a working native layer stay on the browser path.
@@ -674,6 +697,8 @@ export default function App() {
       {diagnostics && <GamepadDiagnostics
         profile={controllerProfile}
         onProfileChange={updateControllerProfile}
+        getFocusOwner={focusOwner.owner}
+        focusReturnTo={focusReturnLabel(homeOpenerRef.current)}
         cinemaProfile={cinemaProfile}
         onCinemaProfileChange={(profile) => void changeCinemaProfile(profile)}
         onShowDesktop={showDesktop}
