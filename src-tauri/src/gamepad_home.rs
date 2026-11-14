@@ -9,8 +9,6 @@ use tauri::{AppHandle, Emitter};
 use crate::session_orchestrator::{self, HomeRequestSource, TransitionCause};
 
 pub(crate) const GAMEPAD_HOME_EVENT: &str = "velora-gamepad-home";
-pub(crate) const WM_INPUT_MESSAGE: u32 = 0x00ff;
-pub(crate) const WM_INPUT_DEVICE_CHANGE_MESSAGE: u32 = 0x00fe;
 pub(crate) const CHORD_WINDOW_MS: u64 = 250;
 pub(crate) const COMBO_COOLDOWN_MS: u64 = 750;
 pub(crate) const DEVICE_STALE_MS: u64 = 5_000;
@@ -120,7 +118,7 @@ pub(crate) fn is_dualsense_device_path(path: &str) -> bool {
 
 /// Windows exposes Bluetooth HID interfaces through BTHENUM/BTHLEDEVICE
 /// paths. Some paths only carry the HID-over-GATT service UUID instead.
-const BLUETOOTH_PATH_MARKERS: [&str; 5] = [
+pub(crate) const BLUETOOTH_PATH_MARKERS: [&str; 5] = [
     "bthenum",
     "bthled",
     "bluetooth",
@@ -699,7 +697,8 @@ const MAX_PATH_CACHE: usize = 32;
 
 #[cfg(target_os = "windows")]
 pub(crate) struct GamepadHomeRuntime {
-    window: native::Hwnd,
+    /// Reports the shared Raw Input sink (`pad_hub`) forwards while this runtime lives.
+    subscription: crate::pad_hub::RawSubscription,
     tracker: ComboTracker,
     bookkeeping: DeviceBookkeeping,
     device_paths: HashMap<usize, Option<String>>,
@@ -710,14 +709,13 @@ pub(crate) struct GamepadHomeRuntime {
 
 #[cfg(target_os = "windows")]
 impl GamepadHomeRuntime {
-    pub(crate) fn start() -> Result<Self, String> {
-        let window = native::create_message_window()?;
-        if let Err(error) = native::register_raw_input(window) {
-            native::destroy_message_window(window);
-            return Err(error);
-        }
+    /// Attaches to the process-wide Raw Input sink. The sink itself is owned by
+    /// `pad_hub` for the life of the app, so starting and stopping this runtime can
+    /// never remove another consumer's registration.
+    pub(crate) fn start(hub: &crate::pad_hub::PadHub) -> Result<Self, String> {
+        let subscription = hub.subscribe_raw()?;
         Ok(Self {
-            window,
+            subscription,
             tracker: ComboTracker::default(),
             bookkeeping: DeviceBookkeeping::default(),
             device_paths: HashMap::new(),
@@ -727,43 +725,40 @@ impl GamepadHomeRuntime {
         })
     }
 
-    pub(crate) fn handle_message(
-        &mut self,
-        app: &AppHandle,
-        message: u32,
-        w_param: usize,
-        l_param: isize,
-    ) -> bool {
-        if message == native::WM_INPUT {
-            let triggered = self.handle_raw_input(app, l_param);
-            native::def_window_proc(self.window, message, w_param, l_param);
-            return triggered;
+    /// Processes everything the sink forwarded since the last call. Returns true when
+    /// a Home chord fired.
+    pub(crate) fn drain(&mut self, app: &AppHandle) -> bool {
+        let mut triggered = false;
+        while let Ok(message) = self.subscription.receiver.try_recv() {
+            triggered |= match message {
+                crate::pad_hub::RawMessage::Reports(reports) => self.handle_reports(app, reports),
+                crate::pad_hub::RawMessage::DeviceChange { w_param, device } => {
+                    self.handle_device_change(w_param, device)
+                }
+            };
         }
-        if message == native::WM_INPUT_DEVICE_CHANGE {
-            let device = l_param as usize;
-            let at_ms = now_ms();
-            if w_param == native::GIDC_ARRIVAL {
-                // The next report must resolve the path again. Any chord
-                // state from the previous connection is stale.
-                self.device_paths.remove(&device);
-                if let Some(id) = self.bookkeeping.arrival(device, at_ms) {
-                    self.tracker.remove_device(&id);
-                }
-            } else if w_param == native::GIDC_REMOVAL {
-                self.device_paths.remove(&device);
-                if let Some(id) = self.bookkeeping.remove(device, at_ms) {
-                    self.tracker.remove_device(&id);
-                }
+        triggered
+    }
+
+    fn handle_device_change(&mut self, w_param: usize, device: usize) -> bool {
+        let at_ms = now_ms();
+        if w_param == native::GIDC_ARRIVAL {
+            // The next report must resolve the path again. Any chord
+            // state from the previous connection is stale.
+            self.device_paths.remove(&device);
+            if let Some(id) = self.bookkeeping.arrival(device, at_ms) {
+                self.tracker.remove_device(&id);
             }
-            return false;
+        } else if w_param == native::GIDC_REMOVAL {
+            self.device_paths.remove(&device);
+            if let Some(id) = self.bookkeeping.remove(device, at_ms) {
+                self.tracker.remove_device(&id);
+            }
         }
         false
     }
 
-    fn handle_raw_input(&mut self, app: &AppHandle, l_param: isize) -> bool {
-        let Some(reports) = native::read_raw_input(l_param) else {
-            return false;
-        };
+    fn handle_reports(&mut self, app: &AppHandle, reports: Vec<native::RawReport>) -> bool {
         let mut triggered = false;
         let at_ms = now_ms();
         for report in reports {
@@ -888,27 +883,19 @@ impl GamepadHomeRuntime {
 }
 
 #[cfg(target_os = "windows")]
-impl Drop for GamepadHomeRuntime {
-    fn drop(&mut self) {
-        native::unregister_raw_input();
-        native::destroy_message_window(self.window);
-    }
-}
-
-#[cfg(target_os = "windows")]
-mod native {
+pub(crate) mod native {
     use std::ffi::c_void;
     use std::mem::size_of;
     use std::ptr;
 
-    pub(super) type Hwnd = *mut c_void;
+    pub(crate) type Hwnd = *mut c_void;
     type Handle = *mut c_void;
     type HrawInput = *mut c_void;
 
-    pub(super) const WM_INPUT: u32 = 0x00ff;
-    pub(super) const WM_INPUT_DEVICE_CHANGE: u32 = 0x00fe;
-    pub(super) const GIDC_ARRIVAL: usize = 1;
-    pub(super) const GIDC_REMOVAL: usize = 2;
+    pub(crate) const WM_INPUT: u32 = 0x00ff;
+    pub(crate) const WM_INPUT_DEVICE_CHANGE: u32 = 0x00fe;
+    pub(crate) const GIDC_ARRIVAL: usize = 1;
+    pub(crate) const GIDC_REMOVAL: usize = 2;
 
     const HTYPE_HID: u32 = 2;
     const RID_INPUT: u32 = 0x1000_0003;
@@ -1018,7 +1005,7 @@ mod native {
         }
     }
 
-    pub(super) fn create_message_window() -> Result<Hwnd, String> {
+    pub(crate) fn create_message_window() -> Result<Hwnd, String> {
         let instance = unsafe { GetModuleHandleW(ptr::null()) };
         if instance.is_null() {
             return Err("Windows nie udostępnił modułu aplikacji.".into());
@@ -1072,17 +1059,17 @@ mod native {
         Ok(window)
     }
 
-    pub(super) fn destroy_message_window(window: Hwnd) {
+    pub(crate) fn destroy_message_window(window: Hwnd) {
         if !window.is_null() {
             unsafe { DestroyWindow(window) };
         }
     }
 
-    pub(super) fn def_window_proc(window: Hwnd, message: u32, w_param: usize, l_param: isize) {
+    pub(crate) fn def_window_proc(window: Hwnd, message: u32, w_param: usize, l_param: isize) {
         unsafe { DefWindowProcW(window, message, w_param, l_param) };
     }
 
-    pub(super) fn register_raw_input(window: Hwnd) -> Result<(), String> {
+    pub(crate) fn register_raw_input(window: Hwnd) -> Result<(), String> {
         let devices = [
             RawInputDevice {
                 usage_page: 0x01,
@@ -1112,7 +1099,7 @@ mod native {
         Ok(())
     }
 
-    pub(super) fn unregister_raw_input() {
+    pub(crate) fn unregister_raw_input() {
         let devices = [
             RawInputDevice {
                 usage_page: 0x01,
@@ -1136,12 +1123,13 @@ mod native {
         }
     }
 
-    pub(super) struct RawReport {
+    #[derive(Clone)]
+    pub(crate) struct RawReport {
         pub device: Option<usize>,
         pub data: Vec<u8>,
     }
 
-    pub(super) fn read_raw_input(input: isize) -> Option<Vec<RawReport>> {
+    pub(crate) fn read_raw_input(input: isize) -> Option<Vec<RawReport>> {
         let mut size = 0u32;
         let result = unsafe {
             GetRawInputData(
@@ -1205,7 +1193,7 @@ mod native {
         Some(reports)
     }
 
-    pub(super) fn device_path(device: usize) -> Option<String> {
+    pub(crate) fn device_path(device: usize) -> Option<String> {
         let mut size = 0u32;
         let first = unsafe {
             GetRawInputDeviceInfoW(
@@ -1234,6 +1222,138 @@ mod native {
             .trim_end_matches('\0')
             .to_string();
         (!value.is_empty()).then_some(value)
+    }
+
+    pub(crate) const WM_QUIT: u32 = 0x0012;
+    const RIDI_DEVICEINFO: u32 = 0x2000_000b;
+    const PM_REMOVE: u32 = 0x0001;
+    const QS_ALLINPUT: u32 = 0x04ff;
+
+    #[repr(C)]
+    struct RidDeviceInfo {
+        size: u32,
+        device_type: u32,
+        vendor: u32,
+        product: u32,
+        version: u32,
+        usage_page: u16,
+        usage: u16,
+        // The Win32 union is as large as its keyboard variant (24 bytes).
+        reserved: [u8; 8],
+    }
+
+    #[repr(C)]
+    struct Point {
+        x: i32,
+        y: i32,
+    }
+
+    #[repr(C)]
+    struct Msg {
+        window: Hwnd,
+        message: u32,
+        w_param: usize,
+        l_param: isize,
+        time: u32,
+        point: Point,
+        private: u32,
+    }
+
+    pub(crate) struct QueuedMessage {
+        pub window: Hwnd,
+        pub message: u32,
+        pub w_param: usize,
+        pub l_param: isize,
+    }
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn PeekMessageW(msg: *mut Msg, window: Hwnd, min: u32, max: u32, remove: u32) -> i32;
+        fn MsgWaitForMultipleObjectsEx(
+            count: u32,
+            handles: *const Handle,
+            milliseconds: u32,
+            wake_mask: u32,
+            flags: u32,
+        ) -> u32;
+        fn PostThreadMessageW(thread: u32, message: u32, w_param: usize, l_param: isize) -> i32;
+        fn GetForegroundWindow() -> Hwnd;
+        fn GetWindowThreadProcessId(window: Hwnd, process: *mut u32) -> u32;
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetCurrentThreadId() -> u32;
+        fn GetCurrentProcessId() -> u32;
+    }
+
+    /// Vendor and product id of a Raw Input device, from `RIDI_DEVICEINFO`. Only HID
+    /// devices have them; anything else is `None`.
+    pub(crate) fn device_ids(device: usize) -> Option<(u16, u16)> {
+        let mut info = RidDeviceInfo {
+            size: size_of::<RidDeviceInfo>() as u32,
+            device_type: 0,
+            vendor: 0,
+            product: 0,
+            version: 0,
+            usage_page: 0,
+            usage: 0,
+            reserved: [0; 8],
+        };
+        let mut size = info.size;
+        let copied = unsafe {
+            GetRawInputDeviceInfoW(
+                device as Handle,
+                RIDI_DEVICEINFO,
+                (&mut info as *mut RidDeviceInfo).cast(),
+                &mut size,
+            )
+        };
+        if copied == u32::MAX || info.device_type != HTYPE_HID {
+            return None;
+        }
+        Some((info.vendor as u16, info.product as u16))
+    }
+
+    pub(crate) fn current_thread_id() -> u32 {
+        unsafe { GetCurrentThreadId() }
+    }
+
+    /// Asks the pump thread `thread` to leave its loop.
+    pub(crate) fn post_quit(thread: u32) {
+        unsafe { PostThreadMessageW(thread, WM_QUIT, 0, 0) };
+    }
+
+    /// Blocks until a message is queued or `milliseconds` pass.
+    pub(crate) fn wait_for_messages(milliseconds: u32) {
+        unsafe { MsgWaitForMultipleObjectsEx(0, ptr::null(), milliseconds, QS_ALLINPUT, 0) };
+    }
+
+    pub(crate) fn next_message() -> Option<QueuedMessage> {
+        let mut msg = std::mem::MaybeUninit::<Msg>::zeroed();
+        let got = unsafe { PeekMessageW(msg.as_mut_ptr(), ptr::null_mut(), 0, 0, PM_REMOVE) };
+        if got == 0 {
+            return None;
+        }
+        let msg = unsafe { msg.assume_init() };
+        Some(QueuedMessage {
+            window: msg.window,
+            message: msg.message,
+            w_param: msg.w_param,
+            l_param: msg.l_param,
+        })
+    }
+
+    /// True when the foreground window belongs to this process. No handle is stored, so
+    /// this never depends on which window the app attached.
+    pub(crate) fn foreground_is_own_process() -> bool {
+        let window = unsafe { GetForegroundWindow() };
+        if window.is_null() {
+            return false;
+        }
+        let mut process = 0u32;
+        unsafe { GetWindowThreadProcessId(window, &mut process) };
+        process != 0 && process == unsafe { GetCurrentProcessId() }
     }
 }
 
