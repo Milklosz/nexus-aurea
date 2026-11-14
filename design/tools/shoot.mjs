@@ -1,5 +1,5 @@
 // Renders VELORA screens with headless Edge over the DevTools protocol (no extra dependencies).
-// Usage: node design/tools/shoot.mjs <url> <outDir> [--sizes 1920x1080,3840x2160] [--steps "name:key,key|name2:key"]
+// Usage: node design/tools/shoot.mjs <url> <outDir> [--sizes 1920x1080,3840x2160] [--steps "name:key,key|name2:key"] [--reduced-motion]
 //   Each step list entry presses the given keys (e.g. ArrowRight,ArrowRight,Enter) and then writes <outDir>/<name>-<w>x<h>.png.
 // Example: node design/tools/shoot.mjs http://127.0.0.1:1431/ design/screens --steps "home:|focus3:ArrowRight,ArrowRight,ArrowRight"
 import { spawn } from "node:child_process";
@@ -27,6 +27,7 @@ try {
   ws.addEventListener("message", (m) => { const d = JSON.parse(m.data); if (d.id && pending.has(d.id)) { pending.get(d.id)(d); pending.delete(d.id); } });
   const send = (method, params = {}) => new Promise((res, rej) => { const i = ++id; pending.set(i, (d) => d.error ? rej(new Error(d.error.message)) : res(d.result)); ws.send(JSON.stringify({ id: i, method, params })); });
   await send("Page.enable");
+  if (rest.includes("--reduced-motion")) await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
   const keyInfo = { ArrowRight: [39], ArrowLeft: [37], ArrowUp: [38], ArrowDown: [40], Enter: [13], Escape: [27], Backspace: [8], Tab: [9], F2: [113], F3: [114], " ": [32] };
   const press = async (key) => { const [code] = keyInfo[key] ?? [0]; const base = { key, code: key, windowsVirtualKeyCode: code, nativeVirtualKeyCode: code }; const text = key === "Enter" ? "\r" : key === " " ? " " : undefined; await send("Input.dispatchKeyEvent", text ? { type: "keyDown", text, ...base } : { type: "rawKeyDown", ...base }); await send("Input.dispatchKeyEvent", { type: "keyUp", ...base }); await sleep(450); };
   for (const [w, h] of sizes) {

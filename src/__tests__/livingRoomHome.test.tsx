@@ -63,7 +63,9 @@ describe("Living Room Home", () => {
     renderHome({ activeIndex: 2 });
     await settle();
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("HBO Max");
-    expect(document.querySelector(".lr-context")?.textContent).toBe("Filmy i seriale·Okno Edge Cinema");
+    expect(document.querySelector(".lr-context")?.textContent).toBe("Filmy i seriale");
+    // The engine that opens an app is a support detail, never Home copy.
+    expect(document.body.textContent).not.toMatch(/Edge Cinema|Big Picture/);
   });
 
   it("shows the Warsaw clock in 24-hour format and a weather reading when there is one", async () => {
@@ -162,6 +164,26 @@ describe("Living Room Home", () => {
     expect(remote.classList.contains("is-focused")).toBe(true);
     expect(remote.getAttribute("data-remembered")).toBe("true");
     expect(screen.getByRole("button", { name: "Szukaj aplikacji" }).hasAttribute("data-remembered")).toBe(false);
+  });
+
+  it("shows a pressed state for a short moment after a confirm, for keyboard, gamepad and remote alike", async () => {
+    const { props } = renderHome({ activeIndex: 3 });
+    await settle();
+    const tile = screen.getByRole("button", { name: "Otwórz Prime Video" });
+    expect(tile.classList.contains("is-pressed")).toBe(false);
+    fireEvent.click(tile);
+    expect(tile.classList.contains("is-pressed")).toBe(true);
+    expect(props.onActivate).toHaveBeenCalledWith(3);
+    act(() => { vi.advanceTimersByTime(200); });
+    expect(tile.classList.contains("is-pressed")).toBe(false);
+  });
+
+  it("does not present the dock apps as toggles (aria-current marks the selected one)", async () => {
+    renderHome({ activeIndex: 2 });
+    await settle();
+    const tiles = screen.getAllByRole("button").filter((button) => button.hasAttribute("data-aurea-item"));
+    expect(tiles.every((tile) => !tile.hasAttribute("aria-pressed"))).toBe(true);
+    expect(tiles.filter((tile) => tile.getAttribute("aria-current") === "true")).toHaveLength(1);
   });
 
   it("keeps the old Home chrome out of the new Home", async () => {

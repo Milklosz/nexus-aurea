@@ -3,19 +3,21 @@ import type { StreamingService } from "../../data/streamingServices";
 /**
  * Presentation data for the Living Room Home. Everything here is text and colour:
  * the dock never draws third-party logos, only the service name set in the system
- * font with one accented part (see DESIGN_SPEC.md §5.5).
+ * font (see DESIGN_SPEC.md §5.5). One rule for every name:
+ *  - a one-word name is set whole, in the accent colour, at 600;
+ *  - a two-part name has the brand part in ink at 600 and the product part in the accent at 400.
  */
 export interface WordmarkPart {
   text: string;
   /** Carries the service accent colour. */
   accent?: boolean;
-  /** Light (350) weight. */
+  /** Regular (400) weight: the product part of a two-part name. */
   light?: boolean;
 }
 
 export interface ServicePresentation {
+  /** The short, natural line under the selected app's name. */
   category: string;
-  launchMode: string;
   wordmark: readonly WordmarkPart[];
   /** Accent on the dark idle plate. */
   accent: string;
@@ -26,57 +28,49 @@ export interface ServicePresentation {
 export const SERVICE_PRESENTATION: Readonly<Record<StreamingService["id"], ServicePresentation>> = {
   netflix: {
     category: "Filmy i seriale",
-    launchMode: "Okno Edge Cinema",
     wordmark: [{ text: "Netflix", accent: true }],
     accent: "#F0484E",
     accentOnLight: "#C8161E",
   },
   disney: {
     category: "Filmy, seriale i animacje",
-    launchMode: "Okno Edge Cinema",
     wordmark: [{ text: "Disney" }, { text: "+", accent: true, light: true }],
     accent: "#7AA6FF",
     accentOnLight: "#1F54C9",
   },
   max: {
     category: "Filmy i seriale",
-    launchMode: "Okno Edge Cinema",
     wordmark: [{ text: "HBO " }, { text: "Max", accent: true, light: true }],
     accent: "#9A9AFF",
     accentOnLight: "#4338CA",
   },
   prime: {
     category: "Filmy, seriale i sport",
-    launchMode: "Okno Edge Cinema",
-    wordmark: [{ text: "prime " }, { text: "video", accent: true, light: true }],
+    wordmark: [{ text: "Prime " }, { text: "Video", accent: true, light: true }],
     accent: "#5CC8F2",
     accentOnLight: "#0B6E99",
   },
   youtube: {
     category: "Wideo",
-    launchMode: "Okno Edge Cinema",
-    wordmark: [{ text: "You", light: true }, { text: "Tube", accent: true }],
-    accent: "#FF5D52",
-    accentOnLight: "#CC1A10",
+    wordmark: [{ text: "YouTube", accent: true }],
+    accent: "#FF7A45",
+    accentOnLight: "#B8360E",
   },
   steam: {
     category: "Gry",
-    launchMode: "Steam Big Picture",
     wordmark: [{ text: "Steam", accent: true }],
     accent: "#9CCDF0",
     accentOnLight: "#1D5E8C",
   },
   playnite: {
     category: "Biblioteka gier",
-    launchMode: "Pełny ekran Playnite",
-    wordmark: [{ text: "Play" }, { text: "nite", accent: true }],
+    wordmark: [{ text: "Playnite", accent: true }],
     accent: "#C6A8FF",
     accentOnLight: "#6B3FD0",
   },
   appleMusic: {
     category: "Muzyka",
-    launchMode: "Aplikacja Windows",
-    wordmark: [{ text: "Apple", light: true }, { text: " " }, { text: "Music", accent: true }],
+    wordmark: [{ text: "Apple " }, { text: "Music", accent: true, light: true }],
     accent: "#FF7088",
     accentOnLight: "#C41E44",
   },
@@ -91,7 +85,7 @@ export function focusContext(service: StreamingService, state: DockServiceState)
     const parts = ["Nie wykryto instalacji", "wybierz, aby zobaczyć pomoc"];
     return { text: parts.join(" · "), parts };
   }
-  const presentation = SERVICE_PRESENTATION[service.id];
-  const parts = [presentation.category, presentation.launchMode];
+  // Which engine opens the app is a support detail and is never shown on Home.
+  const parts = [SERVICE_PRESENTATION[service.id].category];
   return { text: parts.join(" · "), parts };
 }

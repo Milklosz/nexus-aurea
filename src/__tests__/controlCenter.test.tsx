@@ -62,6 +62,7 @@ function renderCenter(overrides: Partial<{
   onReturnToNexus: () => void;
   onOpenDiagnostics: () => void;
   onClose: () => void;
+  livingRoom: boolean;
 }> = {}) {
   return render(<ControlCenter
     profile={overrides.profile ?? "cinema"}
@@ -74,6 +75,7 @@ function renderCenter(overrides: Partial<{
     onOpenDiagnostics={overrides.onOpenDiagnostics ?? vi.fn()}
     onReturnToNexus={overrides.onReturnToNexus ?? vi.fn()}
     onClose={overrides.onClose ?? vi.fn()}
+    livingRoom={overrides.livingRoom}
   />);
 }
 
@@ -149,6 +151,24 @@ describe("Control Center", () => {
     fireEvent.click(screen.getByRole("button", { name: "Wróć do VELORA" }));
     expect(showDesktop).toHaveBeenCalledOnce();
     expect(returnToNexus).toHaveBeenCalledOnce();
+  });
+
+  it("in the Living Room theme groups the exit actions and renames them without changing what they do", async () => {
+    setupDialog();
+    const showDesktop = vi.fn();
+    const returnToNexus = vi.fn();
+    const diagnostics = vi.fn();
+    renderCenter({ livingRoom: true, onShowDesktop: showDesktop, onReturnToNexus: returnToNexus, onOpenDiagnostics: diagnostics });
+    const exit = screen.getByRole("group", { name: "Wyjście" });
+    expect(Array.from(exit.querySelectorAll("button")).map((button) => button.textContent)).toEqual(["Pulpit Windows", "Ekran główny"]);
+    expect(Array.from(screen.getByRole("group", { name: "Pomoc" }).querySelectorAll("button")).map((button) => button.textContent)).toEqual(["Diagnostyka"]);
+    fireEvent.click(screen.getByRole("button", { name: "Pulpit Windows" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ekran główny" }));
+    fireEvent.click(screen.getByRole("button", { name: "Diagnostyka" }));
+    expect(showDesktop).toHaveBeenCalledOnce();
+    expect(returnToNexus).toHaveBeenCalledOnce();
+    expect(diagnostics).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Wróć do VELORA" })).toBeNull();
   });
 
   it("includes the Gaming Hub and keeps the LAN server off until trust is confirmed", async () => {

@@ -19,20 +19,24 @@
 .lr-scenes { position: absolute; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
 .lr-scene {
   position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block;
-  opacity: 0; transform: scale(1.03);
-  transition: opacity var(--lr-t-scene) var(--lr-ease-std), transform var(--lr-t-scene-settle) var(--lr-ease-out);
-  will-change: opacity, transform;
+  opacity: 0; transform: scale(1.02); z-index: 0;
 }
-.lr-scene.is-on { opacity: 1; transform: scale(1); }
+/* the outgoing scene: fully opaque and still, underneath */
+.lr-scene.is-prev { opacity: 1; transform: none; z-index: 1; }
+/* the incoming scene: the only one that animates (opacity, plus a small settle) */
+.lr-scene.is-on {
+  opacity: 1; transform: scale(1); z-index: 2; will-change: opacity, transform;
+  transition: opacity var(--lr-t-scene) var(--lr-ease-std), transform var(--lr-t-scene-settle) var(--lr-ease-out);
+}
 .lr-scrim {
-  position: absolute; inset: 0;
+  position: absolute; inset: 0; z-index: 3;
   background:
     linear-gradient(90deg, rgba(4, 4, 5, .66) 0%, rgba(4, 4, 5, .3) 36%, rgba(4, 4, 5, 0) 60%),
     linear-gradient(0deg, rgba(4, 4, 5, .88) 0%, rgba(4, 4, 5, .5) 24%, rgba(4, 4, 5, 0) 50%),
     linear-gradient(180deg, rgba(4, 4, 5, .5) 0%, rgba(4, 4, 5, 0) 20%);
 }
 .lr-grain {
-  position: absolute; inset: 0; opacity: .07;
+  position: absolute; inset: 0; opacity: .07; z-index: 4;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   background-size: calc(var(--lr-px) * 220) calc(var(--lr-px) * 220);
 }
@@ -54,7 +58,7 @@
   display: flex; align-items: center; gap: var(--lr-s12);
   border: 0; border-radius: var(--lr-r-pill); background: var(--lr-action-bg); color: var(--lr-ink-2);
   font: 500 var(--lr-fs-label) / 1 var(--lr-font); cursor: pointer;
-  transition: transform var(--lr-t-focus) var(--lr-ease-out), background-color var(--lr-t-surface) linear;
+  transition: transform var(--lr-t-focus) var(--lr-ease-out);
 }
 .lr-action svg { width: var(--lr-s24); height: var(--lr-s24); fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .lr-action:focus { outline: none; }
@@ -73,49 +77,61 @@
 .lr-info.is-in-l, .lr-info.is-in-r { opacity: 0; transition: none; }
 .lr-info.is-in-l { transform: translateX(calc(var(--lr-px) * -24)); }
 .lr-info.is-in-r { transform: translateX(calc(var(--lr-px) * 24)); }
-.lr-title { margin: 0; font-size: var(--lr-fs-title); line-height: 1; font-weight: 600; letter-spacing: -.025em; }
-.lr-context { margin: calc(var(--lr-px) * 18) 0 0; font-size: var(--lr-fs-context); line-height: calc(var(--lr-px) * 34); color: var(--lr-ink-2); }
+.lr-title { margin: 0; font-size: var(--lr-fs-title); line-height: 1; font-weight: 600; letter-spacing: -.03em; }
+.lr-context { margin: calc(var(--lr-px) * 16) 0 0; font-size: var(--lr-fs-context); line-height: calc(var(--lr-px) * 34); color: var(--lr-ink-2); }
 .lr-sep { margin: 0 calc(var(--lr-px) * 10); opacity: .5; }
 
 /* ---------- dock ---------- */
 .lr-dock {
   position: absolute; z-index: 1;
   left: var(--lr-safe-x); bottom: var(--lr-safe-bottom);
-  display: flex; gap: var(--lr-s20);
+  display: flex; gap: var(--lr-dock-gap);
 }
+/* One tile, three unambiguous states:
+ *   idle      dark plate + hairline
+ *   selected  (focus is elsewhere) a lighter plate and a short underline
+ *   focused   the light plate, lifted; the only state with a shadow
+ *   pressed   (a confirm, 140 ms) the lifted plate pushed back down a little
+ * The light plate is a ::before that only fades (opacity), so no colour ever animates and nothing is rasterised twice. */
 .lr-tile {
-  position: relative; width: var(--lr-tile-w); height: var(--lr-tile-h); padding: 0;
+  position: relative; isolation: isolate; width: var(--lr-tile-w); height: var(--lr-tile-h); padding: 0;
   display: grid; place-items: center;
   border: 0; border-radius: var(--lr-r-tile); background: var(--lr-plate);
-  box-shadow: inset 0 0 0 1px var(--lr-plate-line);
+  box-shadow: inset 0 0 0 var(--lr-hair) var(--lr-plate-line);
   color: var(--lr-ink); font: inherit; cursor: pointer;
-  transition: transform var(--lr-t-focus) var(--lr-ease-out), background-color var(--lr-t-surface) linear;
-  will-change: transform;
+  transition: transform var(--lr-t-focus) var(--lr-ease-out);
 }
-.lr-tile::after {
-  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
-  box-shadow: var(--lr-shadow-focus); opacity: 0; transition: opacity var(--lr-t-focus) linear;
+.lr-tile::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
+  background: var(--lr-focus-bg); box-shadow: var(--lr-shadow-focus);
+  opacity: 0; transition: opacity var(--lr-t-surface) linear;
 }
 .lr-tile:focus { outline: none; }
-/* selected = remembered while focus is elsewhere: same plate, a short underline (the same mark as the selected tab) */
-.lr-tile.is-selected::before {
-  content: ""; position: absolute; left: 50%; bottom: var(--lr-s8); width: var(--lr-s32); height: var(--lr-s4);
+/* the first and last tile grow inward, so a focused edge tile never crosses the 96 px safe margin */
+.lr-tile:first-child { transform-origin: left center; }
+.lr-tile:last-child { transform-origin: right center; }
+.lr-tile.is-selected { background: var(--lr-plate-sel); }
+.lr-tile.is-selected::after {
+  content: ""; position: absolute; left: 50%; bottom: calc(var(--lr-px) * 10); width: calc(var(--lr-px) * 40); height: var(--lr-s4);
   border-radius: var(--lr-s4); background: var(--lr-ink); transform: translateX(-50%);
 }
-.lr-tile.is-focused { transform: var(--lr-lift); background: var(--lr-focus-bg); box-shadow: none; z-index: 2; }
-.lr-tile.is-focused::after { opacity: 1; }
-.lr-tile:active { transform: translateY(calc(var(--lr-px) * -4)) scale(1.04); transition-duration: var(--lr-t-press); }
+.lr-tile.is-focused { transform: var(--lr-lift); z-index: 2; }
+.lr-tile.is-focused::before { opacity: 1; }
+.lr-tile.is-pressed, .lr-tile:active { transform: var(--lr-press); transition-duration: var(--lr-t-press); }
+.lr-tile.is-pressed::before, .lr-tile:active::before { opacity: .9; }
 
 .lr-wordmark { font-size: var(--lr-fs-wordmark); font-weight: 600; letter-spacing: -.012em; white-space: nowrap; color: var(--lr-ink); }
 .lr-wordmark i { font-style: normal; }
-.lr-wordmark .l { font-weight: 350; }
+.lr-wordmark .l { font-weight: 400; }
 .lr-wordmark .a { color: var(--acc); }
-.lr-tile.is-focused .lr-wordmark { color: var(--lr-focus-ink); }
+/* dark type on a light plate looks thinner than light on dark: the focused plate compensates with a touch more weight */
+.lr-tile.is-focused .lr-wordmark { color: var(--lr-focus-ink); font-weight: 650; }
+.lr-tile.is-focused .lr-wordmark .l { font-weight: 450; }
 .lr-tile.is-focused .lr-wordmark .a { color: var(--acc-light); }
 
-/* not installed: dimmed but still focusable, never skipped */
-.lr-tile.is-missing .lr-wordmark { opacity: .42; }
-.lr-tile.is-missing.is-focused .lr-wordmark { opacity: .5; }
+/* not installed: dimmed but still focusable, never skipped (>= 3:1 on the plate; the context line carries the message) */
+.lr-tile.is-missing .lr-wordmark { opacity: .62; }
+.lr-tile.is-missing.is-focused .lr-wordmark { opacity: .7; }
 
 /* launching: indeterminate sweep (the launcher reports no real progress, so none is faked) */
 .lr-bar {
@@ -146,7 +162,7 @@
 .lr .music-mini-player button {
   width: calc(var(--lr-px) * 64); height: calc(var(--lr-px) * 48); border: 0; border-radius: var(--lr-r-pill);
   background: var(--lr-action-bg); color: var(--lr-ink); font-size: var(--lr-fs-label);
-  transition: transform var(--lr-t-focus) var(--lr-ease-out), background-color var(--lr-t-surface) linear;
+  transition: transform var(--lr-t-focus) var(--lr-ease-out);
 }
 .lr .music-mini-player button:focus { outline: none; background: var(--lr-focus-bg); color: var(--lr-focus-ink); transform: scale(1.06); }
 
@@ -161,8 +177,10 @@
 
 /* ---------- reduced motion: focus is a surface swap only, no travel, short fades ---------- */
 @media (prefers-reduced-motion: reduce) {
-  .lr-scene, .lr-scene.is-on { transform: none; transition: opacity 120ms linear; }
-  .lr-tile.is-focused, .lr-tile:active, .lr-action.is-focused, .lr-action:active { transform: none; }
+  .lr-scene, .lr-scene.is-on { transform: none; transition: none; }
+  .lr-scene.is-on { transition: opacity 120ms linear; will-change: auto; }
+  .lr-tile.is-focused, .lr-tile.is-pressed, .lr-tile:active, .lr-action.is-focused, .lr-action:active { transform: none; }
+  .lr-tile, .lr-tile::before { transition-duration: 1ms; }
   .lr-info, .lr-info.is-out-l, .lr-info.is-out-r, .lr-info.is-in-l, .lr-info.is-in-r { transform: none; }
   .lr-tile.is-launching .lr-bar::after { animation: none; transform: translateX(0); }
   .lr .toast, .lr .toast.show { transform: translate(-50%, 0); }

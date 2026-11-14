@@ -14,7 +14,7 @@
   --lr-bg: #050506;
   --lr-plate: rgba(12, 12, 14, .64);
   --lr-plate-line: rgba(255, 255, 255, .12);
-  --lr-plate-sel: rgba(243, 240, 234, .18);
+  --lr-plate-sel: rgba(243, 240, 234, .24);
   --lr-action-bg: rgba(255, 255, 255, .09);
   --lr-sheet-bg: #0d0d0f;
   --lr-sheet-raised: #17171a;
@@ -51,6 +51,9 @@
   --lr-s72: calc(var(--lr-px) * 72);
   --lr-s96: calc(var(--lr-px) * 96);
 
+  /* hairline: one reference px, so it keeps its weight at 4K */
+  --lr-hair: calc(var(--lr-px) * 1);
+
   /* ---- safe area for TV overscan ---- */
   --lr-safe-x: var(--lr-s96);
   --lr-safe-top: var(--lr-s64);
@@ -59,14 +62,14 @@
   /* ---- type ---- */
   --lr-font: "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --lr-fs-title: calc(var(--lr-px) * 72);
-  --lr-fs-clock: calc(var(--lr-px) * 44);
-  --lr-fs-wordmark: calc(var(--lr-px) * 26);
-  --lr-fs-context: calc(var(--lr-px) * 26);
-  --lr-fs-weather: calc(var(--lr-px) * 24);
+  --lr-fs-clock: calc(var(--lr-px) * 40);
+  --lr-fs-wordmark: calc(var(--lr-px) * 28);
+  --lr-fs-context: calc(var(--lr-px) * 28);
+  --lr-fs-weather: calc(var(--lr-px) * 22);
   --lr-fs-sheet-title: calc(var(--lr-px) * 40);
   --lr-fs-row: calc(var(--lr-px) * 26);
   --lr-fs-label: calc(var(--lr-px) * 22);
-  --lr-fs-small: calc(var(--lr-px) * 20); /* the floor */
+  --lr-fs-small: calc(var(--lr-px) * 22); /* the floor */
 
   /* ---- radii ---- */
   --lr-r-tile: calc(var(--lr-px) * 14);
@@ -77,9 +80,11 @@
   --lr-shadow-focus: 0 calc(var(--lr-px) * 18) calc(var(--lr-px) * 36) rgba(0, 0, 0, .55);
 
   /* ---- component sizes ---- */
-  --lr-tile-w: calc(var(--lr-px) * 176);
+  /* 8 tiles + 7 gaps = 8 * 195 + 7 * 24 = 1728 = the content width between the 96 px safe margins, so the dock ends where the top actions end */
+  --lr-tile-w: calc(var(--lr-px) * 195);
   --lr-tile-h: calc(var(--lr-px) * 100);
-  --lr-action-h: calc(var(--lr-px) * 56);
+  --lr-dock-gap: var(--lr-s24);
+  --lr-action-h: calc(var(--lr-px) * 52);
 
   /* ---- motion: only transform and opacity ever animate ---- */
   --lr-ease-out: cubic-bezier(.2, .8, .2, 1);
@@ -89,13 +94,14 @@
   --lr-t-press: 90ms;
   --lr-t-title-out: 110ms;
   --lr-t-title-in: 240ms;
-  --lr-t-scene: 700ms;
-  --lr-t-scene-settle: 1400ms;
+  --lr-t-scene: 600ms;
+  --lr-t-scene-settle: 1200ms;
   --lr-t-sheet: 320ms;
   --lr-t-toast: 240ms;
 
   /* ---- focus lift (tile) ---- */
-  --lr-lift: translateY(calc(var(--lr-px) * -8)) scale(1.08);
+  --lr-lift: translateY(calc(var(--lr-px) * -6)) scale(1.06);
+  --lr-press: translateY(calc(var(--lr-px) * -3)) scale(1.03);
 }
 
 /* Control Center, diagnostics and the on-screen keyboard are rem-based. Scale the root with the canvas so they stay readable at 4K
