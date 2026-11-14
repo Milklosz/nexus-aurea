@@ -39,7 +39,10 @@
   animation: lr-sheet-in var(--lr-t-sheet) var(--lr-ease-out) both;
 }
 @keyframes lr-sheet-in { from { transform: translateX(100%); } to { transform: none; } }
-.lr .control-center::backdrop { background: rgba(0, 0, 0, .62); }
+.lr .control-center::backdrop { background: rgba(0, 0, 0, .62); animation: lr-backdrop-in var(--lr-t-sheet) linear both; }
+@keyframes lr-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+/* buttons do not inherit the page font by default: say so, or tabs, search rows and keys fall back to Arial */
+.lr .control-center :is(button, input, select), .lr .virtual-keyboard :is(button, input), .lr .diagnostics :is(button, input) { font-family: var(--lr-font); }
 .lr .cc-card-grid, .lr .cc-gaming-card .gaming-hub, .lr .cc-system-status, .lr .remote-access-status { grid-template-columns: minmax(0, 1fr); }
 .lr .cc-card-wide { grid-column: auto; }
 .lr .cc-card, .lr .cc-gaming-panel, .lr .cc-remote-panel, .lr .cc-remote-card { width: 100%; max-width: none; margin-inline: 0; }
@@ -51,7 +54,7 @@
   margin: 0; font: 600 var(--lr-fs-sheet-title) / 1.15 var(--lr-font); letter-spacing: -.02em; color: var(--lr-ink);
 }
 .lr .control-center-header p { display: none; } /* repeats the heading */
-.lr .cc-tabs { padding: 0; border: 0; background: none; gap: var(--lr-s12); }
+.lr .cc-tabs { padding: 0; border: 0; background: none; gap: var(--lr-s12); margin-left: calc(var(--lr-s32) * -1); } /* the label text, not the pill, aligns with the title */
 .lr .cc-tabs button {
   position: relative; min-width: 0; min-height: var(--lr-action-h); padding: 0 var(--lr-s32); border: 0; border-radius: var(--lr-r-pill);
   background: none; color: var(--lr-ink-2); font-size: var(--lr-fs-row); font-weight: 500;
@@ -63,7 +66,7 @@
 }
 .lr .cc-tabs button[aria-selected="true"]:focus::after, .lr .cc-tabs button[aria-selected="true"]:focus-visible::after { background: var(--lr-focus-ink); }
 .lr .cc-card {
-  border: 0; border-radius: var(--lr-r-row); background: var(--lr-sheet-raised); box-shadow: none;
+  border: 0; border-radius: var(--lr-r-row); background: var(--lr-sheet-raised); box-shadow: none; padding: var(--lr-s24) var(--lr-s24) var(--lr-s20);
 }
 .lr .cc-card-index { display: none; }
 .lr .cc-card-heading h3 { font: 600 var(--lr-fs-row) / 1.2 var(--lr-font); color: var(--lr-ink); }
@@ -74,12 +77,19 @@
 .lr .cc-card button, .lr .cc-footer button, .lr .control-center .cc-close {
   border: 0; border-radius: var(--lr-r-pill); background: var(--lr-action-bg); color: var(--lr-ink);
   box-shadow: none; font-size: var(--lr-fs-label); font-weight: 500;
-  transition: transform var(--lr-t-focus) var(--lr-ease-out), background-color var(--lr-t-surface) linear;
+  transition: transform var(--lr-t-focus) var(--lr-ease-out);
 }
-.lr .cc-card button, .lr .cc-footer button { min-height: var(--lr-action-h); }
+.lr .cc-card button, .lr .cc-footer button { min-height: var(--lr-action-h); padding: 0 var(--lr-s24); }
 .lr .cc-card button:hover:not(:disabled), .lr .cc-footer button:hover { background: var(--lr-action-bg); transform: none; border: 0; }
-.lr .control-center .cc-card button[aria-pressed="true"] { color: var(--lr-ink); font-weight: 600; box-shadow: none; }
-.lr .control-center .cc-card button[aria-pressed="true"]::before { content: "✓"; margin-right: var(--lr-s8); }
+.lr .control-center .cc-card button[aria-pressed="true"] { background: var(--lr-plate-sel); border: 0; color: var(--lr-ink); font-weight: 600; box-shadow: none; }
+.lr .control-center .cc-card button[aria-pressed="true"]:focus, .lr .control-center .cc-card button[aria-pressed="true"]:focus-visible { background: var(--lr-focus-bg); color: var(--lr-focus-ink); }
+/* the check mark is drawn, not a font glyph (which falls back to a different face) */
+.lr .control-center .cc-card button[aria-pressed="true"]::before, .lr .profile-active::before {
+  content: ""; display: inline-block; vertical-align: -.12em; width: calc(var(--lr-px) * 20); height: calc(var(--lr-px) * 20); margin-right: var(--lr-s8);
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M4 10.5l4 4 8-9' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M4 10.5l4 4 8-9' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+}
 .lr .cc-footer button:last-child { background: var(--lr-action-bg); color: var(--lr-ink); border: 0; }
 .lr .control-center button:focus-visible,
 .lr .control-center button:focus,
@@ -89,12 +99,20 @@
 .lr .cc-panel:focus-visible { outline: none; }
 .lr .control-center .cc-close { width: var(--lr-action-h); height: var(--lr-action-h); font-size: calc(var(--lr-px) * 36); line-height: 1; padding: 0; background: var(--lr-action-bg); color: var(--lr-ink-2); }
 .lr .cc-footer { border-top-color: var(--lr-sheet-line); }
-.lr .cc-footer-hint { color: var(--lr-ink-3); font-size: var(--lr-fs-small); }
+.lr .cc-footer-hint { display: inline-flex; align-items: center; gap: var(--lr-s8); color: var(--lr-ink-3); font-size: var(--lr-fs-small); }
+.lr .cc-footer-hint svg { width: calc(var(--lr-px) * 24); height: calc(var(--lr-px) * 24); fill: none; stroke: currentColor; stroke-width: 1.8; }
+/* footer: leaving Home (Pulpit Windows, Ekran główny) is one group; support (Diagnostyka) is a quieter one beside it */
+.lr .cc-footer-actions { display: flex; align-items: center; gap: var(--lr-s40); }
+.lr .cc-search-panel .cc-card-heading h3 { display: none; } /* repeats the tab name */
+.lr .cc-footer-group { display: flex; gap: var(--lr-s12); }
+.lr .cc-footer .cc-footer-group-help button:not(:focus):not(:focus-visible) { background: none; color: var(--lr-ink-2); }
 .lr .cc-status-dot { box-shadow: none; }
 .lr .cc-feedback { border: 0; background: rgba(156, 207, 156, .12); color: var(--lr-ok) !important; }
 .lr .cc-error { border: 0; background: rgba(240, 135, 122, .12); color: var(--lr-danger) !important; }
 .lr .remote-pairing-code { border: 0; background: var(--lr-action-bg); color: var(--lr-ink); }
-.lr .remote-access-status li { border: 0; background: var(--lr-action-bg); }
+/* status rows are not buttons: no fill, only a hairline between them */
+.lr .remote-access-status li { border: 0; border-radius: 0; background: none; border-bottom: var(--lr-hair) solid var(--lr-sheet-line); }
+.lr .remote-access-status li:last-child { border-bottom: 0; }
 .lr .remote-device-row { border: 0; background: var(--lr-action-bg); }
 .lr .gaming-launcher, .lr .gaming-game-row, .lr .managed-app-row { border: 0; background: var(--lr-action-bg); }
 .lr .gaming-hub-guidance, .lr .gaming-platform-guidance { border: 0; background: var(--lr-action-bg); }
@@ -122,11 +140,12 @@
 .lr .app-search-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; } /* still announced to screen readers */
 .lr .app-search-results { grid-template-columns: minmax(0, 1fr); }
 .lr .app-search-results button small { display: none; }
-.lr .app-search-results button { min-height: var(--lr-s56); font-size: var(--lr-fs-row); }
+.lr .app-search-results { gap: var(--lr-s8); margin-top: var(--lr-s12); }
+.lr .app-search-results button { min-height: var(--lr-s56); display: flex; align-items: center; justify-content: flex-start; font-size: var(--lr-fs-row); }
 .lr .app-search-input:focus-visible { outline: none; background: var(--lr-focus-bg); color: var(--lr-focus-ink); }
 .lr .app-search-results button, .lr .virtual-keyboard-key {
   border: 0; border-radius: var(--lr-r-row); background: var(--lr-action-bg); color: var(--lr-ink); box-shadow: none;
-  transition: transform var(--lr-t-focus) var(--lr-ease-out), background-color var(--lr-t-surface) linear;
+  transition: transform var(--lr-t-focus) var(--lr-ease-out);
 }
 .lr .app-search-results button:focus-visible,
 .lr .virtual-keyboard-key[data-focused],
@@ -144,7 +163,6 @@
 }
 .lr .diagnostics button:focus-visible, .lr .diagnostics button:focus { outline: none; background: var(--lr-focus-bg); color: var(--lr-focus-ink); }
 .lr .profile-active { border: 0 !important; color: var(--lr-ink); font-weight: 600; }
-.lr .profile-active::before { content: "✓"; margin-right: var(--lr-s8); }
 .lr .pad-values span { border-color: var(--lr-sheet-line); }
 .lr .pad-values [data-pressed="true"] { background: var(--lr-focus-bg); color: var(--lr-focus-ink); }
 .lr .launcher-panel, .lr .control-service, .lr .cinema-panel, .lr .app-manager, .lr .music-panel, .lr .system-audio { border-top-color: var(--lr-sheet-line); }

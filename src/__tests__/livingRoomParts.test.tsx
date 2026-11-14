@@ -2,7 +2,7 @@
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FocusInfo } from "../components/living-room/FocusInfo";
-import { SCENE_DEBOUNCE_MS, SceneLayer } from "../components/living-room/SceneLayer";
+import { SCENE_DEBOUNCE_MS, SCENE_FADE_MS, SceneLayer } from "../components/living-room/SceneLayer";
 import { streamingServices } from "../data/streamingServices";
 import { focusContext, SERVICE_PRESENTATION } from "../theme/living-room/content";
 import { SCENE_URLS } from "../theme/living-room/sceneAssets";
@@ -45,14 +45,47 @@ describe("service presentation", () => {
     expect(flat("netflix")).toBe("Netflix");
     expect(flat("disney")).toBe("Disney+");
     expect(flat("max")).toBe("HBO Max");
-    expect(flat("prime")).toBe("prime video");
+    expect(flat("prime")).toBe("Prime Video");
     expect(flat("youtube")).toBe("YouTube");
     expect(flat("appleMusic")).toBe("Apple Music");
   });
 
+  it("never puts the launch engine on Home: a ready app shows only its category", () => {
+    for (const service of streamingServices) {
+      const { text } = focusContext(service, "ready");
+      expect(text, service.id).toBe(SERVICE_PRESENTATION[service.id].category);
+      expect(text, service.id).not.toMatch(/Edge|Cinema|Big Picture|Okno|Aplikacja Windows|Pełny ekran/);
+    }
+  });
+
+  it("sets every wordmark by one rule: one word is whole and accented, two parts are brand in ink then product in the accent", () => {
+    for (const service of streamingServices) {
+      const parts = SERVICE_PRESENTATION[service.id].wordmark;
+      if (parts.length === 1) {
+        expect(parts[0].accent, `${service.id} one-word name is accented`).toBe(true);
+        expect(parts[0].light, `${service.id} one-word name is not light`).toBeFalsy();
+      } else {
+        expect(parts, service.id).toHaveLength(2);
+        expect(parts[0].accent, `${service.id} brand part stays in ink`).toBeFalsy();
+        expect(parts[1].accent && parts[1].light, `${service.id} product part is accented and regular`).toBe(true);
+      }
+    }
+  });
+
+  it("keeps the YouTube accent clearly apart in hue from the Netflix accent", () => {
+    const hue = (hex: string) => {
+      const [r, g, b] = [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16) / 255);
+      const max = Math.max(r, g, b); const min = Math.min(r, g, b); const d = max - min;
+      const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+      return (h * 60 + 360) % 360;
+    };
+    const apart = Math.abs(hue(SERVICE_PRESENTATION.youtube.accent) - hue(SERVICE_PRESENTATION.netflix.accent));
+    expect(Math.min(apart, 360 - apart)).toBeGreaterThanOrEqual(15);
+  });
+
   it("describes ready, launching and missing states in the context line", () => {
     const steam = streamingServices.find((service) => service.id === "steam")!;
-    expect(focusContext(steam, "ready").text).toBe("Gry · Steam Big Picture");
+    expect(focusContext(steam, "ready").text).toBe("Gry");
     expect(focusContext(steam, "launching").text).toBe("Otwieranie…");
     expect(focusContext(steam, "missing").text).toBe("Nie wykryto instalacji · wybierz, aby zobaczyć pomoc");
   });
@@ -84,6 +117,35 @@ describe("SceneLayer", () => {
     expect(images()[1].getAttribute("src")).toBe(SCENE_URLS.prime);
     expect(images()[1].classList.contains("is-on")).toBe(true);
     expect(images()[0].classList.contains("is-on")).toBe(false);
+  });
+
+  it("keeps the old scene opaque underneath while the new one fades in, then releases it", () => {
+    const { container, rerender } = render(<SceneLayer sceneId="netflix" />);
+    const images = () => Array.from(container.querySelectorAll<HTMLImageElement>("img.lr-scene"));
+    rerender(<SceneLayer sceneId="prime" />);
+    act(() => { vi.advanceTimersByTime(SCENE_DEBOUNCE_MS + 80); });
+    expect(images()[1].classList.contains("is-on")).toBe(true);
+    expect(images()[0].classList.contains("is-prev")).toBe(true);
+    act(() => { vi.advanceTimersByTime(SCENE_FADE_MS + 100); });
+    expect(images()[0].classList.contains("is-prev")).toBe(false);
+    expect(images()[0].classList.contains("is-on")).toBe(false);
+  });
+
+  it("never starts a second crossfade before the first one has finished", () => {
+    const { container, rerender } = render(<SceneLayer sceneId="netflix" />);
+    const images = () => Array.from(container.querySelectorAll<HTMLImageElement>("img.lr-scene"));
+    rerender(<SceneLayer sceneId="prime" />);
+    act(() => { vi.advanceTimersByTime(SCENE_DEBOUNCE_MS + 80); });
+    expect(images()[1].getAttribute("src")).toBe(SCENE_URLS.prime);
+    // The user pauses, then moves again while the first fade is still running.
+    act(() => { vi.advanceTimersByTime(100); });
+    rerender(<SceneLayer sceneId="steam" />);
+    act(() => { vi.advanceTimersByTime(SCENE_DEBOUNCE_MS + 40); });
+    expect(images()[0].getAttribute("src")).toBe(SCENE_URLS.netflix); // untouched: the previous fade has not ended
+    expect(images()[1].classList.contains("is-on")).toBe(true);
+    act(() => { vi.advanceTimersByTime(SCENE_FADE_MS + 100); });
+    expect(images()[0].getAttribute("src")).toBe(SCENE_URLS.steam);
+    expect(images()[0].classList.contains("is-on")).toBe(true);
   });
 
   it("starts no fade while the user is still scrubbing", () => {
