@@ -754,6 +754,7 @@ impl GamepadHomeRuntime {
     fn handle_device_change(&mut self, w_param: usize, device: usize) -> bool {
         let at_ms = now_ms();
         if w_param == native::GIDC_ARRIVAL {
+            self.report_epoch.remove_device(device);
             // The next report must resolve the path again. Any chord
             // state from the previous connection is stale.
             self.device_paths.remove(&device);
@@ -761,6 +762,7 @@ impl GamepadHomeRuntime {
                 self.tracker.remove_device(&id);
             }
         } else if w_param == native::GIDC_REMOVAL {
+            self.report_epoch.remove_device(device);
             self.device_paths.remove(&device);
             if let Some(id) = self.bookkeeping.remove(device, at_ms) {
                 self.tracker.remove_device(&id);
@@ -911,6 +913,9 @@ struct ReportEpoch {
 }
 
 impl ReportEpoch {
+    fn remove_device(&mut self, device: usize) {
+        self.ready.remove(&device);
+    }
     fn allow(&mut self, epoch: u64, device: usize, buttons: DualSenseButtons) -> bool {
         if epoch != self.epoch {
             self.epoch = epoch;
@@ -1460,6 +1465,24 @@ mod tests {
         assert!(!guard.allow(1, 2, held));
         tracker.remove_device("pad-b");
         assert!(!tracker.observe("pad-a", held, 1000 + super::COMBO_COOLDOWN_MS + 1));
+    }
+
+    #[test]
+    fn overload_reconnects_release_capacity_and_reused_handles_require_neutral() {
+        let mut guard = super::ReportEpoch::default();
+        let held = super::DualSenseButtons { ps: true, options: true };
+        let neutral = super::DualSenseButtons::default();
+        assert!(!guard.allow(1, 0, held)); // overflow first
+        for device in 0..super::MAX_TRACKED_DEVICES + 2 {
+            assert!(guard.allow(1, device, neutral));
+            assert!(guard.allow(1, device, held));
+            guard.remove_device(device); // removal
+            assert!(!guard.allow(1, device, held));
+            assert!(guard.allow(1, device, neutral));
+            guard.remove_device(device); // arrival also invalidates a recycled handle
+            assert!(!guard.allow(1, device, held));
+        }
+        assert!(guard.ready.is_empty());
     }
 
     fn usb_report(ps: bool, options: bool) -> Vec<u8> {
