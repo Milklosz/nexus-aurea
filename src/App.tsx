@@ -2,7 +2,7 @@ import { GamepadDiagnostics } from "./components/GamepadDiagnostics";
 import { ControlCenter, type ControlPanelId } from "./components/ControlCenter";
 import { LivingRoomHome } from "./components/living-room/LivingRoomHome";
 import { readHomeTheme } from "./services/homeTheme";
-import { activateHomeAction, moveWithinHomeActions } from "./services/homeActions";
+import { activateHomeAction, closeHomeDisclosure, moveWithinHomeActions } from "./services/homeActions";
 import { AmbientScreen } from "./components/AmbientScreen";
 import { useAmbient } from "./hooks/useAmbient";
 import { readAmbientSettings, saveAmbientSettings, type AmbientSettings } from "./services/ambient";
@@ -333,6 +333,7 @@ export default function App() {
     activateSelected();
   }, [activateSelected, openKeyboardFor, showToast]);
   const backControllerFocus = useCallback(() => {
+    if (closeHomeDisclosure(document.activeElement)) return;
     if (controlCenterOpen) {
       closeControlCenter();
       return;

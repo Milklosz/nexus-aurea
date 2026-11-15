@@ -1,0 +1,12 @@
+Test fixture from the supplied example. Not live data.
+
+Current session
+  ▏ 0% used
+
+Current week (all models)
+  ███████████████░░░░ 79% used
+  Resets Nov 18, 2:59pm (Europe/Warsaw)
+
+Current week (Fable)
+  ███░░░░░░░░░░░░░░░ 19% used
+  Resets Nov 18, 2:59pm (Europe/Warsaw)
