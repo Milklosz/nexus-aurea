@@ -56,4 +56,3 @@ Pozostały istniejący nieśledzony target-int oraz gitignored artefakty testów
 
 Pełny plan MSI: velora-2-s1-1-hardware-readiness.md. Źródło i ręczne uruchomienie integracji:
 velora-2-claude-usage-widget.md. Granice checkpoint: velora-2-s1-1-replay-checkpoint.md.
-
