@@ -790,7 +790,7 @@ impl GamepadHomeRuntime {
                 continue;
             };
             if !self.report_epoch.allow(epoch, device, buttons) {
-                self.tracker.devices.clear();
+                self.tracker.remove_device(&device_label(&path));
                 continue;
             }
             let ReportRecord::Accepted(id) =
@@ -1447,6 +1447,19 @@ mod tests {
         assert!(guard.allow(1, 1, held));
         assert!(!guard.allow(1, 2, held));
         assert!(!guard.allow(2, 1, held));
+    }
+
+    #[test]
+    fn an_unarmed_second_pad_cannot_clear_the_first_pads_chord_latch() {
+        let mut guard = super::ReportEpoch::default();
+        let mut tracker = super::ComboTracker::default();
+        let held = super::DualSenseButtons { ps: true, options: true };
+        assert!(guard.allow(1, 1, super::DualSenseButtons::default()));
+        assert!(guard.allow(1, 1, held));
+        assert!(tracker.observe("pad-a", held, 1000));
+        assert!(!guard.allow(1, 2, held));
+        tracker.remove_device("pad-b");
+        assert!(!tracker.observe("pad-a", held, 1000 + super::COMBO_COOLDOWN_MS + 1));
     }
 
     fn usb_report(ps: bool, options: bool) -> Vec<u8> {
