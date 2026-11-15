@@ -82,7 +82,8 @@ export function useGamepad(
         engine.reset();
         selectedPad = identity;
       }
-      const samples = engine.update(pad ? readControllerSample(pad, profile) : null, performance.now(), true);
+      const sample = pad ? readControllerSample(pad, profile) : null;
+      const samples = engine.update(sample, performance.now(), true);
       for (const action of samples) dispatch(action);
       frame = window.requestAnimationFrame(poll);
     };

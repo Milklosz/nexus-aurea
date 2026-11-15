@@ -502,9 +502,7 @@ export function ControlCenter(props: ControlCenterProps) {
           )}>Odwołaj wszystkie urządzenia</button>}
           {remoteError && <p className="cc-feedback cc-error" role="alert">{remoteError}</p>}
           {remoteNotice && <p className="cc-feedback" role="status">{remoteNotice}</p>}
-          <p className="cc-card-note">{props.livingRoom
-            ? "Pilot obsługuje nawigację, wybór, Wstecz, Home, głośność i profile."
-            : "Pilot obsługuje nawigację, wybór, Wstecz, Home, głośność i profile. Nie omijaj ostrzeżeń TLS w Safari."}</p>
+          <p className="cc-card-note">Pilot obsługuje nawigację, wybór, Wstecz, Home, głośność i profile. Nie omijaj ostrzeżeń TLS w Safari.</p>
         </div>
       </section>
     </div>

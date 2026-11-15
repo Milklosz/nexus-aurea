@@ -62,6 +62,7 @@ pub struct NativeControllerStatus {
     pub last_error: Option<String>,
     pub pads: Vec<PadInfo>,
     pub ignored_reports: u64,
+    pub dropped_raw_reports: u64,
 }
 
 /// Output of feeding the core: events to emit and whether the Home chord fired.
@@ -150,6 +151,7 @@ impl HubCore {
         let released = self.tracker.release_silent(at_ms, crate::ds4::SILENCE_RELEASE_MS);
         if foreground {
             events.extend(released.into_iter().map(ControllerEvent::State));
+            events.extend(self.tracker.flush_analog(at_ms).into_iter().map(ControllerEvent::State));
         }
         let gained = foreground && !self.foreground;
         self.foreground = foreground;
@@ -215,7 +217,7 @@ mod runtime {
     use super::*;
     use crate::gamepad_home::native;
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-    use std::sync::mpsc::{channel, sync_channel, Receiver, Sender};
+    use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
     use std::sync::{Arc, Mutex, PoisonError, RwLock};
     use std::time::{SystemTime, UNIX_EPOCH};
     use tauri::{AppHandle, Emitter};
@@ -224,6 +226,12 @@ mod runtime {
     pub(crate) enum RawMessage {
         Reports(Vec<native::RawReport>),
         DeviceChange { w_param: usize, device: usize },
+    }
+
+    const RAW_QUEUE_CAPACITY: usize = 64;
+    pub(crate) struct RawEnvelope {
+        pub epoch: u64,
+        pub message: RawMessage,
     }
 
     #[derive(Default)]
@@ -235,15 +243,22 @@ mod runtime {
         thread_id: AtomicU32,
         status: RwLock<NativeControllerStatus>,
         /// (subscription id, sender). The id lets a dropped old subscription leave a newer one alone.
-        subscriber: Mutex<Option<(u64, Sender<RawMessage>)>>,
+        subscriber: Mutex<Option<(u64, SyncSender<RawEnvelope>)>>,
+        overflow_epoch: std::sync::atomic::AtomicU64,
         next_subscription: std::sync::atomic::AtomicU64,
     }
 
     /// Held by the one consumer of forwarded reports. Dropping it unsubscribes.
     pub(crate) struct RawSubscription {
-        pub(crate) receiver: Receiver<RawMessage>,
+        pub(crate) receiver: Receiver<RawEnvelope>,
         id: u64,
         shared: Arc<Shared>,
+    }
+
+    impl RawSubscription {
+        pub(crate) fn epoch(&self) -> u64 {
+            self.shared.overflow_epoch.load(Ordering::Acquire)
+        }
     }
 
     impl Drop for RawSubscription {
@@ -338,7 +353,7 @@ mod runtime {
                     .clone()
                     .unwrap_or_else(|| "Odbiór Raw Input nie jest uruchomiony.".to_string()));
             }
-            let (tx, rx) = channel();
+            let (tx, rx) = sync_channel(RAW_QUEUE_CAPACITY);
             let id = self.shared.next_subscription.fetch_add(1, Ordering::Relaxed);
             *self.shared.subscriber.lock().unwrap_or_else(PoisonError::into_inner) = Some((id, tx));
             Ok(RawSubscription { receiver: rx, id, shared: Arc::clone(&self.shared) })
@@ -372,11 +387,12 @@ mod runtime {
         // device handle -> (path, revision). A handle is only resolved once per arrival.
         let mut devices: std::collections::HashMap<usize, DeviceEntry> = std::collections::HashMap::new();
         'pump: loop {
-            native::wait_for_messages(50);
+            native::wait_for_messages(16);
             if shared.quit.load(Ordering::Acquire) {
                 break 'pump;
             }
-            while let Some(message) = native::next_message() {
+            for _ in 0..256 {
+                let Some(message) = native::next_message() else { break; };
                 match message.message {
                     native::WM_QUIT => break 'pump,
                     native::WM_INPUT => {
@@ -386,12 +402,16 @@ mod runtime {
                     native::WM_INPUT_DEVICE_CHANGE => {
                         let device = message.l_param as usize;
                         if message.w_param == native::GIDC_REMOVAL || message.w_param == native::GIDC_ARRIVAL {
+                            let mut dualsense = false;
                             if let Some(entry) = devices.remove(&device) {
+                                dualsense = entry.dualsense;
                                 if entry.ds4.is_some() {
                                     emit_all(&app, core.on_removed(&entry.path));
                                 }
                             }
-                            forward(&shared, RawMessage::DeviceChange { w_param: message.w_param, device });
+                            if dualsense {
+                                forward(&shared, RawMessage::DeviceChange { w_param: message.w_param, device });
+                            }
                             publish_status(&shared, &core);
                         }
                     }
@@ -407,6 +427,7 @@ mod runtime {
         }
 
         shared.running.store(false, Ordering::Release);
+        *shared.subscriber.lock().unwrap_or_else(PoisonError::into_inner) = None;
         shared.thread_id.store(0, Ordering::Release);
         emit_all(&app, core.shutdown());
         native::unregister_raw_input();
@@ -431,6 +452,7 @@ mod runtime {
                 return;
             }
             self.shared.running.store(false, Ordering::Release);
+            *self.shared.subscriber.lock().unwrap_or_else(PoisonError::into_inner) = None;
             self.shared.thread_id.store(0, Ordering::Release);
             let reason = "Odbiór pada zatrzymał się nieoczekiwanie.".to_string();
             {
@@ -446,6 +468,7 @@ mod runtime {
     struct DeviceEntry {
         path: String,
         ds4: Option<Ds4Revision>,
+        dualsense: bool,
     }
 
     fn fail(app: &AppHandle, shared: &Shared, started: &std::sync::mpsc::SyncSender<Result<(), String>>, error: String) {
@@ -486,10 +509,13 @@ mod runtime {
                     continue;
                 };
                 // Vendor/product ids from RIDI_DEVICEINFO are authoritative; the path is a fallback.
-                let ds4 = native::device_ids(handle)
-                    .and_then(|(vendor, product)| crate::ds4::ds4_revision_from_ids(vendor, product))
-                    .or_else(|| crate::ds4::ds4_revision_from_path(&path));
-                devices.insert(handle, DeviceEntry { path, ds4 });
+                let ids = native::device_ids(handle);
+                let ds4 = match ids {
+                    Some((vendor, product)) => crate::ds4::ds4_revision_from_ids(vendor, product),
+                    None => crate::ds4::ds4_revision_from_path(&path),
+                };
+                let dualsense = crate::gamepad_home::dualsense_identity(ids, &path).is_some();
+                devices.insert(handle, DeviceEntry { path, ds4, dualsense });
             }
             let Some(entry) = devices.get(&handle) else {
                 continue;
@@ -506,7 +532,10 @@ mod runtime {
                         publish_status(shared, core);
                     }
                 }
-                None => forwarded.push(report),
+                // A bounded queue also needs a bounded payload. Valid DualSense
+                // reports fit in 78 bytes; allow padding up to 128 bytes.
+                None if entry.dualsense && report.data.len() <= 128 => forwarded.push(report),
+                None => {},
             }
         }
         if !forwarded.is_empty() {
@@ -530,9 +559,48 @@ mod runtime {
     fn forward(shared: &Shared, message: RawMessage) {
         let mut guard = shared.subscriber.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some((_, sender)) = guard.as_ref() {
-            if sender.send(message).is_err() {
-                *guard = None;
+            let epoch = shared.overflow_epoch.load(Ordering::Acquire);
+            match sender.try_send(RawEnvelope { epoch, message }) {
+                Ok(()) => {},
+                Err(TrySendError::Disconnected(_)) => *guard = None,
+                Err(TrySendError::Full(_)) => {
+                    // Invalidate every queued chord fragment after a lost edge.
+                    shared.overflow_epoch.fetch_add(1, Ordering::AcqRel);
+                    let mut status = shared.status.write().unwrap_or_else(PoisonError::into_inner);
+                    status.dropped_raw_reports = status.dropped_raw_reports.saturating_add(1);
+                }
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod queue_tests {
+        use super::*;
+        #[test]
+        fn queue_is_bounded_nonblocking_invalidates_on_overload_and_disconnects() {
+            let shared = Arc::new(Shared::default());
+            shared.running.store(true, Ordering::Release);
+            let hub = PadHub { shared: Arc::clone(&shared), join: Mutex::new(None) };
+            let subscription = hub.subscribe_raw().unwrap();
+            for _ in 0..RAW_QUEUE_CAPACITY + 1 {
+                forward(&shared, RawMessage::DeviceChange { w_param: 0, device: 1 });
+            }
+            assert_eq!(subscription.epoch(), 1);
+            assert_eq!(hub.status().dropped_raw_reports, 1);
+            assert_eq!(subscription.receiver.try_iter().count(), RAW_QUEUE_CAPACITY);
+            drop(subscription);
+            assert!(shared.subscriber.lock().unwrap().is_none());
+        }
+        #[test]
+        fn replacing_subscription_does_not_let_old_drop_remove_new_one() {
+            let shared = Arc::new(Shared::default());
+            shared.running.store(true, Ordering::Release);
+            let hub = PadHub { shared: Arc::clone(&shared), join: Mutex::new(None) };
+            let old = hub.subscribe_raw().unwrap();
+            let new = hub.subscribe_raw().unwrap();
+            drop(old);
+            forward(&shared, RawMessage::DeviceChange { w_param: 0, device: 1 });
+            assert!(new.receiver.try_recv().is_ok());
         }
     }
 

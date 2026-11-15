@@ -1,4 +1,4 @@
-import type { ControllerAction } from "./controllerEngine";
+import type { ControllerAction, ControllerSample } from "./controllerEngine";
 
 export type ControllerSourceName = "native" | "gamepad-api";
 
@@ -20,12 +20,21 @@ export type ControllerSourceName = "native" | "gamepad-api";
 export class CrossSourceGate {
   private last = new Map<string, { source: ControllerSourceName; at: number }>();
   private nativeActiveAt = Number.NEGATIVE_INFINITY;
+  private nativeActions = new Map<string, number>();
 
   constructor(private readonly windowMs = 90, private readonly nativePriorityMs = 400) {}
 
   /** The native pad currently holds an input (non-neutral state). */
-  noteNativeActivity(now: number): void {
-    this.nativeActiveAt = now;
+  noteNativeActivity(now: number, sample?: ControllerSample | null): void {
+    if (sample === undefined) { this.nativeActiveAt = now; return; }
+    if (!sample) return;
+    for (const key of ["confirm", "back", "options"] as const) {
+      if (sample[key] || (key === "options" && sample.guide)) this.nativeActions.set(key, now);
+    }
+    if (sample.dpadLeft || sample.axisX < -0.35) this.nativeActions.set("move:-1", now);
+    if (sample.dpadRight || sample.axisX > 0.35) this.nativeActions.set("move:1", now);
+    if (sample.dpadUp || (sample.axisY ?? 0) < -0.35) this.nativeActions.set("vertical:-1", now);
+    if (sample.dpadDown || (sample.axisY ?? 0) > 0.35) this.nativeActions.set("vertical:1", now);
   }
 
   accept(source: ControllerSourceName, action: ControllerAction, now: number): boolean {
@@ -33,6 +42,7 @@ export class CrossSourceGate {
     const key = action.type === "move" || action.type === "vertical"
       ? `${action.type}:${action.delta}`
       : action.type;
+    if (source === "gamepad-api" && now - (this.nativeActions.get(key) ?? -Infinity) < this.nativePriorityMs) return false;
     const previous = this.last.get(key);
     if (previous && previous.source !== source && now - previous.at < this.windowMs) return false;
     this.last.set(key, { source, at: now });
@@ -41,6 +51,7 @@ export class CrossSourceGate {
 
   reset(): void {
     this.last.clear();
+    this.nativeActions.clear();
     this.nativeActiveAt = Number.NEGATIVE_INFINITY;
   }
 }

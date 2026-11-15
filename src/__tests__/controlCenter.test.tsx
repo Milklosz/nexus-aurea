@@ -83,6 +83,15 @@ function renderCenter(overrides: Partial<{
   />);
 }
 
+it.each([false, true])("keeps the TLS warning in remote recovery (livingRoom=%s)", async (livingRoom) => {
+  setupDialog();
+  mocks.getRemoteStatus.mockResolvedValueOnce({ ...mocks.remoteStatus, storeState: "damaged", recoveryRequired: true } as never);
+  render(<ControlCenter profile="cinema" onProfileChange={vi.fn(async () => true)} onShowDesktop={vi.fn()} onSystemVolume={vi.fn(async () => {})}
+    ambientSettings={{ enabled: false, idleSeconds: 300 }} onAmbientSettingsChange={vi.fn()} mediaPlaying={false}
+    onOpenDiagnostics={vi.fn()} onReturnToNexus={vi.fn()} onClose={vi.fn()} livingRoom={livingRoom} initialPanel="remote" />);
+  expect((await screen.findByText(/uszkodzony lub niekompletny/)).textContent).toContain("Pilot pozostaje wyłączony");
+  expect(screen.getByText(/Nie omijaj ostrzeżeń TLS w Safari/)).toBeTruthy();
+});
 describe("Control Center", () => {
   it("switches Cinema, Gaming, and Desktop through the existing profile handler", async () => {
     setupDialog();

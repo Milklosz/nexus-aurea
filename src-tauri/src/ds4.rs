@@ -66,7 +66,7 @@ pub enum Ds4Transport {
 /// USB paths look like `VID_054C&PID_09CC`; Bluetooth HID paths look like
 /// `{00001124-...}_VID&0002054C_PID&05C4`, where the vendor field carries a
 /// 4-digit vendor-id-source prefix. Only the low 16 bits are the id.
-fn hex_id_after(lower: &str, markers: [&str; 2]) -> Option<u16> {
+pub(crate) fn hex_id_after(lower: &str, markers: [&str; 2]) -> Option<u16> {
     markers.iter().find_map(|marker| {
         let start = lower.find(marker)? + marker.len();
         let digits: String = lower[start..]
@@ -394,6 +394,8 @@ struct TrackedPad {
     transport: Ds4Transport,
     last: Option<Ds4Snapshot>,
     last_seen_ms: u64,
+    emitted: Option<Ds4Snapshot>,
+    emitted_at_ms: u64,
 }
 
 /// Per-device bookkeeping: connect on first valid report, emit only on semantic
@@ -462,7 +464,8 @@ impl Ds4Tracker {
             }
             self.pads.insert(
                 label.clone(),
-                TrackedPad { revision, transport, last: None, last_seen_ms: at_ms },
+                TrackedPad { revision, transport, last: None, last_seen_ms: at_ms,
+                    emitted: None, emitted_at_ms: at_ms },
             );
             out.events.push(PadEvent::Connected { label: label.clone(), revision, transport });
         }
@@ -471,8 +474,22 @@ impl Ds4Tracker {
         if let Some(pad) = self.pads.get_mut(&label) {
             pad.last_seen_ms = at_ms;
             pad.transport = transport;
-            if pad.last.as_ref() != Some(&snapshot) {
-                pad.last = Some(snapshot.clone());
+            // Schmitt deadzone before quantisation: enter at 0.18, release at 0.12.
+            let filter = |value: f32, previous: f32| {
+                let threshold = if previous == 0.0 { 0.18 } else { 0.12 };
+                if value.abs() < threshold { 0.0 } else { (value * 16.0).round() / 16.0 }
+            };
+            snapshot.left_x = filter(parsed.left_x, pad.last.as_ref().map_or(0.0, |s| s.left_x));
+            snapshot.left_y = filter(parsed.left_y, pad.last.as_ref().map_or(0.0, |s| s.left_y));
+            pad.last = Some(snapshot.clone());
+            let discrete = pad.emitted.as_ref().map_or(true, |s|
+                s.buttons != snapshot.buttons || s.dpad != snapshot.dpad || s.transport != snapshot.transport);
+            let neutral = snapshot.left_x == 0.0 && snapshot.left_y == 0.0;
+            if pad.emitted.as_ref() != Some(&snapshot)
+                && (discrete || neutral || at_ms.saturating_sub(pad.emitted_at_ms) >= 16)
+            {
+                pad.emitted = Some(snapshot.clone());
+                pad.emitted_at_ms = at_ms;
                 out.events.push(PadEvent::State(snapshot));
             }
         }
@@ -501,9 +518,26 @@ impl Ds4Tracker {
                 ..last.clone()
             };
             pad.last = Some(neutral.clone());
+            pad.emitted = Some(neutral.clone());
+            pad.emitted_at_ms = at_ms;
             released.push(neutral);
         }
         released
+    }
+
+    /// Deliver the latest coalesced analog sample even when reports stop arriving.
+    pub(crate) fn flush_analog(&mut self, at_ms: u64) -> Vec<Ds4Snapshot> {
+        let mut events = Vec::new();
+        for pad in self.pads.values_mut() {
+            if pad.last != pad.emitted && at_ms.saturating_sub(pad.emitted_at_ms) >= 16 {
+                if let Some(snapshot) = pad.last.clone() {
+                    pad.emitted = Some(snapshot.clone());
+                    pad.emitted_at_ms = at_ms;
+                    events.push(snapshot);
+                }
+            }
+        }
+        events
     }
 
     /// Latest snapshot of every tracked pad, for resynchronising the frontend (window
@@ -562,6 +596,31 @@ mod tests {
     const USB_PATH: &str = r"\\?\HID#VID_054C&PID_09CC#7&2a3b4c5d&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}";
     const BT_PATH: &str =
         r"\\?\HID#{00001124-0000-1000-8000-00805f9b34fb}_VID&0002054C_PID&05C4#8&1&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}";
+
+    #[test]
+    fn analog_deadzone_hysteresis_rate_limit_and_neutral_release() {
+        let mut tracker = Ds4Tracker::default();
+        let mut report = usb_report();
+        feed(&mut tracker, USB_PATH, &report, 0);
+        for t in 1..16 { report[1] = 128 + (t % 10) as u8; assert!(feed(&mut tracker, USB_PATH, &report, t).is_empty()); }
+        report[1] = 160;
+        assert_eq!(feed(&mut tracker, USB_PATH, &report, 16).len(), 1);
+        report[1] = 180;
+        assert!(feed(&mut tracker, USB_PATH, &report, 17).is_empty());
+        report[1] = 200;
+        assert!(feed(&mut tracker, USB_PATH, &report, 18).is_empty());
+        assert!(tracker.flush_analog(31).is_empty());
+        assert_eq!(tracker.flush_analog(32)[0].left_x, (72.0_f32 / 127.0 * 16.0).round() / 16.0);
+        report[5] |= 0x20; // Cross is never rate limited.
+        assert_eq!(feed(&mut tracker, USB_PATH, &report, 33).len(), 1);
+        report[1] = 148; // stays outside release threshold, inside entry threshold
+        feed(&mut tracker, USB_PATH, &report, 50);
+        assert!(tracker.snapshots()[0].left_x > 0.0);
+        report[1] = 128;
+        assert_eq!(feed(&mut tracker, USB_PATH, &report, 51).len(), 1);
+        assert_eq!(tracker.snapshots()[0].left_x, 0.0);
+        assert!(feed(&mut tracker, USB_PATH, &report, 52).is_empty());
+    }
 
     /// Builds a USB report with neutral sticks and no buttons.
     fn usb_report() -> Vec<u8> {

@@ -112,8 +112,22 @@ pub struct GamepadHomeEvent {
 }
 
 pub(crate) fn is_dualsense_device_path(path: &str) -> bool {
-    let path = path.to_ascii_lowercase();
-    path.contains("vid_054c") && (path.contains("pid_0ce6") || path.contains("pid_0df2"))
+    dualsense_identity(None, path).is_some()
+}
+
+/// Device-info IDs take precedence, including a negative identification. Paths
+/// are consulted only when Windows cannot supply IDs (USB and Bluetooth forms).
+pub(crate) fn dualsense_identity(ids: Option<(u16, u16)>, path: &str) -> Option<DualSenseModel> {
+    let lower = path.to_ascii_lowercase();
+    let (vendor, product) = ids.or_else(|| Some((
+        crate::ds4::hex_id_after(&lower, ["vid_", "vid&"])?,
+        crate::ds4::hex_id_after(&lower, ["pid_", "pid&"])?,
+    )))?;
+    match (vendor, product) {
+        (0x054c, 0x0ce6) => Some(DualSenseModel::DualSense),
+        (0x054c, 0x0df2) => Some(DualSenseModel::DualSenseEdge),
+        _ => None,
+    }
 }
 
 /// Windows exposes Bluetooth HID interfaces through BTHENUM/BTHLEDEVICE
@@ -128,18 +142,7 @@ pub(crate) const BLUETOOTH_PATH_MARKERS: [&str; 5] = [
 
 fn path_pid(path: &str) -> Option<u16> {
     let lower = path.to_ascii_lowercase();
-    let start = lower.find("pid_")?.checked_add(4)?;
-    let end = start.checked_add(4)?;
-    let digits = lower.get(start..end)?;
-    if !digits.bytes().all(|byte| byte.is_ascii_hexdigit())
-        || lower
-            .as_bytes()
-            .get(end)
-            .is_some_and(|byte| byte.is_ascii_hexdigit())
-    {
-        return None;
-    }
-    u16::from_str_radix(digits, 16).ok()
+    crate::ds4::hex_id_after(&lower, ["pid_", "pid&"])
 }
 
 pub(crate) fn dualsense_connection(path: &str) -> DualSenseConnection {
@@ -705,6 +708,7 @@ pub(crate) struct GamepadHomeRuntime {
     last_combo_at_ms: Option<u64>,
     last_chord: Option<ChordDiagnostic>,
     last_error: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    report_epoch: ReportEpoch,
 }
 
 #[cfg(target_os = "windows")]
@@ -715,6 +719,7 @@ impl GamepadHomeRuntime {
     pub(crate) fn start(hub: &crate::pad_hub::PadHub) -> Result<Self, String> {
         let subscription = hub.subscribe_raw()?;
         Ok(Self {
+            report_epoch: ReportEpoch { epoch: subscription.epoch(), ..Default::default() },
             subscription,
             tracker: ComboTracker::default(),
             bookkeeping: DeviceBookkeeping::default(),
@@ -729,9 +734,15 @@ impl GamepadHomeRuntime {
     /// a Home chord fired.
     pub(crate) fn drain(&mut self, app: &AppHandle) -> bool {
         let mut triggered = false;
-        while let Ok(message) = self.subscription.receiver.try_recv() {
-            triggered |= match message {
-                crate::pad_hub::RawMessage::Reports(reports) => self.handle_reports(app, reports),
+        // Bounded work per turn even if a producer keeps the queue busy.
+        for _ in 0..64 {
+            let Ok(envelope) = self.subscription.receiver.try_recv() else { break; };
+            if envelope.epoch != self.subscription.epoch() {
+                self.tracker.devices.clear(); // Keep the global cooldown.
+                continue;
+            }
+            triggered |= match envelope.message {
+                crate::pad_hub::RawMessage::Reports(reports) => self.handle_reports(app, reports, envelope.epoch),
                 crate::pad_hub::RawMessage::DeviceChange { w_param, device } => {
                     self.handle_device_change(w_param, device)
                 }
@@ -758,22 +769,30 @@ impl GamepadHomeRuntime {
         false
     }
 
-    fn handle_reports(&mut self, app: &AppHandle, reports: Vec<native::RawReport>) -> bool {
+    fn handle_reports(&mut self, app: &AppHandle, reports: Vec<native::RawReport>, epoch: u64) -> bool {
         let mut triggered = false;
         let at_ms = now_ms();
         for report in reports {
+            if epoch != self.subscription.epoch() {
+                self.tracker.devices.clear();
+                break;
+            }
             let Some(device) = report.device else {
                 continue;
             };
             let Some(path) = self.resolve_device_path(device) else {
                 continue;
             };
-            if !is_dualsense_device_path(&path) {
+            if dualsense_identity(native::device_ids(device), &path).is_none() {
                 continue;
             }
             let Some(buttons) = parse_dualsense_report(&report.data) else {
                 continue;
             };
+            if !self.report_epoch.allow(epoch, device, buttons) {
+                self.tracker.devices.clear();
+                continue;
+            }
             let ReportRecord::Accepted(id) =
                 self.bookkeeping
                     .note_report(device, &path, &report.data, at_ms)
@@ -879,6 +898,31 @@ impl GamepadHomeRuntime {
         let at_ms = now_ms();
         self.bookkeeping.prune(at_ms);
         self.tracker.prune(at_ms);
+    }
+}
+
+/// A lost edge invalidates queued chords. Each device must release both buttons
+/// before rearming; holding a chord through an overflow cannot trigger Home.
+#[derive(Default)]
+struct ReportEpoch {
+    epoch: u64,
+    needs_neutral: bool,
+    ready: std::collections::HashSet<usize>,
+}
+
+impl ReportEpoch {
+    fn allow(&mut self, epoch: u64, device: usize, buttons: DualSenseButtons) -> bool {
+        if epoch != self.epoch {
+            self.epoch = epoch;
+            self.needs_neutral = true;
+            self.ready.clear();
+        }
+        if !self.needs_neutral || self.ready.contains(&device) { return true; }
+        if !buttons.ps && !buttons.options && self.ready.len() < MAX_TRACKED_DEVICES {
+            self.ready.insert(device);
+            return true;
+        }
+        false
     }
 }
 
@@ -1382,6 +1426,28 @@ mod tests {
     const USB_REPORT_LEN: usize = 64;
     const BT_FULL_REPORT_LEN: usize = 78;
     const BT_MINIMAL_REPORT_LEN: usize = 10;
+
+    #[test]
+    fn identity_uses_windows_ids_then_usb_or_bluetooth_fallback() {
+        let bt = r"\\?\BTHENUM#VID&0002054C_PID&0CE6#pad";
+        assert_eq!(super::dualsense_identity(None, bt), Some(super::DualSenseModel::DualSense));
+        assert_eq!(super::dualsense_identity(Some((0x054c, 0x0df2)), "opaque"), Some(super::DualSenseModel::DualSenseEdge));
+        assert_eq!(super::dualsense_identity(Some((0x045e, 0x0ce6)), USB_PATH), None);
+        assert_eq!(super::dualsense_identity(None, r"VID_054C&PID_0CE65"), None);
+        assert_eq!(super::dualsense_identity(None, r"VID_054C&PID_05C4"), None);
+    }
+    #[test]
+    fn overload_requires_each_device_to_release_before_rearming() {
+        let mut guard = super::ReportEpoch::default();
+        let held = super::DualSenseButtons { ps: true, options: true };
+        assert!(guard.allow(0, 1, held));
+        assert!(!guard.allow(1, 1, held));
+        assert!(!guard.allow(1, 2, held));
+        assert!(guard.allow(1, 1, super::DualSenseButtons::default()));
+        assert!(guard.allow(1, 1, held));
+        assert!(!guard.allow(1, 2, held));
+        assert!(!guard.allow(2, 1, held));
+    }
 
     fn usb_report(ps: bool, options: bool) -> Vec<u8> {
         let mut report = vec![0u8; USB_REPORT_LEN];

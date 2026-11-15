@@ -84,6 +84,19 @@ async function mount(actions = makeActions(), suspend?: () => boolean) {
   return { actions, ...view };
 }
 
+it("claims Options synchronously and preserves independent browser actions after release", async () => {
+  await mount(); emit(connected()); advance(50);
+  emit(state(["options"]));
+  expect(crossSourceGate.accept("gamepad-api", { type: "options" }, now)).toBe(false);
+  expect(crossSourceGate.accept("gamepad-api", { type: "back" }, now)).toBe(true);
+  advance(80); emit(state([]));
+  expect(crossSourceGate.accept("gamepad-api", { type: "options" }, now + 100)).toBe(false);
+  expect(crossSourceGate.accept("gamepad-api", { type: "options" }, now + 401)).toBe(true);
+});
+it("blocks virtual Options throughout a held PS+Options chord", async () => {
+  await mount(); emit(connected()); advance(50); emit(state(["ps", "options"])); advance(80);
+  expect(crossSourceGate.accept("gamepad-api", { type: "options" }, now)).toBe(false);
+});
 describe("useNativeController", () => {
   it("one Cross press is one confirm, and holding does not repeat it", async () => {
     const { actions } = await mount();

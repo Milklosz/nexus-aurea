@@ -45,6 +45,16 @@ export function useNativeController(
   useEffect(() => {
     if (!enabled) return;
     const release = nativeControllerStore.acquire();
+    // Claim activity when the event arrives, before the browser's next RAF can
+    // dispatch the virtual Options press. Waiting for our 16 ms tick is too late.
+    const noteActivity = () => {
+      const model = nativeControllerStore.getModel();
+      if (document.hasFocus() && document.visibilityState === "visible"
+        && !suspendRef.current?.() && !model.unavailableReason && !isNeutral(model.snapshot)) {
+        crossSourceGate.noteNativeActivity(performance.now(), sampleFromNative(model.snapshot));
+      }
+    };
+    const unsubscribe = nativeControllerStore.subscribe(noteActivity);
     // Options fires on release and never together with PS, so the Home chord cannot also open a panel.
     const engine = new ControllerEngine({ optionsOnRelease: true });
     const bumpers = new BumperEdges();
@@ -70,7 +80,7 @@ export function useNativeController(
       const stale = model.snapshotAt !== null && performance.now() - model.snapshotAt > NATIVE_STALE_MS;
       const live = stale ? NEUTRAL_SNAPSHOT : model.snapshot;
       // While the native pad is in use the browser path is secondary (virtual pads, same press).
-      if (!isNeutral(live)) crossSourceGate.noteNativeActivity(performance.now());
+      if (!isNeutral(live)) crossSourceGate.noteNativeActivity(performance.now(), sampleFromNative(live));
       const sample = sampleFromNative(live, bindingsRef.current);
       for (const action of engine.update(sample, performance.now(), true)) dispatch(action);
       const held = new Set((stale ? NEUTRAL_SNAPSHOT : model.snapshot)?.buttons ?? []);
@@ -84,6 +94,7 @@ export function useNativeController(
       window.removeEventListener("focus", reconcile);
       engine.reset();
       bumpers.reset();
+      unsubscribe();
       release();
     };
   }, [enabled]);
