@@ -5,6 +5,14 @@
  */
 export const HOME_ACTIONS_SELECTOR = ".home-actions";
 
+/** Circle closes the focused Home disclosure before returning to the dock. */
+export function closeHomeDisclosure(active: Element | null): boolean {
+  const trigger = active?.closest("[data-home-disclosure]")?.querySelector<HTMLButtonElement>("button[aria-expanded=true]");
+  if (!trigger) return false;
+  trigger.click();
+  return true;
+}
+
 /**
  * Returns true when `active` is inside the actions row (the move is handled, even
  * when focus is already at an end). Returns false otherwise so the caller can

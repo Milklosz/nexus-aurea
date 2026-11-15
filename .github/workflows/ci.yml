@@ -56,6 +56,9 @@ jobs:
       - name: Run tests
         run: pnpm test
 
+      - name: Test Claude status line adapter (fixtures only)
+        run: pnpm test:claude-usage
+
       - name: Test build provenance manifest
         run: pnpm test:provenance
 

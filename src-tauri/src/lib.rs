@@ -2,6 +2,7 @@ use tauri::{Emitter, Manager};
 
 mod app_manager;
 mod autostart;
+mod claude_usage;
 mod control_service;
 mod credential_store;
 mod diagnostics;
@@ -42,6 +43,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(control_service::ControlService::default())
+        .manage(claude_usage::ClaudeUsageService::default())
         .manage(remote_access::RemoteAccess::default())
         .manage(session_orchestrator::SessionOrchestrator::default())
         .manage(window_broker::WindowBroker::default())
@@ -49,6 +51,7 @@ pub fn run() {
         .manage(launch_registry::LaunchRegistry::default())
         .invoke_handler(tauri::generate_handler![
             platform_launchers::get_platform_launcher_status,
+            claude_usage::get_claude_usage,
             platform_launchers::launch_platform,
             pad_hub::get_native_controller_status,
             control_service::get_control_service_status,

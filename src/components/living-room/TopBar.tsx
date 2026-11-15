@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useClock } from "../../hooks/useClock";
+import { ClaudeUsageWidget } from "./ClaudeUsageWidget";
 
 type ActionId = "search" | "remote" | "settings";
 
@@ -50,6 +51,7 @@ export function TopBar({ temperatureText, condition, weatherTitle, weatherStale,
         )}
       </div>
       <nav className="home-actions lr-actions" aria-label="System">
+        <ClaudeUsageWidget />
         {actions.map((action) => (
           <button
             key={action.id}
