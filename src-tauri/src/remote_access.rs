@@ -152,6 +152,8 @@ struct DeviceIndex {
     version: u8,
     #[serde(default)]
     revision: u64,
+    #[serde(default)]
+    checkpoint_required: bool,
     devices: Vec<DeviceIndexRecord>,
 }
 
@@ -582,7 +584,7 @@ impl RemoteAccess {
     /// write is obtained: a stale cache is never written back.
     #[cfg(windows)]
     fn locked_fresh(&self, wait: Duration) -> Result<(StateLockGuard, Vault), VaultError> {
-        let guard = match self.inner.state_lock.acquire(wait) {
+        let mut guard = match self.inner.state_lock.acquire(wait) {
             Ok(guard) => guard,
             Err(error) => {
                 let error = lock_error(error);
@@ -590,7 +592,7 @@ impl RemoteAccess {
                 return Err(error);
             }
         };
-        match self.read_verified() {
+        match self.read_verified(&mut guard) {
             Ok(fresh) => {
                 self.note_store_health(Ok(()));
                 Ok((guard, fresh))
@@ -605,11 +607,12 @@ impl RemoteAccess {
     /// Reads the stored state and checks it against what this process last
     /// verified. The caller must hold the state lock.
     #[cfg(windows)]
-    fn read_verified(&self) -> Result<Vault, VaultError> {
-        let fresh = load_vault(self.inner.credential_store.as_ref())?;
+    fn read_verified(&self, guard: &mut StateLockGuard) -> Result<Vault, VaultError> {
+        let mut fresh = load_vault(self.inner.credential_store.as_ref())?;
         if *lock(&self.inner.vault_loaded) {
             detect_rollback(&lock(&self.inner.vault), &fresh)?;
         }
+        verify_checkpoint(guard, self.inner.credential_store.as_ref(), &mut fresh)?;
         Ok(fresh)
     }
 
@@ -847,10 +850,10 @@ impl RemoteAccess {
         *lock(&self.inner.pairing) = None;
         // Re-read under the cross-process lock: the devices to revoke are the
         // stored ones, never a possibly stale cache.
-        let (_guard, mut vault) = self.locked_fresh(UI_LOCK_WAIT)?;
+        let (mut guard, mut vault) = self.locked_fresh(UI_LOCK_WAIT)?;
         let previous_devices = vault.devices.clone();
         vault.devices.clear();
-        save_device_index(self.inner.credential_store.as_ref(), &mut vault)?;
+        save_device_index_checked(self.inner.credential_store.as_ref(), &mut guard, &mut vault)?;
         let mut cleanup_failed = false;
         for device in &previous_devices {
             cleanup_failed |= self
@@ -869,11 +872,11 @@ impl RemoteAccess {
 
     #[cfg(windows)]
     pub fn revoke_device(&self, device_id: &str) -> Result<RemoteAccessStatus, String> {
-        let (_guard, mut vault) = self.locked_fresh(UI_LOCK_WAIT)?;
+        let (mut guard, mut vault) = self.locked_fresh(UI_LOCK_WAIT)?;
         let was_present = vault.devices.iter().any(|device| device.id == device_id);
         vault.devices.retain(|device| device.id != device_id);
         if was_present {
-            save_device_index(self.inner.credential_store.as_ref(), &mut vault)?;
+            save_device_index_checked(self.inner.credential_store.as_ref(), &mut guard, &mut vault)?;
         }
         let cleanup_failed = was_present
             && self
@@ -911,7 +914,7 @@ impl RemoteAccess {
     /// must not block the way out of it.
     #[cfg(windows)]
     pub fn inspect_recovery(&self) -> Result<RemoteRecoveryPlan, String> {
-        let _guard = match self.inner.state_lock.acquire(UI_LOCK_WAIT) {
+        let mut guard = match self.inner.state_lock.acquire(UI_LOCK_WAIT) {
             Ok(guard) => guard,
             Err(error) => {
                 let error = lock_error(error);
@@ -927,7 +930,7 @@ impl RemoteAccess {
             }
         };
         let store = self.inner.credential_store.as_ref();
-        let outcome = self.read_verified();
+        let outcome = self.read_verified(&mut guard);
         let (state, message, required, fault) = match &outcome {
             Ok(_) => ("ok".to_string(), None, false, None),
             Err(error) => (
@@ -992,7 +995,7 @@ impl RemoteAccess {
             }
         }
         self.stop();
-        let guard = self
+        let mut guard = self
             .inner
             .state_lock
             .acquire(UI_LOCK_WAIT)
@@ -1009,20 +1012,29 @@ impl RemoteAccess {
             )
         };
         let store = self.inner.credential_store.as_ref();
+        let floor = read_checkpoint(&mut guard).ok().flatten().map_or(floor, |marker| floor.max(marker.revision));
+        // Durably close authorization before touching the credential journal.
+        write_checkpoint(&mut guard, &IndexCheckpoint::pending(floor, "recovery"))?;
         let result = perform_recovery(store, mode, &known_ids, floor);
         // The cache must not outlive the state it described.
         *lock(&self.inner.vault) = Vault::default();
         *lock(&self.inner.vault_loaded) = false;
         *lock(&self.inner.pairing) = None;
-        match load_vault(store) {
-            Ok(fresh) => {
-                self.note_store_health(Ok(()));
-                self.publish(&fresh);
+        let verified = result.and_then(|(expected, effective_mode)| {
+            let fresh = load_vault(store).map_err(String::from)?;
+            if !expected.matches(&fresh) || !fresh.devices.is_empty()
+                || (effective_mode == RecoveryMode::ResetTrust && (fresh.ca_cert_pem.is_some() || fresh.ca_key_pem.is_some())) {
+                return Err("Odzyskiwanie nie zostało potwierdzone odczytem. Serwer pozostaje wyłączony.".into());
             }
-            Err(error) => self.note_store_health(Err(&error)),
+            write_checkpoint(&mut guard, &expected)?;
+            self.read_verified(&mut guard).map_err(String::from)
+        });
+        match &verified {
+            Ok(fresh) => { self.note_store_health(Ok(())); self.publish(fresh); }
+            Err(_) => self.note_store_health(Err(&checkpoint_fault())),
         }
         drop(guard);
-        result?;
+        verified?;
         Ok(self.status_cached())
     }
 
@@ -1077,7 +1089,7 @@ impl RemoteAccess {
         }
         // Pairing changes the index, so it runs on state re-read under the
         // cross-process lock. The device list checked here is the stored one.
-        let (_guard, mut vault) = self
+        let (mut guard, mut vault) = self
             .locked_fresh(COMMAND_LOCK_WAIT)
             .map_err(|error| error.status())?;
         if vault.devices.len() >= MAX_PAIRED_DEVICES
@@ -1096,7 +1108,7 @@ impl RemoteAccess {
             last_sequence: 0,
         };
         vault.devices.push(device.clone());
-        if persist_new_device(self.inner.credential_store.as_ref(), &mut vault, &device).is_err() {
+        if persist_new_device(self.inner.credential_store.as_ref(), &mut guard, &mut vault, &device).is_err() {
             return Err(StatusCode::SERVICE_UNAVAILABLE);
         }
         *pairing_slot = None;
@@ -1139,7 +1151,7 @@ impl RemoteAccess {
         // The command transaction: lock across processes, re-read the stored
         // state, validate, reserve the sequence durably, publish, unlock. A
         // second VELORA process can therefore never write back an older state.
-        let (_guard, mut vault) = self
+        let (mut guard, mut vault) = self
             .locked_fresh(COMMAND_LOCK_WAIT)
             .map_err(|error| error.status())?;
         let Some(index) = vault
@@ -1184,7 +1196,7 @@ impl RemoteAccess {
                 // next command re-reads the store, so a write that reached
                 // Credential Manager but reported an error is seen as consumed
                 // (equal sequence without receipt answers 409, never re-executes).
-                if save_device_index(self.inner.credential_store.as_ref(), &mut vault).is_err() {
+                if save_device_index_checked(self.inner.credential_store.as_ref(), &mut guard, &mut vault).is_err() {
                     return Err(StatusCode::SERVICE_UNAVAILABLE);
                 }
                 self.publish(&vault);
@@ -1204,7 +1216,7 @@ impl RemoteAccess {
     /// sequence stays consumed.
     #[cfg(windows)]
     fn rollback_command_reservation(&self, device_id: &str, sequence: u64, previous: u64) {
-        let Ok((_guard, mut vault)) = self.locked_fresh(COMMAND_LOCK_WAIT) else {
+        let Ok((mut guard, mut vault)) = self.locked_fresh(COMMAND_LOCK_WAIT) else {
             return;
         };
         let Some(device) = vault
@@ -1218,7 +1230,7 @@ impl RemoteAccess {
             return;
         }
         device.last_sequence = previous;
-        if save_device_index(self.inner.credential_store.as_ref(), &mut vault).is_ok() {
+        if save_device_index_checked(self.inner.credential_store.as_ref(), &mut guard, &mut vault).is_ok() {
             self.publish(&vault);
         }
     }
@@ -1719,10 +1731,98 @@ fn persist_trust_material(
 }
 
 #[cfg(windows)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct IndexCheckpoint {
+    version: u8,
+    phase: CheckpointPhase,
+    revision: u64,
+    index_hash: String,
+}
+
+#[cfg(windows)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum CheckpointPhase { Pending, Committed }
+
+#[cfg(windows)]
+impl IndexCheckpoint {
+    fn hash(text: Option<&str>) -> String {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(text.unwrap_or("<missing-index>").as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+    fn committed(revision: u64, text: Option<&str>) -> Self {
+        Self { version: 1, phase: CheckpointPhase::Committed, revision, index_hash: Self::hash(text) }
+    }
+    fn pending(revision: u64, text: &str) -> Self {
+        Self { phase: CheckpointPhase::Pending, ..Self::committed(revision, Some(text)) }
+    }
+    fn matches(&self, vault: &Vault) -> bool {
+        self.revision == vault.revision && self.index_hash == Self::hash(vault.index_json.as_deref())
+    }
+}
+
+#[cfg(windows)]
+fn checkpoint_fault() -> VaultError {
+    VaultError::new(StoreFault::RolledBack, format!("Indeks urządzeń nie zgadza się z trwałym znacznikiem bezpieczeństwa. Serwer pozostaje wyłączony. {RECOVERY_HINT}"))
+}
+
+#[cfg(windows)]
+fn read_checkpoint(guard: &mut StateLockGuard) -> Result<Option<IndexCheckpoint>, VaultError> {
+    let bytes = guard.read_checkpoint().map_err(lock_error)?;
+    let Some(bytes) = bytes else { return Ok(None); };
+    let checkpoint: IndexCheckpoint = serde_json::from_slice(&bytes).map_err(|_| checkpoint_fault())?;
+    if checkpoint.version != 1 || checkpoint.index_hash.len() != 64
+        || !checkpoint.index_hash.bytes().all(|b| b.is_ascii_hexdigit()) { return Err(checkpoint_fault()); }
+    Ok(Some(checkpoint))
+}
+
+#[cfg(windows)]
+fn write_checkpoint(guard: &mut StateLockGuard, checkpoint: &IndexCheckpoint) -> Result<(), String> {
+    let bytes = serde_json::to_vec(checkpoint).map_err(|_| "Nie udało się przygotować znacznika bezpieczeństwa.".to_string())?;
+    guard.write_checkpoint(&bytes).map_err(|_| "Nie udało się trwale zapisać znacznika bezpieczeństwa. Serwer pozostaje wyłączony.".to_string())
+}
+
+#[cfg(windows)]
+fn verify_checkpoint(guard: &mut StateLockGuard, store: &dyn CredentialStore, vault: &mut Vault) -> Result<(), VaultError> {
+    match read_checkpoint(guard)? {
+        Some(marker) if marker.phase == CheckpointPhase::Committed && marker.matches(vault) => Ok(()),
+        Some(_) => Err(checkpoint_fault()),
+        None => {
+            if let Some(index) = vault.index_json.as_ref() {
+                let index: DeviceIndex = serde_json::from_str(index).map_err(|_| checkpoint_fault())?;
+                if index.checkpoint_required { return Err(checkpoint_fault()); }
+                // Migration is itself a checked index transaction. Persist the
+                // requirement now, before exposing even the first status reply.
+                return save_device_index_checked(store, guard, vault)
+                    .map_err(|message| VaultError::new(StoreFault::Unavailable, message));
+            }
+            // One-time migration of a valid legacy state, under the same pinned
+            // lock and only after the process-cache rollback check has passed.
+            write_checkpoint(guard, &IndexCheckpoint::committed(vault.revision, vault.index_json.as_deref()))
+                .map_err(|message| VaultError::new(StoreFault::Unavailable, message))
+        }
+    }
+}
+
+#[cfg(windows)]
+fn save_device_index_checked(store: &dyn CredentialStore, guard: &mut StateLockGuard, vault: &mut Vault) -> Result<(), String> {
+    let next = vault.revision.checked_add(1).ok_or("Licznik wersji indeksu został wyczerpany.")?;
+    let text = index_text(&vault.devices, next)?;
+    write_checkpoint(guard, &IndexCheckpoint::pending(next, &text))?;
+    save_device_index(store, vault)?;
+    let committed = IndexCheckpoint::committed(next, Some(&text));
+    let readback = load_vault(store).map_err(String::from)?;
+    if !committed.matches(&readback) { return Err("Zapis indeksu nie został potwierdzony. Serwer pozostaje wyłączony.".into()); }
+    write_checkpoint(guard, &committed)
+}
+
+#[cfg(windows)]
 fn index_text(devices: &[PairedDevice], revision: u64) -> Result<String, String> {
     let index = DeviceIndex {
         version: DEVICE_INDEX_VERSION,
         revision,
+        checkpoint_required: true,
         devices: devices
             .iter()
             .map(|device| DeviceIndexRecord {
@@ -1757,6 +1857,7 @@ fn save_device_index(store: &dyn CredentialStore, vault: &mut Vault) -> Result<(
 #[cfg(windows)]
 fn persist_new_device(
     store: &dyn CredentialStore,
+    guard: &mut StateLockGuard,
     vault: &mut Vault,
     device: &PairedDevice,
 ) -> Result<(), String> {
@@ -1764,7 +1865,7 @@ fn persist_new_device(
     store
         .set_password(&account, &device.token)
         .map_err(credential_store_error)?;
-    if let Err(error) = save_device_index(store, vault) {
+    if let Err(error) = save_device_index_checked(store, guard, vault) {
         let cleanup_error = store.delete_password(&account).err();
         let mut message = error;
         if cleanup_error.is_some() {
@@ -1848,7 +1949,7 @@ fn perform_recovery(
     requested: RecoveryMode,
     known_device_ids: &[String],
     revision_floor: u64,
-) -> Result<(), String> {
+) -> Result<(IndexCheckpoint, RecoveryMode), String> {
     let journal = read_recovery_journal(store)?;
     let (stored_revision, index_ids) = read_index_leniently(store)?;
     let (mode, mut ids) = match journal {
@@ -1906,9 +2007,21 @@ fn perform_recovery(
     if incomplete {
         return Err("Odzyskiwanie jest niepełne: systemowy magazyn nie usunął wszystkich rekordów. Serwer pozostaje wyłączony; uruchom odzyskiwanie ponownie.".into());
     }
-    store
-        .delete_password(RECOVERY_JOURNAL_ACCOUNT)
-        .map_err(|_| "Odzyskiwanie wykonano, ale nie udało się usunąć dziennika. Uruchom odzyskiwanie ponownie, aby je domknąć.".to_string())
+    // Confirm all deletions; success codes alone are insufficient after the
+    // observed Credential Manager lost-update race.
+    for id in &ids {
+        if store.get_password(&device_token_account(id)).map_err(credential_store_error)?.is_some() {
+            return Err("Usunięcie rekordów nie zostało potwierdzone. Powtórz odzyskiwanie.".into());
+        }
+    }
+    if mode == RecoveryMode::ResetTrust &&
+        (store.get_password(CA_KEY_ACCOUNT).map_err(credential_store_error)?.is_some()
+        || store.get_password(CA_CERT_ACCOUNT).map_err(credential_store_error)?.is_some()) {
+        return Err("Usunięcie zaufania nie zostało potwierdzone. Dziennik odzyskiwania pozostaje aktywny.".into());
+    }
+    store.delete_password(RECOVERY_JOURNAL_ACCOUNT)
+        .map_err(|_| "Odzyskiwanie wykonano, ale nie udało się usunąć dziennika. Uruchom odzyskiwanie ponownie, aby je domknąć.".to_string())?;
+    Ok((IndexCheckpoint::committed(revision, Some(&empty_index)), mode))
 }
 
 #[cfg(windows)]
@@ -2399,6 +2512,7 @@ mod windows_tests {
         /// The write reaches Credential Manager, then an error is reported.
         write_then_fail: Mutex<HashSet<String>>,
         failed_deletes: Mutex<HashSet<String>>,
+        pretend_deletes: Mutex<HashSet<String>>,
         fail_all_reads: AtomicBool,
         /// Counts every attempted write or delete.
         mutations: AtomicUsize,
@@ -2418,6 +2532,7 @@ mod windows_tests {
                 failed_writes: Mutex::new(HashSet::new()),
                 write_then_fail: Mutex::new(HashSet::new()),
                 failed_deletes: Mutex::new(HashSet::new()),
+                pretend_deletes: Mutex::new(HashSet::new()),
                 fail_all_reads: AtomicBool::new(false),
                 mutations: AtomicUsize::new(0),
                 fail_from_mutation: AtomicUsize::new(NEVER),
@@ -2544,7 +2659,7 @@ mod windows_tests {
             if lock(&self.failed_deletes).contains(account) {
                 return Err(CredentialStoreError::Unavailable);
             }
-            self.native.delete_password(account)?;
+            if !lock(&self.pretend_deletes).contains(account) { self.native.delete_password(account)?; }
             self.mutation_done(index);
             Ok(())
         }
@@ -2619,6 +2734,142 @@ mod windows_tests {
                 let _ = std::fs::remove_dir_all(parent);
             }
         }
+    }
+
+    #[test]
+    fn checkpoint_blocks_stale_credential_index_in_a_fresh_process_and_recovers() {
+        let env = TestEnv::new("checkpoint-stale");
+        let remote = seeded(&env, 1);
+        let older = env.store.raw_get(DEVICE_INDEX_ACCOUNT).unwrap();
+        assert_eq!(command_result(&remote, 1, 1), execute(0));
+        env.store.raw_set(DEVICE_INDEX_ACCOUNT, &older); // deterministic lost-update/rollback fixture
+        let restarted = env.remote();
+        assert_eq!(command_result(&restarted, 1, 1), Err(StatusCode::SERVICE_UNAVAILABLE));
+        assert_eq!(command_result(&restarted, 1, 2), Err(StatusCode::SERVICE_UNAVAILABLE));
+        assert!(restarted.status().recovery_required);
+        run_recovery_now(&restarted, "revoke-all-devices").unwrap();
+        assert!(stored(env.store.as_ref()).devices.is_empty());
+        assert_eq!(restarted.status().store_state, "ok");
+    }
+
+    #[test]
+    fn checkpoint_migrates_only_legacy_state_and_missing_marker_blocks_migrated_index() {
+        let env = TestEnv::new("checkpoint-migration");
+        let remote = seeded(&env, 1);
+        let mut legacy: serde_json::Value = serde_json::from_str(&env.store.raw_get(DEVICE_INDEX_ACCOUNT).unwrap()).unwrap();
+        legacy.as_object_mut().unwrap().remove("checkpointRequired");
+        env.store.raw_set(DEVICE_INDEX_ACCOUNT, &legacy.to_string());
+        std::fs::write(&env.lock_path, []).unwrap(); // fixture of a legacy empty lock file
+        let migrated = env.remote();
+        assert_eq!(migrated.status().store_state, "ok");
+        assert!(std::fs::metadata(&env.lock_path).unwrap().len() > 1);
+        assert!(serde_json::from_str::<DeviceIndex>(&env.store.raw_get(DEVICE_INDEX_ACCOUNT).unwrap()).unwrap().checkpoint_required);
+        std::fs::write(&env.lock_path, []).unwrap(); // loss immediately after migration, before any command
+        let missing = env.remote();
+        assert_eq!(command_result(&missing, 1, 2), Err(StatusCode::SERVICE_UNAVAILABLE));
+        assert!(missing.status().recovery_required);
+        drop(remote);
+    }
+
+    #[test]
+    fn checkpoint_corruption_never_falls_back_to_automatic_migration() {
+        for bytes in [vec![0], b"x{partial".to_vec(), vec![0; 5000]] {
+            let env = TestEnv::new("checkpoint-corrupt"); seeded(&env, 1);
+            std::fs::write(&env.lock_path, bytes).unwrap();
+            let remote = env.remote();
+            assert_eq!(command_result(&remote, 1, 1), Err(StatusCode::SERVICE_UNAVAILABLE));
+            assert!(remote.status().recovery_required);
+            run_recovery_now(&remote, "reset-trust").unwrap();
+            assert_eq!(remote.status().store_state, "ok");
+            assert!(stored(env.store.as_ref()).ca_key_pem.is_none());
+        }
+    }
+
+    #[test]
+    fn checkpoint_crash_boundaries_are_fail_closed_across_real_processes() {
+        for phase in ["before-1", "after-1", "before-2", "after-2"] {
+            let env = TestEnv::new("checkpoint-crash"); seeded(&env, 1);
+            let dir = sync_dir(&env, phase);
+            let status = spawn_child(&env, "command", &dir, "1", NEVER)
+                .env("VELORA_TEST_CHECKPOINT_CRASH", phase).status().unwrap();
+            assert_eq!(status.code(), Some(87));
+            let remote = env.remote();
+            let result = command_result(&remote, 1, 1);
+            if phase == "before-1" { assert_eq!(result, execute(0)); }
+            else if phase == "after-2" { assert_eq!(result, Err(StatusCode::CONFLICT)); }
+            else {
+                assert_eq!(result, Err(StatusCode::SERVICE_UNAVAILABLE));
+                assert!(remote.status().recovery_required);
+                run_recovery_now(&remote, "revoke-all-devices").unwrap();
+                assert!(stored(env.store.as_ref()).devices.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn recovery_revision_exceeds_a_pending_checkpoint_even_without_cached_history() {
+        let env = TestEnv::new("checkpoint-floor"); seeded(&env, 1);
+        let holder = FileStateLock::new(&env.lock_path);
+        let mut guard = holder.acquire(Duration::from_secs(1)).unwrap();
+        let floor = 9_000_000_000;
+        write_checkpoint(&mut guard, &IndexCheckpoint::pending(floor, "reserved")).unwrap();
+        drop(guard);
+        let remote = env.remote(); run_recovery_now(&remote, "revoke-all-devices").unwrap();
+        assert!(stored(env.store.as_ref()).revision > floor);
+    }
+
+    #[test]
+    fn checkpoint_write_failures_never_return_execute_or_replay_an_ambiguous_reservation() {
+        use crate::remote_state_lock::{StateLockLease, StateLockGuard, StateLockError};
+        struct Fault { bytes: Vec<u8>, writes: usize, fail_at: usize, partial: bool, after: bool }
+        struct Lease(Arc<Mutex<Fault>>);
+        impl StateLockLease for Lease {
+            fn read_checkpoint(&mut self) -> Result<Option<Vec<u8>>, StateLockError> { Ok(Some(lock(&self.0).bytes.clone())) }
+            fn write_checkpoint(&mut self, bytes: &[u8]) -> Result<(), StateLockError> {
+                let mut state = lock(&self.0); state.writes += 1;
+                if state.writes == state.fail_at {
+                    if state.partial { state.bytes = bytes[..bytes.len() / 2].to_vec(); }
+                    else if state.after { state.bytes = bytes.to_vec(); }
+                    return Err(StateLockError::Unavailable);
+                }
+                state.bytes = bytes.to_vec(); Ok(())
+            }
+        }
+        struct TestLock(Arc<Mutex<Fault>>);
+        impl StateLock for TestLock {
+            fn acquire(&self, _: Duration) -> Result<StateLockGuard, StateLockError> { Ok(StateLockGuard::new(Box::new(Lease(self.0.clone())))) }
+        }
+        for (fail_at, partial, after) in [(1, false, false), (1, true, false), (1, false, true), (2, false, false), (2, true, false), (2, false, true)] {
+            let env = TestEnv::new("checkpoint-io-fail"); seeded(&env, 1);
+            let mut real_guard = FileStateLock::new(&env.lock_path).acquire(Duration::from_secs(1)).unwrap();
+            let bytes = real_guard.read_checkpoint().unwrap().unwrap(); drop(real_guard);
+            let state = Arc::new(Mutex::new(Fault { bytes, writes: 0, fail_at, partial, after }));
+            let remote = RemoteAccess::with_credential_store(env.store.clone(), Arc::new(TestLock(state.clone())));
+            lock(&remote.inner.status).enabled = true;
+            assert_eq!(command_result(&remote, 1, 1), Err(StatusCode::SERVICE_UNAVAILABLE));
+            lock(&state).fail_at = usize::MAX;
+            let retried = command_result(&remote, 1, 1);
+            if fail_at == 1 && !partial && !after { assert_eq!(retried, execute(0)); } // Nothing durable changed.
+            else if fail_at == 2 && after { assert_eq!(retried, Err(StatusCode::CONFLICT)); } // Full commit reached disk.
+            else { assert_eq!(retried, Err(StatusCode::SERVICE_UNAVAILABLE)); assert!(remote.status().recovery_required); }
+        }
+    }
+
+    #[test]
+    fn resumed_reset_trust_cannot_downgrade_or_accept_a_falsely_successful_ca_delete() {
+        let env = TestEnv::new("checkpoint-effective-recovery"); seeded(&env, 1);
+        env.store.raw_set(RECOVERY_JOURNAL_ACCOUNT, &serde_json::to_string(&RecoveryJournal {
+            version: RECOVERY_JOURNAL_VERSION, mode: "reset-trust".into(), device_ids: vec![device_id(1)]
+        }).unwrap());
+        lock(&env.store.pretend_deletes).insert(CA_KEY_ACCOUNT.into());
+        lock(&env.store.pretend_deletes).insert(CA_CERT_ACCOUNT.into());
+        let remote = env.remote();
+        assert!(run_recovery_now(&remote, "revoke-all-devices").is_err());
+        assert!(env.store.raw_get(RECOVERY_JOURNAL_ACCOUNT).is_some());
+        assert!(remote.status().recovery_required);
+        lock(&env.store.pretend_deletes).clear();
+        run_recovery_now(&remote, "revoke-all-devices").unwrap();
+        let fresh = stored(env.store.as_ref()); assert!(fresh.ca_key_pem.is_none() && fresh.ca_cert_pem.is_none());
     }
 
     fn device_id(index: u64) -> String {
@@ -2961,9 +3212,9 @@ mod windows_tests {
         );
 
         {
-            let (_guard, mut vault) = remote.locked_fresh(UI_LOCK_WAIT).unwrap();
+            let (mut guard, mut vault) = remote.locked_fresh(UI_LOCK_WAIT).unwrap();
             vault.devices[0].last_sequence = u64::MAX - 1;
-            save_device_index(env.store.as_ref(), &mut vault).expect("persist maximum sequence");
+            save_device_index_checked(env.store.as_ref(), &mut guard, &mut vault).expect("persist maximum sequence");
             remote.publish(&vault);
         }
         assert_eq!(command_result(&remote, 1, u64::MAX), execute(u64::MAX - 1));
@@ -3332,9 +3583,11 @@ mod windows_tests {
             let restarted = env.remote();
             if role == "command" {
                 assert_eq!(d1.last_sequence, 5);
-                assert_eq!(command_result(&restarted, 1, 5), Err(StatusCode::CONFLICT));
+                assert_eq!(command_result(&restarted, 1, 5), Err(StatusCode::SERVICE_UNAVAILABLE));
             }
-            assert_eq!(command_result(&restarted, 1, 3), Err(StatusCode::UNAUTHORIZED));
+            let pending = role == "command" || abort_after == 1;
+            assert_eq!(command_result(&restarted, 1, 3), Err(if pending { StatusCode::SERVICE_UNAVAILABLE } else { StatusCode::UNAUTHORIZED }));
+            assert_eq!(restarted.status().recovery_required, pending);
         }
     }
 
@@ -3402,8 +3655,11 @@ mod windows_tests {
         // The error was reported, but the reservation did reach the store.
         assert_eq!(stored_sequence(env.store.as_ref(), 1), 1);
         lock(&env.store.write_then_fail).clear();
-        assert_eq!(command_result(&remote, 1, 1), Err(StatusCode::CONFLICT));
-        assert_eq!(command_result(&remote, 1, 2), execute(1));
+        assert_eq!(command_result(&remote, 1, 1), Err(StatusCode::SERVICE_UNAVAILABLE));
+        assert_eq!(command_result(&remote, 1, 2), Err(StatusCode::SERVICE_UNAVAILABLE));
+        assert!(remote.status().recovery_required);
+        run_recovery_now(&remote, "revoke-all-devices").unwrap();
+        assert!(stored(env.store.as_ref()).devices.is_empty());
     }
 
     #[test]
@@ -3484,7 +3740,9 @@ mod windows_tests {
         assert_eq!(lock(&remote.inner.vault).devices.len(), 1);
         assert_eq!(stored(env.store.as_ref()).devices.len(), 1);
         lock(&env.store.failed_writes).remove(DEVICE_INDEX_ACCOUNT);
-
+        assert!(remote.status().recovery_required, "ambiguous index write requires explicit recovery");
+        let env = TestEnv::new("revoke-cleanup");
+        let remote = seeded(&env, 1);
         env.store.fail_delete(&device_token_account(&device_id(1)));
         let error = remote.revoke_device(&device_id(1)).unwrap_err();
         assert!(error.contains("zostało odwołane"));

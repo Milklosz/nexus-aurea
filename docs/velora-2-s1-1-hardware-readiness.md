@@ -18,6 +18,10 @@ Remote origin: Milklosz/nexus-aurea. S0.1 1df1736 i S1 d816266 są w historii me
 - A5: mapowanie Gamepad API PlayStation pozostawiono. Natywny DS4 używa semantycznych Cross/Circle. Natywny DualSense obsługuje akord Home; nawigacja DualSense pozostaje w Gamepad API. Steam Input może udostępnić osobny wirtualny XInput.
 - A6: aktywność natywna jest notowana synchronicznie w subskrybencie, przed kolejnym tickiem. Priorytet zapamiętywany per akcja i kierunek przez 400 ms, obejmuje Options i PS+Options oraz opóźniony release. Inne akcje niezależnego pada pozostają dostępne.
 
+## Dodatkowe rozszerzenie bezpieczeństwa anti-replay
+
+Pełny test wykrył podwójne zaakceptowanie sekwencji. Użytkownik zatwierdził trwały checkpoint rewizji/skrótu indeksu, migrację i recovery. Szczegóły i granice gwarancji: [replay checkpoint](velora-2-s1-1-replay-checkpoint.md). Pierwszy test LAN musi także obejmować ponowne uruchomienie VELORY po przerwanym zapisie i jawne recovery.
+
 ## Integracja i niezależny przegląd
 
 Zachowano Credential Manager, recovery, provenance, host/origin/HMAC pilota, listę capability/CSP,
