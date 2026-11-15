@@ -38,5 +38,22 @@ Nie skonfigurowano status line użytkownika i nie wysłano zapytania modelowego;
 Oddzielny agent przejrzał bezpieczeństwo/S0.1, procesy, cache/parser/focus oraz checkpoint. Po poprawkach nie znalazł pozostałych actionable blockerów; to niezależny przegląd kodu, nie test sprzętu.
 Ustalenia P2 i ich poprawki opisano w dokumentach modułów; wykryty P1 replay wymusił rozszerzenie zatwierdzone przez użytkownika.
 Draft PR A: https://github.com/Milklosz/nexus-aurea/pull/55 (base hardening/velora-2-s0-1).
-CI dla a176e73 zweryfikowane: Windows, macOS, Playnite success. Aktualny A head fbf1514: macOS i Playnite success, Windows testy/check przeszły, trwa build instalatora; wynik końcowy do sprawdzenia.
-Brak merge/release/instalacji. Końcowe SHA/PR B/CI zostaną dopisane po push.
+CI A head fbf15142cfc3d300dd53148be2a3d6cfc31f4cd9: completed/success, Windows + macOS + Playnite. Run: https://github.com/Milklosz/nexus-aurea/actions/runs/43724832803 . Testy, oba buildy Tauri i weryfikacja provenance instalatora przeszły; job publikacji release pominięty zgodnie z workflow.
+Draft PR B: https://github.com/Milklosz/nexus-aurea/pull/56 , base codex/velora-2-s1-1-completion (zależny od #55).
+Kod S1.2: a055b9e98216fad4f12213398159826d4179dea6. CI S1.2 było w toku podczas zapisu tego raportu;
+końcowy wynik zostanie podany w raporcie użytkownikowi i metadanych PR po sprawdzeniu GitHub Actions.
+
+Commity implementacji:
+- a176e73 — sześć ustaleń S1.1 i hardware readiness;
+- 4d9d267 — latch dwóch padów po przeciążeniu;
+- fbf1514 — trwały checkpoint anti-replay, migracja, crash/recovery i audyt;
+- a055b9e — lokalny adapter status line, widget, parser/cache/procesy/testy/dokumentacja.
+
+Gałęzie: codex/velora-2-s1-1-completion oraz codex/velora-2-s1-2-claude-usage.
+Sprawdzono diff i wzorce sekretów przed push. Gałąź początkowa integration/velora-2-s1-1-sprint,
+main oraz PR #49–54 pozostały niezmienione. Nie wykonano merge, release ani instalacji.
+Pozostały istniejący nieśledzony target-int oraz gitignored artefakty testów/work z konfiguracją nowej sesji.
+
+Pełny plan MSI: velora-2-s1-1-hardware-readiness.md. Źródło i ręczne uruchomienie integracji:
+velora-2-claude-usage-widget.md. Granice checkpoint: velora-2-s1-1-replay-checkpoint.md.
+
