@@ -10,11 +10,11 @@ export type WebStreamingService = {
 
 export type ManagedMediaApp = {
   kind: "managed";
-  id: "appleMusic" | "steam";
+  id: "appleMusic" | "steam" | "playnite";
   name: string;
   label: string;
   className: string;
-  managedAppId: "appleMusic" | "steamBigPicture";
+  managedAppId: "appleMusic" | "steamBigPicture" | "playniteFullscreen";
 };
 
 export type StreamingService = WebStreamingService | ManagedMediaApp;
@@ -67,19 +67,27 @@ export const streamingServices: StreamingService[] = [
   },
   {
     kind: "managed",
-    id: "appleMusic",
-    name: "Apple Music",
-    label: "APPLE MUSIC",
-    className: "apple-music",
-    managedAppId: "appleMusic",
-  },
-  {
-    kind: "managed",
     id: "steam",
     name: "Steam",
     label: "STEAM",
     className: "steam",
     managedAppId: "steamBigPicture",
+  },
+  {
+    kind: "managed",
+    id: "playnite",
+    name: "Playnite",
+    label: "PLAYNITE",
+    className: "playnite",
+    managedAppId: "playniteFullscreen",
+  },
+  {
+    kind: "managed",
+    id: "appleMusic",
+    name: "Apple Music",
+    label: "APPLE MUSIC",
+    className: "apple-music",
+    managedAppId: "appleMusic",
   },
 ];
 

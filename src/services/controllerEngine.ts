@@ -19,6 +19,19 @@ export type ControllerSample = {
   dpadDown?: boolean;
   /** Left stick Y: negative is up, positive is down. */
   axisY?: number;
+  /**
+   * The PlayStation (guide) button. It is a modifier, never a navigation action: while it is
+   * held, Options does not open Control Center (PS + Options is the global Home chord).
+   */
+  guide?: boolean;
+};
+
+export type ControllerEngineOptions = {
+  /**
+   * Fire Options when it is released instead of when it is pressed, and not at all if the
+   * guide button was involved. Used by the native source so PS + Options never also opens a panel.
+   */
+  optionsOnRelease?: boolean;
 };
 
 type Direction = -1 | 0 | 1;
@@ -113,7 +126,12 @@ class DirectionRepeat {
 }
 
 export class ControllerEngine {
+  constructor(private readonly options: ControllerEngineOptions = {}) {}
+
   private ready = false;
+  /** Which axis wins while both are pushed (a diagonal). Locked until both are released. */
+  private dominant: "horizontal" | "vertical" | null = null;
+  private optionsGuideInvolved = false;
   private readonly horizontal = new DirectionRepeat();
   private readonly vertical = new DirectionRepeat();
   private axisDirection: Direction = 0;
@@ -135,14 +153,30 @@ export class ControllerEngine {
     }
 
     const actions: ControllerAction[] = [];
-    const horizontalStep = this.horizontal.step(this.readDirection(sample), now);
+    let horizontalDirection = this.readDirection(sample);
+    let verticalDirection = this.readVerticalDirection(sample);
+    // A stick diagonal must not move twice (dock and zone at once): the stronger axis wins and
+    // is locked until both axes are released, so jitter near 45 degrees cannot flip it. A
+    // deliberate D-pad diagonal keeps both moves, as before.
+    const dpadHeld = Boolean(sample.dpadLeft || sample.dpadRight || sample.dpadUp || sample.dpadDown);
+    if (horizontalDirection !== 0 && verticalDirection !== 0 && !dpadHeld) {
+      if (this.dominant === null) {
+        this.dominant = Math.abs(sample.axisX) >= Math.abs(sample.axisY ?? 0) ? "horizontal" : "vertical";
+      }
+      if (this.dominant === "horizontal") verticalDirection = 0;
+      else horizontalDirection = 0;
+    } else if (horizontalDirection === 0 && verticalDirection === 0) {
+      this.dominant = null;
+    }
+    const horizontalStep = this.horizontal.step(horizontalDirection, now);
     if (horizontalStep !== 0) actions.push({ type: "move", delta: horizontalStep });
-    const verticalStep = this.vertical.step(this.readVerticalDirection(sample), now);
+    const verticalStep = this.vertical.step(verticalDirection, now);
     if (verticalStep !== 0) actions.push({ type: "vertical", delta: verticalStep });
 
     this.updateButton("confirm", sample.confirm, now, actions);
     this.updateButton("back", sample.back, now, actions);
-    this.updateButton("options", sample.options, now, actions);
+    if (this.options.optionsOnRelease) this.updateOptionsOnRelease(sample, now, actions);
+    else this.updateButton("options", sample.options, now, actions);
     return actions;
   }
 
@@ -152,6 +186,8 @@ export class ControllerEngine {
     this.vertical.reset();
     this.axisDirection = 0;
     this.axisYDirection = 0;
+    this.dominant = null;
+    this.optionsGuideInvolved = false;
     this.buttons.confirm = emptyButton();
     this.buttons.back = emptyButton();
     this.buttons.options = emptyButton();
@@ -164,6 +200,8 @@ export class ControllerEngine {
     for (const name of ["confirm", "back", "options"] as const) {
       this.buttons[name] = { raw: sample[name], since: now, pressed: sample[name] };
     }
+    // A button already held when input starts (focus regained, pad reconnected) must not fire on release.
+    this.optionsGuideInvolved = Boolean(this.options.optionsOnRelease && sample.options);
   }
 
   private readDirection(sample: ControllerSample): Direction {
@@ -201,6 +239,22 @@ export class ControllerEngine {
     }
     this.axisYDirection = 0;
     return 0;
+  }
+
+  private updateOptionsOnRelease(sample: ControllerSample, now: number, actions: ControllerAction[]): void {
+    const state = this.buttons.options;
+    const raw = sample.options;
+    if (raw !== state.raw) {
+      state.raw = raw;
+      state.since = now;
+    }
+    // PS held at any moment of the Options press turns it into the Home chord.
+    if (raw && sample.guide) this.optionsGuideInvolved = true;
+    if (state.raw === state.pressed || now - state.since < DEBOUNCE_MS) return;
+    state.pressed = state.raw;
+    if (state.pressed) return;
+    if (!this.optionsGuideInvolved) actions.push({ type: "options" });
+    this.optionsGuideInvolved = false;
   }
 
   private updateButton(

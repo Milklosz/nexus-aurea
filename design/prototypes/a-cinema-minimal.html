@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VELORA · A · Cinema Minimal</title>
+<!--
+=====================================================================================
+ VELORA 2.0 — Direction A: CINEMA MINIMAL
+=====================================================================================
+ RATIONALE
+   The screen is a film frame. A full-bleed, code-generated atmospheric horizon fills
+   the TV; the interface occupies only the lower-left third and a thin top line.
+   Instead of a marketing headline, the hero text IS the focused app ("HBO Max") plus
+   one functional line (what it is, how it opens). No brand wordmark, no eyebrow
+   micro-caps, no side panel, no footer legend. Luxury comes from the image breathing
+   and from very few, very legible elements.
+
+ TYPOGRAPHY
+   Segoe UI Variable Display (system, Windows 11) -> Segoe UI -> system-ui.
+   Title 72/72 600 -0.025em · Context 26/34 400 · Clock 44 500 tabular · Body/labels 22-26.
+   Nothing below 20px in the 1920 reference canvas (= 40px physical at 4K).
+   No letter-spaced uppercase anywhere.
+
+ PALETTE
+   Ink #F3F0EA (warm white) on near-black scrims. Focus surface = solid #F3F0EA with
+   #121214 text (inverted, maximum luminance contrast). Per-app colour lives only in
+   the background scene and in a single accent glyph of each wordmark.
+
+ NAVIGATION MODEL
+   Two focus zones. Zone 1 = top actions (Szukaj · Pilot · Ustawienia, top-right).
+   Zone 2 = dock (8 apps, bottom-left row). Up/Down switches zones and REMEMBERS the
+   last position in each zone. Left/Right moves inside a zone, no wrap; at an edge the
+   row gives a short 8px "bump" so the user feels the end. F3 / Options opens the
+   Control Center sheet; Circle / Esc closes it and returns focus where it was.
+
+ FOCUS BEHAVIOUR
+   Focused tile inverts (dark glass plate -> solid warm-white plate), lifts 8px and
+   scales 1.10. Only transform + opacity animate; the background-colour swap is a
+   single small repaint. The previously focused dock tile keeps a lighter "selected"
+   plate while focus is in the top bar, so the user never loses the place.
+
+ MOTION LANGUAGE
+   Focus 220ms cubic-bezier(.2,.8,.2,1). Scene crossfade 700ms (opacity) with a 1.03->1
+   settle, debounced 220ms so fast scrubbing through the dock does not thrash the
+   compositor. Title swap: 110ms fade-out / 240ms fade-up 8px. Reduced motion: no
+   scale/translate, crossfades shortened to 120ms.
+
+ VISUAL RISKS
+   - Landscape art can drift back toward the "fake mountains + sun" look of the
+     baseline if strata get too sharp or the glow becomes a disc. Mitigated: no sun
+     disc, 10 soft strata with aerial-perspective colour, grain, horizon kept low.
+   - Inverted white focus plate is close to the tvOS idiom; it is the clearest focus
+     signal at 3 m, so the similarity is accepted (no Apple artwork or layout copied).
+   - Full-bleed scenes need strong scrims for text; on very bright scenes contrast
+     could drop — every scene is authored dark at the left/bottom.
+
+ REACT / WEBVIEW2 FEASIBILITY (GPU compositing disabled)
+   Scenes are static SVG (or pre-rendered to PNG at build time) -> rasterised once.
+   Keep only 2 scene layers mounted (current + previous) in production; crossfade is
+   one opacity animation of a full-screen layer — the single most expensive thing on
+   this screen in software compositing, hence the 220ms debounce and 700ms cap.
+   No backdrop-filter, no animated shadows, no blur. Tiles are 176x100 rem-scaled
+   divs; focus = class swap. High feasibility.
+
+ RECOMMENDED DIRECTION — this file is the reference for DESIGN_SPEC.md. It already
+   absorbs the best ideas of the other directions: B's directional "page-turn" title
+   transition, D's held-D-pad acceleration (420 -> 110 -> 70ms), C's debounce discipline
+   and "selected" memory, plus a "not installed" state (#missing=N).
+
+ TEST HOOKS: #focus=N (dock 0-7) · #top=N (top action 0-2) · #cc (open Control Center)
+             #launch=N (freeze tile N in launching state) · #missing=N (app N not installed)
+=====================================================================================
+-->
+<style>
+  :root {
+    --bg: #050506;
+    --ink: #F3F0EA;
+    --ink-2: rgba(243, 240, 234, .80);
+    --ink-3: rgba(243, 240, 234, .62);
+    --plate: rgba(12, 12, 14, .64);
+    --plate-line: rgba(255, 255, 255, .12);
+    --plate-sel: rgba(243, 240, 234, .18);
+    --focus-bg: #F3F0EA;
+    --focus-ink: #121214;
+    --ease-out: cubic-bezier(.2, .8, .2, 1);
+    --ease-std: cubic-bezier(.4, 0, .2, 1);
+    --t-focus: 220ms;
+    --t-scene: 700ms;
+    --font: "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  }
+  /* 1rem = 10 reference px in a 1920x1080 canvas; doubles automatically at 3840x2160. */
+  html { font-size: calc(10 * min(100vw / 1920, 100vh / 1080)); }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
+  body { color: var(--ink); font-family: var(--font); -webkit-font-smoothing: antialiased; cursor: none; }
+
+  .stage { position: fixed; inset: 0; overflow: hidden; }
+
+  /* ---------- background scenes ---------- */
+  .scene { position: absolute; inset: 0; opacity: 0; transform: scale(1.03);
+           transition: opacity var(--t-scene) var(--ease-std), transform 1400ms var(--ease-out); }
+  .scene.on { opacity: 1; transform: scale(1); }
+  .scene svg { width: 100%; height: 100%; display: block; }
+  .scrim { position: absolute; inset: 0; pointer-events: none;
+    background:
+      linear-gradient(90deg, rgba(4,4,5,.66) 0%, rgba(4,4,5,.30) 36%, rgba(4,4,5,0) 60%),
+      linear-gradient(0deg, rgba(4,4,5,.88) 0%, rgba(4,4,5,.50) 24%, rgba(4,4,5,0) 50%),
+      linear-gradient(180deg, rgba(4,4,5,.50) 0%, rgba(4,4,5,0) 20%); }
+  .grain { position: absolute; inset: 0; pointer-events: none; opacity: .07;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-size: 22rem 22rem; }
+
+  /* ---------- top line ---------- */
+  .top { position: absolute; top: 6.4rem; left: 9.6rem; right: 9.6rem; height: 5.6rem;
+         display: flex; align-items: center; justify-content: space-between; }
+  .when { display: flex; align-items: baseline; gap: 2.8rem; }
+  .clock { font-size: 4.4rem; font-weight: 500; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+  .weather { font-size: 2.4rem; color: var(--ink-2); }
+  .weather b { font-weight: 600; color: var(--ink); margin-right: .8rem; }
+  .actions { display: flex; gap: 1.2rem; }
+  .act { height: 5.6rem; padding: 0 2.6rem 0 2.2rem; border-radius: 2.8rem; display: flex; align-items: center; gap: 1.2rem;
+         font-size: 2.2rem; font-weight: 500; color: var(--ink-2); background: rgba(255,255,255,.07);
+         transition: transform var(--t-focus) var(--ease-out); }
+  .act svg { width: 2.4rem; height: 2.4rem; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .act.focus { background: var(--focus-bg); color: var(--focus-ink); transform: scale(1.06); }
+
+  /* ---------- focused app info ---------- */
+  .info { position: absolute; left: 9.6rem; bottom: 22.4rem; max-width: 110rem;
+          transition: opacity 240ms var(--ease-out), transform 240ms var(--ease-out); }
+  .info.swap { opacity: 0; transform: translateY(.8rem); transition-duration: 110ms; }
+  /* directional "page turn" (borrowed from direction B): exit against travel, enter from travel side */
+  .info.out-l { opacity: 0; transform: translateX(-2.4rem); transition-duration: 110ms; }
+  .info.out-r { opacity: 0; transform: translateX(2.4rem); transition-duration: 110ms; }
+  .info.in-l  { opacity: 0; transform: translateX(-2.4rem); transition: none; }
+  .info.in-r  { opacity: 0; transform: translateX(2.4rem); transition: none; }
+  .tile.missing .wm { opacity: .42; }
+  .tile.missing.focus .wm { opacity: .5; }
+  .title { font-size: 7.2rem; line-height: 1; font-weight: 600; letter-spacing: -.025em; margin: 0; }
+  .ctx { margin: 1.8rem 0 0; font-size: 2.6rem; line-height: 3.4rem; color: var(--ink-2); }
+  .ctx .sep { opacity: .5; margin: 0 1rem; }
+
+  /* ---------- dock ---------- */
+  .dock { position: absolute; left: 9.6rem; bottom: 7.2rem; display: flex; gap: 2rem; }
+  .dock.bump-l { animation: bumpL 260ms var(--ease-out); }
+  .dock.bump-r { animation: bumpR 260ms var(--ease-out); }
+  @keyframes bumpL { 40% { transform: translateX(-.8rem); } }
+  @keyframes bumpR { 40% { transform: translateX(.8rem); } }
+  .tile { position: relative; width: 17.6rem; height: 10rem; border-radius: 1.4rem; background: var(--plate);
+          box-shadow: inset 0 0 0 1px var(--plate-line); display: grid; place-items: center;
+          transition: transform var(--t-focus) var(--ease-out), background-color 140ms linear; }
+  .tile::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+                 box-shadow: 0 1.8rem 3.6rem rgba(0,0,0,.55); opacity: 0; transition: opacity var(--t-focus) linear; }
+  .tile.sel { background: var(--plate-sel); }
+  .tile.focus { transform: translateY(-.8rem) scale(1.08); background: var(--focus-bg); box-shadow: none; z-index: 2; }
+  .tile.focus::after { opacity: 1; }
+  .tile.pressed { transform: translateY(-.4rem) scale(1.04); transition-duration: 90ms; }
+  .wm { font-size: 2.6rem; font-weight: 600; letter-spacing: -.012em; white-space: nowrap; color: var(--ink); }
+  .wm i { font-style: normal; }
+  .wm .l { font-weight: 350; }
+  .tile.focus .wm { color: var(--focus-ink); }
+  .wm .a { color: var(--acc); }
+  .tile.focus .wm .a { color: var(--acc-light); }
+  /* launching: indeterminate sweep (the launcher reports no real progress, so none is faked) */
+  .tile .bar { position: absolute; left: 1.6rem; right: 1.6rem; bottom: 1.2rem; height: .4rem; border-radius: .2rem; overflow: hidden;
+               background: rgba(18,18,20,.16); opacity: 0; }
+  .tile .bar::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 35%; border-radius: inherit; background: var(--focus-ink);
+                      transform: translateX(-100%); }
+  .tile:not(.focus) .bar { background: rgba(243,240,234,.16); }
+  .tile:not(.focus) .bar::after { background: var(--ink); }
+  .tile.launching .wm { opacity: .55; }
+  .tile.launching .bar { opacity: 1; }
+  .tile.launching .bar::after { animation: sweep 1200ms var(--ease-std) infinite; }
+  .tile.launching.frozen .bar::after { animation: none; transform: translateX(110%); }
+  @keyframes sweep { to { transform: translateX(290%); } }
+
+  /* ---------- toast ---------- */
+  .toast { position: absolute; top: 6.4rem; left: 50%; transform: translate(-50%, -1.2rem); opacity: 0;
+           padding: 1.4rem 2.6rem; border-radius: 2.8rem; background: var(--focus-bg); color: var(--focus-ink);
+           font-size: 2.2rem; font-weight: 500; transition: opacity 200ms linear, transform 240ms var(--ease-out); white-space: nowrap; }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  /* ---------- control center sheet ---------- */
+  .cc-scrim { position: absolute; inset: 0; background: rgba(0,0,0,.55); opacity: 0; transition: opacity 260ms linear; pointer-events: none; }
+  .cc { position: absolute; top: 0; right: 0; bottom: 0; width: 66rem; background: #0D0D0F;
+        box-shadow: inset 1px 0 0 rgba(255,255,255,.08);
+        padding: 6.4rem 9.6rem 7.2rem 5.6rem; transform: translateX(100%); transition: transform 320ms var(--ease-out);
+        display: flex; flex-direction: column; }
+  .open .cc { transform: none; }
+  .open .cc-scrim { opacity: 1; }
+  .cc h2 { margin: 0 0 3.2rem; font-size: 4rem; font-weight: 600; letter-spacing: -.02em; }
+  .row { padding: 2rem 2.4rem; border-radius: 1.6rem; margin-bottom: .8rem; transition: transform var(--t-focus) var(--ease-out); }
+  .row .k { font-size: 2.6rem; font-weight: 500; }
+  .row .v { font-size: 2rem; color: var(--ink-3); margin-top: .4rem; }
+  .row.focus { background: var(--focus-bg); color: var(--focus-ink); transform: scale(1.02); }
+  .row.focus .v { color: rgba(18,18,20,.66); }
+  .cc .hint { margin-top: auto; font-size: 2rem; color: var(--ink-3); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .scene, .scene.on { transform: none; transition: opacity 120ms linear; }
+    .tile.focus { transform: none; }
+    .act.focus, .row.focus { transform: none; }
+    .info, .info.swap { transform: none; }
+    .dock.bump-l, .dock.bump-r { animation: none; }
+  }
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+  <div id="scenes"></div>
+  <div class="scrim"></div>
+  <div class="grain"></div>
+
+  <header class="top">
+    <div class="when"><span class="clock" id="clock">--:--</span><span class="weather"><b>2°</b>Częściowe zachmurzenie</span></div>
+    <nav class="actions" id="actions" aria-label="System">
+      <div class="act" data-i="0"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 20 20"/></svg>Szukaj</div>
+      <div class="act" data-i="1"><svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="3"/><circle cx="12" cy="8" r="1.6"/><path d="M10 13.5h4M10 16.5h4"/></svg>Pilot</div>
+      <div class="act" data-i="2"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2.3" fill="#0000"/><circle cx="15" cy="17" r="2.3"/></svg>Ustawienia</div>
+    </nav>
+  </header>
+
+  <section class="info" id="info" aria-live="polite">
+    <h1 class="title" id="title">Netflix</h1>
+    <p class="ctx" id="ctx"></p>
+  </section>
+
+  <nav class="dock" id="dock" aria-label="Aplikacje"></nav>
+
+  <div class="toast" id="toast"></div>
+
+  <div class="cc-scrim"></div>
+  <aside class="cc" id="cc" aria-label="Control Center">
+    <h2>Ustawienia</h2>
+    <div class="row" data-i="0"><div class="k">Pilot</div><div class="v">iPhone · otwórz velora.local w Safari</div></div>
+    <div class="row" data-i="1"><div class="k">Dźwięk</div><div class="v">Głośność systemu</div></div>
+    <div class="row" data-i="2"><div class="k">Tryb obrazu</div><div class="v">Kino</div></div>
+    <div class="row" data-i="3"><div class="k">Pokaż pulpit</div><div class="v">Przejdź do Windows</div></div>
+    <div class="hint">○ / Esc &nbsp;Zamknij</div>
+  </aside>
+</div>
+
+<script>
+/* ---------------- data ---------------- */
+const APPS = [
+  { id: "netflix",    name: "Netflix",     wm: '<i class="a">Netflix</i>',                       cat: "Filmy i seriale",            how: "Okno Edge Cinema",            acc: "#F0484E", accL: "#C8161E" },
+  { id: "disney",     name: "Disney+",     wm: 'Disney<i class="a l">+</i>',                     cat: "Filmy, seriale i animacje",  how: "Okno Edge Cinema",            acc: "#7AA6FF", accL: "#1F54C9" },
+  { id: "max",        name: "HBO Max",     wm: 'HBO <i class="a l">Max</i>',                     cat: "Filmy i seriale",            how: "Okno Edge Cinema",            acc: "#9A9AFF", accL: "#4338CA" },
+  { id: "prime",      name: "Prime Video", wm: 'prime <i class="a l">video</i>',                 cat: "Filmy, seriale i sport",     how: "Okno Edge Cinema",            acc: "#5CC8F2", accL: "#0B6E99" },
+  { id: "youtube",    name: "YouTube",     wm: '<i class="l">You</i><i class="a">Tube</i>',      cat: "Wideo",                      how: "Okno Edge Cinema",            acc: "#FF5D52", accL: "#CC1A10" },
+  { id: "steam",      name: "Steam",       wm: '<i class="a">Steam</i>',                         cat: "Gry",                        how: "Steam Big Picture",           acc: "#9CCDF0", accL: "#1D5E8C" },
+  { id: "playnite",   name: "Playnite",    wm: 'Play<i class="a">nite</i>',                      cat: "Biblioteka gier",            how: "Pełny ekran Playnite",        acc: "#C6A8FF", accL: "#6B3FD0" },
+  { id: "appleMusic", name: "Apple Music", wm: '<i class="l">Apple</i> <i class="a">Music</i>',  cat: "Muzyka",                     how: "Aplikacja Windows",           acc: "#FF7088", accL: "#C41E44" },
+];
+const TOP_N = 3, CC_N = 4;
+
+/* ---------------- procedural scenes (original, generated in code) ---------------- */
+const SCENES = [
+  { type: "dunes", sky: ["#050506", "#13080a", "#3a1214"], glow: "#ff6a4a", gx: 1380, ga: .55, hz: 612, haze: "#5a1e1c", fg: "#050404", seed: 2.1 },
+  { type: "dunes", sky: ["#020309", "#070f28", "#1b336c"], glow: "#86a8ff", gx: 1500, ga: .42, hz: 640, haze: "#1b2a58", fg: "#020309", seed: 5.7, stars: true },
+  { type: "dunes", sky: ["#040309", "#110b25", "#37226c"], glow: "#a586ff", gx: 1200, ga: .5,  hz: 598, haze: "#2b1f50", fg: "#040308", seed: 8.2 },
+  { type: "sea",   sky: ["#020a10", "#092331", "#2b6a82"], glow: "#a8e6f4", gx: 1330, ga: .48, hz: 624, haze: "#1a4858", fg: "#02070a", seed: 3.3 },
+  { type: "dunes", sky: ["#060302", "#1c0c06", "#582311"], glow: "#ff8c4a", gx: 1470, ga: .58, hz: 622, haze: "#682b17", fg: "#060302", seed: 11.4 },
+  { type: "mist",  sky: ["#03050a", "#0e1722", "#334c64"], glow: "#b8d6f0", gx: 1250, ga: .34, hz: 560, haze: "#283a4e", fg: "#03050a", seed: 4.8 },
+  { type: "dunes", sky: ["#020605", "#091c17", "#205646"], glow: "#80e2bf", gx: 1410, ga: .4,  hz: 632, haze: "#1a483c", fg: "#020504", seed: 6.6 },
+  { type: "dunes", sky: ["#070205", "#1c0911", "#581a35"], glow: "#ff7ca2", gx: 1310, ga: .5,  hz: 602, haze: "#581d37", fg: "#060204", seed: 9.9 },
+];
+const hex = h => [1, 3, 5].map(k => parseInt(h.slice(k, k + 2), 16));
+const mix = (a, b, t) => { const A = hex(a), B = hex(b); return "#" + A.map((v, k) => Math.round(v + (B[k] - v) * t).toString(16).padStart(2, "0")).join(""); };
+function rng(seed) { let s = Math.floor(seed * 9973) % 2147483647 || 1; return () => (s = s * 16807 % 2147483647) / 2147483647; }
+
+function sceneSVG(sc, i) {
+  const H = 1080, N = 10, r = rng(sc.seed);
+  let defs = `<linearGradient id="sky${i}" x1="0" y1="0" x2="0" y2="${sc.hz}" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="${sc.sky[0]}"/><stop offset=".58" stop-color="${sc.sky[1]}"/><stop offset="1" stop-color="${sc.sky[2]}"/></linearGradient>
+    <radialGradient id="g${i}"><stop offset="0" stop-color="${sc.glow}" stop-opacity="${sc.ga}"/><stop offset=".32" stop-color="${sc.glow}" stop-opacity="${sc.ga * .32}"/><stop offset="1" stop-color="${sc.glow}" stop-opacity="0"/></radialGradient>
+    <radialGradient id="c${i}"><stop offset="0" stop-color="#fff6ea" stop-opacity="${sc.ga * .9}"/><stop offset=".4" stop-color="${sc.glow}" stop-opacity="${sc.ga * .4}"/><stop offset="1" stop-color="${sc.glow}" stop-opacity="0"/></radialGradient>`;
+  const hazeL = mix(sc.haze, sc.sky[2], .5);
+  defs += `<linearGradient id="h${i}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${hazeL}" stop-opacity="0"/><stop offset=".12" stop-color="${hazeL}"/></linearGradient>`;
+  let body = `<rect width="1920" height="1080" fill="url(#sky${i})"/><rect y="${sc.hz - 40}" width="1920" height="${H - sc.hz + 40}" fill="url(#h${i})"/>`;
+  if (sc.stars) for (let k = 0; k < 70; k++) body += `<circle cx="${(r() * 1920).toFixed(0)}" cy="${(r() * sc.hz * .62).toFixed(0)}" r="${(.6 + r() * 1.1).toFixed(2)}" fill="#dfe8ff" opacity="${(.15 + r() * .45).toFixed(2)}"/>`;
+  // long, soft atmospheric streaks in the sky (cinematic haze, not clouds-as-clipart)
+  for (let k = 0; k < 5; k++) {
+    const cy = sc.hz - 60 - r() * 300, cx = sc.gx + (r() - .6) * 900;
+    body += `<ellipse cx="${cx.toFixed(0)}" cy="${cy.toFixed(0)}" rx="${(500 + r() * 500).toFixed(0)}" ry="${(14 + r() * 26).toFixed(0)}" fill="url(#g${i})" opacity="${(.25 + r() * .3).toFixed(2)}"/>`;
+  }
+  body += `<ellipse cx="${sc.gx}" cy="${sc.hz}" rx="1000" ry="460" fill="url(#g${i})"/><ellipse cx="${sc.gx}" cy="${sc.hz}" rx="320" ry="120" fill="url(#c${i})"/>`;
+  for (let k = 0; k < N; k++) {
+    const t = k / (N - 1);
+    const base = sc.hz + (H - sc.hz) * Math.pow(t, 1.4) * 1.02 - 6;
+    const amp = sc.type === "sea" ? 1.2 + 2 * t : sc.type === "mist" ? 30 + 90 * Math.pow(t, 1.2) : 4 + 120 * Math.pow(t, 1.35);
+    const f = .0011 + .0024 * (1 - t);
+    const p1 = r() * 6.28, p2 = r() * 6.28, p3 = r() * 6.28;
+    const col = mix(hazeL, sc.fg, Math.pow(t, .62));
+    const rim = mix(col, sc.glow, .3 * (1 - t) + .07);
+    let d = `M-20 ${H} `;
+    for (let x = -20; x <= 1940; x += 16) {
+      const n = .5 + .5 * (.56 * Math.sin(x * f + p1) + .3 * Math.sin(x * f * 2.17 + p2) + .14 * Math.sin(x * f * 4.9 + p3));
+      d += `L${x} ${(base - amp * n).toFixed(1)} `;
+    }
+    d += `L1940 ${H} Z`;
+    defs += `<linearGradient id="s${i}_${k}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${rim}"/><stop offset="${(.06 + .18 * t).toFixed(2)}" stop-color="${col}"/></linearGradient>`;
+    body += `<path d="${d}" fill="url(#s${i}_${k})"/>`;
+    if (sc.type === "mist" && k < N - 2) body += `<rect x="0" y="${(base - 40).toFixed(0)}" width="1920" height="90" fill="${sc.glow}" opacity="${(.05 * (1 - t)).toFixed(3)}"/>`;
+  }
+  if (sc.type === "sea") {
+    for (let j = 0; j < 22; j++) {
+      const y = sc.hz + 5 + j * j * .5, w = 300 - j * 11 + r() * 50, x = sc.gx - w / 2 + (r() - .5) * 40;
+      body += `<rect x="${x.toFixed(0)}" y="${y.toFixed(1)}" width="${w.toFixed(0)}" height="${(1.4 + j * .16).toFixed(1)}" rx="1" fill="${sc.glow}" opacity="${(.22 * Math.pow(1 - j / 22, 1.6)).toFixed(3)}"/>`;
+    }
+  }
+  body += `<ellipse cx="${sc.gx}" cy="${sc.hz + 20}" rx="900" ry="200" fill="url(#g${i})" opacity=".35"/>`;
+  return `<svg viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg"><defs>${defs}</defs>${body}</svg>`;
+}
+
+/* ---------------- build DOM ---------------- */
+const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+$("#scenes").innerHTML = SCENES.map((sc, i) => `<div class="scene" data-i="${i}">${sceneSVG(sc, i)}</div>`).join("");
+$("#dock").innerHTML = APPS.map((a, i) =>
+  `<div class="tile" data-i="${i}" style="--acc:${a.acc};--acc-light:${a.accL}"><span class="wm">${a.wm}</span><span class="bar"></span></div>`).join("");
+
+/* ---------------- clock (Europe/Warsaw, 24h) ---------------- */
+const fmt = new Intl.DateTimeFormat("pl-PL", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Europe/Warsaw" });
+const tick = () => { $("#clock").textContent = fmt.format(new Date()); };
+tick(); setInterval(tick, 1000);
+
+/* ---------------- state + rendering ---------------- */
+const S = { zone: "dock", dock: 0, top: 0, cc: false, cci: 0, launching: -1, missing: -1, dir: 1 };
+let sceneTimer = 0, infoTimer = 0, shownKey = "";
+
+function render() {
+  $$(".tile").forEach((el, i) => {
+    el.classList.toggle("focus", !S.cc && S.zone === "dock" && i === S.dock);
+    el.classList.toggle("sel", (S.cc || S.zone !== "dock") && i === S.dock);
+    el.classList.toggle("launching", i === S.launching);
+    el.classList.toggle("missing", i === S.missing);
+  });
+  $$(".act").forEach((el, i) => el.classList.toggle("focus", !S.cc && S.zone === "top" && i === S.top));
+  $$(".row").forEach((el, i) => el.classList.toggle("focus", S.cc && i === S.cci));
+  $("#stage").classList.toggle("open", S.cc);
+  updateInfo();
+  clearTimeout(sceneTimer);
+  sceneTimer = setTimeout(() => $$(".scene").forEach((el, i) => el.classList.toggle("on", i === S.dock)), 220);
+}
+function updateInfo() {
+  const a = APPS[S.dock], info = $("#info"), launching = S.launching === S.dock, missing = S.missing === S.dock;
+  const key = S.dock + (launching ? "L" : "");
+  if (key === shownKey) return;
+  const apply = () => {
+    $("#title").textContent = a.name;
+    $("#ctx").innerHTML = launching ? "Otwieranie…"
+      : missing ? `Nie wykryto instalacji<span class="sep">·</span>wybierz, aby zobaczyć pomoc`
+      : `${a.cat}<span class="sep">·</span>${a.how}`;
+  };
+  clearTimeout(infoTimer);
+  const prev = shownKey; shownKey = key;
+  // first paint, or same app changing only its launching state: no motion
+  if (prev === "" || prev.replace("L", "") === key.replace("L", "")) { info.className = "info"; return apply(); }
+  const fwd = S.dir > 0;
+  info.className = "info " + (fwd ? "out-l" : "out-r");
+  infoTimer = setTimeout(() => { apply(); info.className = "info " + (fwd ? "in-r" : "in-l"); void info.offsetWidth; info.className = "info"; }, 110);
+}
+function bump(dir) { const d = $("#dock"); d.classList.remove("bump-l", "bump-r"); void d.offsetWidth; d.classList.add(dir < 0 ? "bump-l" : "bump-r"); }
+
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 2600); }
+
+function move(dir) {
+  if (S.cc) { if (dir === "up") S.cci = Math.max(0, S.cci - 1); if (dir === "down") S.cci = Math.min(CC_N - 1, S.cci + 1); return render(); }
+  if (S.zone === "dock") {
+    if (dir === "left") { if (S.dock === 0) return bump(-1); S.dock--; S.dir = -1; }
+    else if (dir === "right") { if (S.dock === APPS.length - 1) return bump(1); S.dock++; S.dir = 1; }
+    else if (dir === "up") S.zone = "top";
+    else return;
+  } else {
+    if (dir === "left") S.top = Math.max(0, S.top - 1);
+    else if (dir === "right") S.top = Math.min(TOP_N - 1, S.top + 1);
+    else if (dir === "down") S.zone = "dock";
+    else return;
+  }
+  render();
+}
+function activate() {
+  if (S.cc) return toast(["Pilot: otwórz velora.local na iPhonie", "Dźwięk", "Tryb obrazu", "Pokaż pulpit"][S.cci]);
+  if (S.zone === "top") {
+    if (S.top === 0) return toast("Szukaj — wyszukiwanie w aplikacjach");
+    openCC(S.top === 1 ? 0 : 1); return;
+  }
+  const i = S.dock; if (S.launching === i) return;
+  if (S.missing === i) return toast(`Nie wykryto aplikacji ${APPS[i].name}. Zainstaluj ją w Windows.`);
+  S.launching = i; render();
+  setTimeout(() => { if (S.launching === i) { S.launching = -1; render(); } }, 2400);
+}
+function openCC(i) { S.cc = true; S.cci = i || 0; render(); }
+function back() { if (S.cc) { S.cc = false; render(); } else if (S.zone === "top") { S.zone = "dock"; render(); } }
+function press(on) { if (!S.cc && S.zone === "dock") $$(".tile")[S.dock].classList.toggle("pressed", on); }
+
+/* ---------------- input: keyboard + DualShock (Gamepad API) ---------------- */
+const KEYS = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
+addEventListener("keydown", e => {
+  if (KEYS[e.key]) { e.preventDefault(); move(KEYS[e.key]); }
+  else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); if (!e.repeat) press(true); }
+  else if (e.key === "Escape" || e.key === "Backspace") { e.preventDefault(); back(); }
+  else if (e.key === "F3") { e.preventDefault(); S.cc ? back() : openCC(0); }
+});
+addEventListener("keyup", e => { if (e.key === "Enter" || e.key === " ") { press(false); activate(); } });
+const padPrev = {}; const padRep = {};
+(function poll(ts) {
+  const gp = (navigator.getGamepads ? navigator.getGamepads() : []).find(Boolean);
+  if (gp) {
+    const map = { 12: "up", 13: "down", 14: "left", 15: "right" };
+    for (const b in map) {
+      const down = gp.buttons[b] && gp.buttons[b].pressed;
+      // held D-pad: 420ms initial delay, then 110ms, accelerating to 70ms after 4 repeats (from direction D)
+      if (down && !padPrev[b]) { move(map[b]); padRep[b] = ts + 420; padRep["n" + b] = 0; }
+      else if (down && ts > padRep[b]) { move(map[b]); padRep["n" + b]++; padRep[b] = ts + (padRep["n" + b] > 4 ? 70 : 110); }
+      padPrev[b] = down;
+    }
+    const x = gp.buttons[0] && gp.buttons[0].pressed, o = gp.buttons[1] && gp.buttons[1].pressed, opt = gp.buttons[9] && gp.buttons[9].pressed;
+    if (x && !padPrev.x) press(true); if (!x && padPrev.x) { press(false); activate(); }
+    if (o && !padPrev.o) back(); if (opt && !padPrev.opt) (S.cc ? back() : openCC(0));
+    padPrev.x = x; padPrev.o = o; padPrev.opt = opt;
+  }
+  requestAnimationFrame(poll);
+})(0);
+
+/* ---------------- test hooks ---------------- */
+const H = new URLSearchParams(location.hash.slice(1));
+if (H.has("focus")) S.dock = +H.get("focus");
+if (H.has("top")) { S.zone = "top"; S.top = +H.get("top"); }
+if (H.has("cc")) { S.cc = true; S.cci = +(H.get("cc") || 0); }
+if (H.has("launch")) { S.launching = +H.get("launch"); S.dock = S.launching; }
+if (H.has("missing")) S.missing = +H.get("missing");
+render();
+if (H.has("launch")) $$(".tile")[S.launching].classList.add("frozen");
+$$(".scene")[S.dock].classList.add("on");
+</script>
+</body>
+</html>

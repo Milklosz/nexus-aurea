@@ -21,7 +21,7 @@ describe("dock launch status", () => {
     render(
       <AppDock
         services={streamingServices}
-        activeIndex={6}
+        activeIndex={5}
         launchingIds={new Set(["steam"])}
         buttonRefs={buttonRefs}
         onFocus={vi.fn()}

@@ -51,13 +51,38 @@ impl fmt::Display for StateLockError {
 
 /// Dropping the guard releases the lock.
 pub struct StateLockGuard {
-    _release: Box<dyn Send>,
+    lease: Box<dyn StateLockLease>,
+}
+
+pub(crate) trait StateLockLease: Send {
+    fn read_checkpoint(&mut self) -> Result<Option<Vec<u8>>, StateLockError>;
+    fn write_checkpoint(&mut self, bytes: &[u8]) -> Result<(), StateLockError>;
 }
 
 impl StateLockGuard {
-    pub fn new(release: Box<dyn Send>) -> Self {
-        Self { _release: release }
+    pub(crate) fn new(lease: Box<dyn StateLockLease>) -> Self {
+        Self { lease }
     }
+    pub fn read_checkpoint(&mut self) -> Result<Option<Vec<u8>>, StateLockError> { self.lease.read_checkpoint() }
+    pub fn write_checkpoint(&mut self, bytes: &[u8]) -> Result<(), StateLockError> {
+        #[cfg(test)]
+        let step = checkpoint_crash_step("before", None);
+        let result = self.lease.write_checkpoint(bytes);
+        #[cfg(test)]
+        checkpoint_crash_step("after", Some(step));
+        result
+    }
+}
+
+/// Only the explicitly spawned synthetic crash-test child sets this variable.
+#[cfg(test)]
+fn checkpoint_crash_step(phase: &str, step: Option<usize>) -> usize {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static WRITES: AtomicUsize = AtomicUsize::new(0);
+    let Ok(requested) = std::env::var("VELORA_TEST_CHECKPOINT_CRASH") else { return 0; };
+    let step = step.unwrap_or_else(|| WRITES.fetch_add(1, Ordering::SeqCst) + 1);
+    if requested == format!("{phase}-{step}") { std::process::exit(87); }
+    step
 }
 
 pub trait StateLock: Send + Sync {
@@ -163,6 +188,30 @@ mod win32 {
 #[cfg(windows)]
 struct HeldFileLock {
     file: File,
+}
+
+#[cfg(windows)]
+impl StateLockLease for HeldFileLock {
+    fn read_checkpoint(&mut self) -> Result<Option<Vec<u8>>, StateLockError> {
+        use std::io::{Read, Seek, SeekFrom};
+        let size = self.file.metadata().map_err(|_| StateLockError::Unavailable)?.len();
+        if size == 0 { return Ok(None); } // Only an untouched legacy file migrates.
+        if size > 4097 { return Ok(Some(Vec::new())); } // Corrupt, recoverable; no allocation.
+        self.file.seek(SeekFrom::Start(1)).map_err(|_| StateLockError::Unavailable)?;
+        let mut bytes = vec![0u8; size.saturating_sub(1) as usize];
+        self.file.read_exact(&mut bytes).map_err(|_| StateLockError::Unavailable)?;
+        Ok(Some(bytes)) // len=1 is corrupt, never an absent/migratable marker.
+    }
+    fn write_checkpoint(&mut self, bytes: &[u8]) -> Result<(), StateLockError> {
+        use std::io::{Seek, SeekFrom, Write};
+        if bytes.is_empty() || bytes.len() > 4096 { return Err(StateLockError::Unavailable); }
+        // Never truncate first: an interrupted update must remain pending/corrupt,
+        // never become an apparently untouched legacy file eligible for migration.
+        self.file.seek(SeekFrom::Start(1)).map_err(|_| StateLockError::Unavailable)?;
+        self.file.write_all(bytes).map_err(|_| StateLockError::Unavailable)?;
+        self.file.set_len(1 + bytes.len() as u64).map_err(|_| StateLockError::Unavailable)?;
+        self.file.sync_all().map_err(|_| StateLockError::Unavailable)
+    }
 }
 
 #[cfg(windows)]

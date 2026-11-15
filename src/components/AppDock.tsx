@@ -17,6 +17,7 @@ type FocusSource = "keyboard" | "gamepad" | "remote";
 function ServiceMark({ service }: { service: StreamingService }) {
   if (service.id === "appleMusic") return <>♫</>;
   if (service.id === "steam") return <>∞</>;
+  if (service.id === "playnite") return <>P</>;
   if (service.id === "disney") return <>Disney<span>+</span></>;
   if (service.id === "prime") return <>prime<span>video</span></>;
   if (service.id === "youtube") return <>▶</>;

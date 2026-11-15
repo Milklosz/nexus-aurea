@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { idleDeadlineReached, type AmbientSettings } from "../services/ambient";
+import { nativeControllerStore } from "../services/nativeControllerStore";
 
 type GamepadState = { signature: string; active: boolean };
 
@@ -51,6 +52,10 @@ export function useAmbient(settings: AmbientSettings, mediaPlaying: boolean) {
   useEffect(() => {
     let previousGamepadSignature: string | null = null;
     let previousGamepadActive = false;
+    // Native DualShock 4 input counts as activity too. If the browser Gamepad API cannot see the
+    // pad (for example after it was switched to another report mode), native input is the only
+    // signal that keeps Ambient from starting mid-use and that can wake it.
+    let previousNativeInputAt: number | null = null;
 
     const recordActivity = (event?: Event, cameFromController = false) => {
       lastActivityAt.current = Date.now();
@@ -83,6 +88,8 @@ export function useAmbient(settings: AmbientSettings, mediaPlaying: boolean) {
     window.addEventListener("blur", onBlur);
     window.addEventListener("focus", onFocus);
 
+    // Held only while the listeners below are installed (not in the disabled early return).
+    const releaseNative = nativeControllerStore.acquire();
     const timer = window.setInterval(() => {
       const visible = document.visibilityState !== "hidden" && document.hasFocus();
       if (!visible) {
@@ -90,6 +97,14 @@ export function useAmbient(settings: AmbientSettings, mediaPlaying: boolean) {
         setActiveNow(false);
         setControllerSuppressedNow(false);
         return;
+      }
+
+      const nativeInputAt = nativeControllerStore.getModel().lastInputAt;
+      if (nativeInputAt !== null && nativeInputAt !== previousNativeInputAt) {
+        previousNativeInputAt = nativeInputAt;
+        // Not a controller wake: suppression is cleared by the Gamepad API path, which may not see this pad.
+        // The focus-owner settle guard swallows the press that woke us instead.
+        recordActivity(undefined, false);
       }
 
       const gamepad = readGamepadState();
@@ -110,6 +125,7 @@ export function useAmbient(settings: AmbientSettings, mediaPlaying: boolean) {
     }, 250);
 
     return () => {
+      releaseNative();
       window.clearInterval(timer);
       window.removeEventListener("keydown", onInput, true);
       window.removeEventListener("pointerdown", onInput, true);

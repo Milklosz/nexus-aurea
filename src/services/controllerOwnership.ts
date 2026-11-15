@@ -5,7 +5,8 @@ export function classifyForegroundProcess(processName: string | null | undefined
 
   const executable = processName.trim().split(/[\\/]/).pop()?.toLowerCase();
   if (!executable) return "unknown";
-  if (executable === "nexus-aurea.exe") return "velora";
+  // The native side accepts both names (window_broker::is_velora_process); the bundle is named VELORA.
+  if (executable === "nexus-aurea.exe" || executable === "velora.exe") return "velora";
   if (executable === "steam.exe" || executable === "gameoverlayui.exe") return "steam";
   return "external";
 }

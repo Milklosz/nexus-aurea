@@ -52,9 +52,23 @@ impl WindowsCredentialStore {
     }
 }
 
+/// Credential Manager can lose updates even across different entries. Keep the
+/// existing per-service transaction lock, and additionally serialize every native
+/// call made by VELORA across services, threads and processes of this user.
+/// Third-party credential writers cannot be coordinated by this application.
+#[cfg(windows)]
+fn native_store_guard() -> Result<crate::remote_state_lock::StateLockGuard, CredentialStoreError> {
+    use crate::remote_state_lock::{default_lock_path, FileStateLock, StateLock};
+    let path = default_lock_path("credential-manager")
+        .ok_or(CredentialStoreError::Unavailable)?;
+    FileStateLock::new(path).acquire(std::time::Duration::from_secs(3))
+        .map_err(|_| CredentialStoreError::Unavailable)
+}
+
 #[cfg(windows)]
 impl CredentialStore for WindowsCredentialStore {
     fn get_password(&self, account: &str) -> Result<Option<String>, CredentialStoreError> {
+        let _native = native_store_guard()?;
         let entry = keyring::Entry::new(&self.service, account)
             .map_err(|_| CredentialStoreError::Unavailable)?;
         match entry.get_password() {
@@ -66,6 +80,7 @@ impl CredentialStore for WindowsCredentialStore {
 
     fn set_password(&self, account: &str, value: &str) -> Result<(), CredentialStoreError> {
         validate_credential_password_size(value)?;
+        let _native = native_store_guard()?;
         let entry = keyring::Entry::new(&self.service, account)
             .map_err(|_| CredentialStoreError::Unavailable)?;
         entry
@@ -74,6 +89,7 @@ impl CredentialStore for WindowsCredentialStore {
     }
 
     fn delete_password(&self, account: &str) -> Result<(), CredentialStoreError> {
+        let _native = native_store_guard()?;
         let entry = keyring::Entry::new(&self.service, account)
             .map_err(|_| CredentialStoreError::Unavailable)?;
         match entry.delete_credential() {

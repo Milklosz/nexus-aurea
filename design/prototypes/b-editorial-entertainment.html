@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VELORA · B · Editorial Entertainment</title>
+<!--
+=====================================================================================
+ VELORA 2.0 — Direction B: EDITORIAL ENTERTAINMENT
+=====================================================================================
+ RATIONALE
+   Home as a magazine spread. Left page = typography on warm ink paper; right page =
+   a full-bleed "plate" of original, code-generated modernist poster art, one motif
+   per service (curtain, night arc, monolith, tide, ripples, vapour, stack, grooves).
+   The headline is the focused service set in a large serif; the dock becomes a
+   typographic index across the foot of the page. Hierarchy comes from scale contrast
+   (168px serif vs 26px sans), not from boxes, glass or glow.
+
+ TYPOGRAPHY
+   Display: Sitka (Windows variable serif with optical sizes) -> "Sitka Banner" for the
+   headline, "Sitka Display" for the clock; fallback Georgia, Cambria, serif.
+   UI: Segoe UI Variable Text -> Segoe UI. Headline 168/150 500 -0.02em;
+   deck 28/40; index names 28 600; masthead 22-24; clock 52 tabular lining figures.
+
+ PALETTE
+   Paper ink #13110F, ink #EFE9DF, ink-2 #CFC7BB, ink-3 #9F978B (7.0:1 on paper),
+   rules rgba(239,233,223,.18). Each service brings one accent used for its index rule,
+   its numeral and its plate.
+
+ NAVIGATION MODEL
+   Masthead actions (Szukaj · Pilot · Ustawienia, on the plate, top-right) and the
+   index (8 services). Up from the index goes to the masthead action that is spatially
+   nearest (computed from x positions); Down returns to the remembered index item.
+   Left/Right never wrap. F3 / Options = Control Center; Circle / Esc = back.
+
+ FOCUS BEHAVIOUR
+   The focused index entry gets an 8px accent rule (others 2px hairline), full-ink
+   name scaled 1.12 from its left baseline, and its numeral turns accent; non-focused
+   entries sit at 56% ink. The headline and plate change with it, so focus is
+   readable from across the room even before you find the rule. Masthead actions
+   focus as a filled paper pill.
+
+ MOTION LANGUAGE
+   "Page turn": the headline exits 40px opposite to travel direction and the new one
+   enters from the travel side (160ms out / 300ms in, cubic-bezier(.2,.8,.2,1)).
+   Plate crossfade 600ms. Rule thickness is a transform (scaleY) — no layout.
+
+ VISUAL RISKS
+   - Serif display on a TV OS is unusual; Sitka at 168px is beautiful, at <24px it
+     must not be used (UI stays sans).
+   - Long names ("Prime Video", "Apple Music") at headline size approach the gutter;
+     the headline is allowed to cross onto the plate (deliberate), which needs the
+     plate's left edge to stay dark.
+   - Index entries rely on rule + brightness rather than a filled surface: weaker
+     focus affordance than A/D at 3 m; compensated by the headline.
+   - Can look like a "website" if spacing gets loose. Grid must be kept exact.
+
+ REACT / WEBVIEW2 FEASIBILITY (GPU compositing disabled)
+   Plates are static SVG/PNG ~912x812 ref px (smaller than full-screen -> cheaper
+   crossfade than A). Headline swap is opacity+translate of one text node.
+   No blur, no shadows. High feasibility; Sitka availability must be verified on the
+   target PC (ships with Windows 10/11 as SitkaVF.ttf).
+
+ TEST HOOKS: #focus=N · #top=N · #cc · #launch=N
+=====================================================================================
+-->
+<style>
+  :root {
+    --paper: #13110F;
+    --ink: #EFE9DF;
+    --ink-2: #CFC7BB;
+    --ink-3: #9F978B;
+    --rule: rgba(239, 233, 223, .18);
+    --ease-out: cubic-bezier(.2, .8, .2, 1);
+    --ease-std: cubic-bezier(.4, 0, .2, 1);
+    --serif-banner: "Sitka Banner", "Sitka Display", Georgia, Cambria, serif;
+    --serif-display: "Sitka Display", "Sitka Heading", Georgia, Cambria, serif;
+    --sans: "Segoe UI Variable Text", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  }
+  html { font-size: calc(10 * min(100vw / 1920, 100vh / 1080)); }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--paper); }
+  body { color: var(--ink); font-family: var(--sans); -webkit-font-smoothing: antialiased; cursor: none; }
+  .stage { position: fixed; inset: 0; overflow: hidden; }
+
+  /* ---------- right page: plate ---------- */
+  .plate { position: absolute; left: 100.8rem; top: 0; right: 0; height: 81.2rem; overflow: hidden; background: #0b0a09; }
+  .art { position: absolute; inset: 0; opacity: 0; transition: opacity 600ms var(--ease-std); }
+  .art.on { opacity: 1; }
+  .art svg { width: 100%; height: 100%; display: block; }
+  .plate::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+    background:
+      linear-gradient(180deg, rgba(10,9,8,.62) 0%, rgba(10,9,8,0) 22%),
+      linear-gradient(90deg, rgba(19,17,15,.55) 0%, rgba(19,17,15,0) 28%); }
+  .plate-grain { position: absolute; inset: 0; pointer-events: none; opacity: .09;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .5 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-size: 20rem 20rem; }
+
+  /* ---------- masthead ---------- */
+  .mast-left { position: absolute; left: 9.6rem; top: 6.4rem; display: flex; align-items: center; gap: 2.8rem; }
+  .clock { font-family: var(--serif-display); font-size: 5.6rem; font-weight: 500; line-height: 1; font-variant-numeric: lining-nums tabular-nums; letter-spacing: -.01em; }
+  .datebox { border-left: 1px solid var(--rule); padding-left: 2.8rem; display: grid; gap: .4rem; }
+  .date { font-size: 2.4rem; font-weight: 600; }
+  .weather { font-size: 2.2rem; color: var(--ink-2); }
+  .mast-right { position: absolute; right: 9.6rem; top: 6.4rem; display: flex; gap: .8rem; z-index: 3; }
+  .act { height: 5.6rem; padding: 0 2.4rem; border-radius: 2.8rem; display: flex; align-items: center; font-size: 2.4rem; font-weight: 600; color: rgba(239,233,223,.9);
+         transition: transform 220ms var(--ease-out); }
+  .act.focus { background: var(--ink); color: var(--paper); transform: scale(1.05); }
+
+  /* ---------- left page: headline ---------- */
+  .lead { position: absolute; left: 9.6rem; top: 28rem; width: 120rem; z-index: 2; }
+  .lead-inner { transition: opacity 300ms var(--ease-out), transform 300ms var(--ease-out); }
+  .lead-inner.out-l { opacity: 0; transform: translateX(-4rem); transition-duration: 160ms; }
+  .lead-inner.out-r { opacity: 0; transform: translateX(4rem); transition-duration: 160ms; }
+  .lead-inner.in-l { opacity: 0; transform: translateX(-4rem); transition: none; }
+  .lead-inner.in-r { opacity: 0; transform: translateX(4rem); transition: none; }
+  .kicker { font-family: var(--serif-display); font-size: 2.8rem; color: var(--ink-3); margin: 0 0 1.6rem; font-variant-numeric: lining-nums; }
+  .kicker b { color: var(--acc); font-weight: 600; }
+  .headline { font-family: var(--serif-banner); font-weight: 500; font-size: 16.8rem; line-height: .9; letter-spacing: -.02em; margin: 0; white-space: nowrap; }
+  .deck { margin: 3.2rem 0 0; max-width: 68rem; font-size: 2.8rem; line-height: 4rem; color: var(--ink-2); }
+  .cue { margin-top: 3.2rem; font-size: 2.2rem; color: var(--ink-3); display: flex; align-items: center; gap: 1.2rem; }
+  .cue .x { width: 3.2rem; height: 3.2rem; border-radius: 50%; border: 2px solid var(--ink-3); display: grid; place-items: center; font-size: 1.6rem; line-height: 1; color: var(--ink-2); }
+
+  /* ---------- index (dock) ---------- */
+  .index { position: absolute; left: 9.6rem; right: 9.6rem; bottom: 7.2rem; display: grid; grid-template-columns: repeat(8, 1fr); }
+  .index.bump-l { animation: bumpL 260ms var(--ease-out); }
+  .index.bump-r { animation: bumpR 260ms var(--ease-out); }
+  @keyframes bumpL { 40% { transform: translateX(-.8rem); } }
+  @keyframes bumpR { 40% { transform: translateX(.8rem); } }
+  .entry { position: relative; padding: 2.4rem 1.6rem 0 0; height: 13.6rem; }
+  .entry::before { content: ""; position: absolute; left: 0; right: 1.6rem; top: 0; height: .8rem; background: var(--rule);
+                   transform: scaleY(.25); transform-origin: top; transition: transform 220ms var(--ease-out), background-color 160ms linear; }
+  .entry.focus::before { transform: scaleY(1); background: var(--acc); }
+  .entry.sel::before { transform: scaleY(.5); background: var(--ink-3); }
+  .num { font-family: var(--serif-display); font-size: 2.2rem; color: var(--ink-3); font-variant-numeric: lining-nums tabular-nums; transition: color 160ms linear; }
+  .entry.focus .num { color: var(--acc); }
+  .name { margin-top: 1rem; font-size: 2.8rem; font-weight: 600; letter-spacing: -.01em; white-space: nowrap; color: var(--ink); opacity: .56;
+          transform-origin: left bottom; transition: transform 220ms var(--ease-out), opacity 160ms linear; }
+  .name .l { font-weight: 350; }
+  .name i { font-style: normal; }
+  .entry.focus .name { opacity: 1; transform: scale(1.12); }
+  .entry.sel .name { opacity: .8; }
+  .entry.pressed .name { transform: scale(1.06); transition-duration: 90ms; }
+  .entry .load { position: absolute; left: 0; right: 1.6rem; top: 0; height: .8rem; background: var(--ink); transform-origin: left; transform: scaleX(0); opacity: 0; }
+  .entry.launching .load { opacity: 1; animation: load 2400ms var(--ease-std) forwards; }
+  .entry.launching.frozen .load { animation: none; transform: scaleX(.45); }
+  @keyframes load { to { transform: scaleX(1); } }
+
+  .toast { position: absolute; left: 9.6rem; top: 17.6rem; font-size: 2.4rem; font-weight: 600; color: var(--paper); background: var(--ink);
+           padding: 1.2rem 2.4rem; opacity: 0; transform: translateY(-.8rem); transition: opacity 200ms linear, transform 240ms var(--ease-out); }
+  .toast.show { opacity: 1; transform: none; }
+
+  /* ---------- control center: a "contents page" sliding over the plate ---------- */
+  .lead, .index, .mast-left { transition: opacity 260ms linear; }
+  .open .lead, .open .index, .open .mast-left { opacity: .32; }
+  .cc { position: absolute; left: 100.8rem; top: 0; right: 0; height: 81.2rem; background: var(--paper); z-index: 5;
+        padding: 6.4rem 9.6rem 7.2rem 6.4rem; transform: translateX(100%); transition: transform 340ms var(--ease-out);
+        box-shadow: -1px 0 0 var(--rule); }
+  .open .cc { transform: none; }
+  .cc h2 { font-family: var(--serif-banner); font-weight: 500; font-size: 7.2rem; line-height: 1; margin: 6.4rem 0 3.2rem; letter-spacing: -.02em; }
+  .row { display: grid; grid-template-columns: 6rem 1fr; padding: 2rem 0; border-top: 1px solid var(--rule); }
+  .row .n { font-family: var(--serif-display); font-size: 2.4rem; color: var(--ink-3); }
+  .row .k { font-size: 2.8rem; font-weight: 600; }
+  .row .v { font-size: 2.2rem; color: var(--ink-3); margin-top: .4rem; }
+  .row.focus { background: var(--ink); color: var(--paper); margin: 0 -2rem; padding: 2rem; border-color: transparent; }
+  .row.focus .n, .row.focus .v { color: rgba(19,17,15,.7); }
+  .cc .hint { position: absolute; bottom: 4.8rem; font-size: 2.2rem; color: var(--ink-3); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .lead-inner, .lead-inner[class*="out-"], .lead-inner[class*="in-"] { transform: none !important; }
+    .entry.focus .name, .act.focus { transform: none; }
+    .index.bump-l, .index.bump-r { animation: none; }
+    .art { transition-duration: 120ms; }
+  }
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+  <div class="plate" id="plate"></div>
+
+  <div class="mast-left">
+    <span class="clock" id="clock">--:--</span>
+    <div class="datebox"><span class="date" id="date"></span><span class="weather">2° · Częściowe zachmurzenie · Zabrze</span></div>
+  </div>
+  <nav class="mast-right" aria-label="System">
+    <div class="act" data-i="0">Szukaj</div>
+    <div class="act" data-i="1">Pilot</div>
+    <div class="act" data-i="2">Ustawienia</div>
+  </nav>
+
+  <section class="lead" aria-live="polite">
+    <div class="lead-inner" id="lead">
+      <p class="kicker" id="kicker"></p>
+      <h1 class="headline" id="headline"></h1>
+      <p class="deck" id="deck"></p>
+      <div class="cue" id="cue"><span class="x">✕</span><span id="cuetext">Otwórz</span></div>
+    </div>
+  </section>
+
+  <nav class="index" id="index" aria-label="Aplikacje"></nav>
+  <div class="toast" id="toast"></div>
+
+  <aside class="cc" id="cc" aria-label="Control Center">
+    <h2>Ustawienia</h2>
+    <div class="row" data-i="0"><span class="n">01</span><div><div class="k">Pilot</div><div class="v">iPhone · otwórz velora.local w Safari</div></div></div>
+    <div class="row" data-i="1"><span class="n">02</span><div><div class="k">Dźwięk</div><div class="v">Głośność systemu</div></div></div>
+    <div class="row" data-i="2"><span class="n">03</span><div><div class="k">Tryb obrazu</div><div class="v">Kino</div></div></div>
+    <div class="row" data-i="3"><span class="n">04</span><div><div class="k">Pokaż pulpit</div><div class="v">Przejdź do Windows</div></div></div>
+    <div class="hint">○ / Esc &nbsp;Zamknij</div>
+  </aside>
+</div>
+
+<script>
+const APPS = [
+  { name: "Netflix",     wm: 'Netflix',                                   deck: "Filmy i seriale. Otwiera się w oknie Edge Cinema.",          acc: "#E8463F" },
+  { name: "Disney+",     wm: 'Disney<i class="l">+</i>',                  deck: "Filmy, seriale i animacje. Otwiera się w oknie Edge Cinema.", acc: "#6E9BFF" },
+  { name: "HBO Max",     wm: 'HBO <i class="l">Max</i>',                  deck: "Filmy i seriale. Otwiera się w oknie Edge Cinema.",          acc: "#9B8CFF" },
+  { name: "Prime Video", wm: 'prime <i class="l">video</i>',              deck: "Filmy, seriale i sport. Otwiera się w oknie Edge Cinema.",   acc: "#4CC2EC" },
+  { name: "YouTube",     wm: '<i class="l">You</i>Tube',                  deck: "Wideo. Otwiera się w oknie Edge Cinema.",                    acc: "#FF5A4A" },
+  { name: "Steam",       wm: 'Steam',                                     deck: "Gry. Uruchamia Steam w trybie Big Picture.",                 acc: "#8EC3EA" },
+  { name: "Playnite",    wm: 'Playnite',                                  deck: "Biblioteka gier. Uruchamia Playnite na pełnym ekranie.",     acc: "#B99BFF" },
+  { name: "Apple Music", wm: '<i class="l">Apple</i> Music',              deck: "Muzyka. Uruchamia aplikację Apple Music.",                   acc: "#FF6D88" },
+];
+const CC_N = 4;
+
+/* ---------- plates: original modernist poster motifs, generated in code ---------- */
+function rng(seed) { let s = seed * 7919 % 2147483647 || 1; return () => (s = s * 16807 % 2147483647) / 2147483647; }
+const W = 912, Hh = 812;
+const PLATES = [
+  // 0 Netflix — theatre curtain: vertical folds of red, lit from upper left
+  () => { const r = rng(11); let d = `<defs><linearGradient id="nb" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3a0709"/><stop offset="1" stop-color="#0e0203"/></linearGradient>`;
+    let b = `<rect width="${W}" height="${Hh}" fill="url(#nb)"/>`; let x = -10;
+    for (let k = 0; x < W; k++) { const w = 46 + r() * 52, lit = .35 + .65 * Math.max(0, 1 - x / W) * (0.6 + r() * .4);
+      d += `<linearGradient id="f${k}" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#140304"/><stop offset=".45" stop-color="#b3141b" stop-opacity="${lit.toFixed(2)}"/><stop offset="1" stop-color="#140304"/></linearGradient>`;
+      b += `<rect x="${x.toFixed(0)}" y="0" width="${(w + 2).toFixed(0)}" height="${Hh}" fill="url(#f${k})" opacity=".9"/>`; x += w; }
+    d += `<linearGradient id="nf" x1="0" y1="0" x2="0" y2="1"><stop offset=".55" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".75"/></linearGradient>
+          <radialGradient id="ns" cx=".3" cy="-.05" r=".9"><stop offset="0" stop-color="#ffb08a" stop-opacity=".35"/><stop offset="1" stop-color="#ffb08a" stop-opacity="0"/></radialGradient></defs>`;
+    return d + b + `<rect width="${W}" height="${Hh}" fill="url(#ns)"/><rect width="${W}" height="${Hh}" fill="url(#nf)"/>`; },
+  // 1 Disney+ — night arc: one immense thin arc and a few points of light
+  () => { const r = rng(23); let b = `<defs><radialGradient id="db" cx=".75" cy=".95" r="1.1"><stop offset="0" stop-color="#2a4596"/><stop offset=".5" stop-color="#0d1a45"/><stop offset="1" stop-color="#050a1c"/></radialGradient>
+      <radialGradient id="dg" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#c9d8ff" stop-opacity=".5"/><stop offset="1" stop-color="#c9d8ff" stop-opacity="0"/></radialGradient></defs>
+      <rect width="${W}" height="${Hh}" fill="url(#db)"/>`;
+    for (let k = 0; k < 90; k++) b += `<circle cx="${(r() * W).toFixed(0)}" cy="${(r() * Hh * .7).toFixed(0)}" r="${(.6 + r() * 1.3).toFixed(1)}" fill="#e6edff" opacity="${(.15 + r() * .55).toFixed(2)}"/>`;
+    b += `<circle cx="700" cy="1250" r="900" fill="none" stroke="#dfe7ff" stroke-opacity=".55" stroke-width="2"/>
+          <circle cx="700" cy="1250" r="930" fill="none" stroke="#dfe7ff" stroke-opacity=".14" stroke-width="1.5"/>
+          <ellipse cx="560" cy="352" rx="220" ry="60" fill="url(#dg)"/>`;
+    return b; },
+  // 2 HBO Max — monolith: a dark slab in violet light
+  () => `<defs><linearGradient id="mb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2a1a5c"/><stop offset=".6" stop-color="#140c33"/><stop offset="1" stop-color="#07051a"/></linearGradient>
+      <linearGradient id="ms" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#c7b6ff" stop-opacity=".9"/><stop offset=".04" stop-color="#3b2b78"/><stop offset="1" stop-color="#0b0820"/></linearGradient>
+      <linearGradient id="mf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1a1240"/><stop offset="1" stop-color="#05040f"/></linearGradient>
+      <radialGradient id="mg" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#a38bff" stop-opacity=".45"/><stop offset="1" stop-color="#a38bff" stop-opacity="0"/></radialGradient></defs>
+      <rect width="${W}" height="${Hh}" fill="url(#mb)"/>
+      <ellipse cx="520" cy="560" rx="460" ry="180" fill="url(#mg)"/>
+      <rect y="590" width="${W}" height="${Hh - 590}" fill="url(#mf)"/>
+      <rect x="470" y="150" width="170" height="460" fill="url(#ms)"/>
+      <rect x="470" y="610" width="170" height="120" fill="#c7b6ff" opacity=".06"/>`,
+  // 3 Prime Video — tide: stacked sine strokes
+  () => { let b = `<defs><linearGradient id="pb" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#05202b"/><stop offset=".55" stop-color="#0b3b4c"/><stop offset="1" stop-color="#031118"/></linearGradient></defs>
+      <rect width="${W}" height="${Hh}" fill="url(#pb)"/>`;
+    for (let k = 0; k < 26; k++) { const y0 = 300 + k * 18, a = 10 + k * 1.6, f = .006 - k * .00012, ph = k * .45; let d = `M-10 ${y0}`;
+      for (let x = -10; x <= W + 10; x += 12) d += ` L${x} ${(y0 + a * Math.sin(x * f + ph)).toFixed(1)}`;
+      b += `<path d="${d}" fill="none" stroke="#9fe6f6" stroke-width="${(1 + k * .06).toFixed(2)}" stroke-opacity="${(.55 - k * .018).toFixed(3)}"/>`; }
+    return b; },
+  // 4 YouTube — ripples: offset concentric rings in warm light
+  () => { let b = `<defs><radialGradient id="yb" cx=".25" cy=".8" r="1"><stop offset="0" stop-color="#7a2410"/><stop offset=".5" stop-color="#2b0d06"/><stop offset="1" stop-color="#0d0503"/></radialGradient></defs>
+      <rect width="${W}" height="${Hh}" fill="url(#yb)"/>`;
+    for (let k = 1; k < 16; k++) b += `<circle cx="300" cy="640" r="${k * 46}" fill="none" stroke="#ff8a60" stroke-width="${k % 3 === 0 ? 2.5 : 1.2}" stroke-opacity="${(.5 - k * .026).toFixed(3)}"/>`;
+    b += `<circle cx="300" cy="640" r="38" fill="#ff6a3d" opacity=".85"/>`;
+    return b; },
+  // 5 Steam — vapour: rising diagonal soft bands
+  () => { const r = rng(5); let b = `<defs><linearGradient id="sb" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#071019"/><stop offset=".6" stop-color="#16293a"/><stop offset="1" stop-color="#2a4a64"/></linearGradient>
+      <linearGradient id="sv" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#cfe6f7" stop-opacity="0"/><stop offset=".5" stop-color="#cfe6f7" stop-opacity=".2"/><stop offset="1" stop-color="#cfe6f7" stop-opacity="0"/></linearGradient></defs>
+      <rect width="${W}" height="${Hh}" fill="url(#sb)"/>`;
+    for (let k = 0; k < 9; k++) { const x = 60 + k * 110 + r() * 40, w = 30 + r() * 70; b += `<rect x="${x.toFixed(0)}" y="-200" width="${w.toFixed(0)}" height="1400" fill="url(#sv)" transform="rotate(28 ${x.toFixed(0)} 400)" opacity="${(.4 + r() * .6).toFixed(2)}"/>`; }
+    return b; },
+  // 6 Playnite — stack: library spines as horizontal bars
+  () => { const r = rng(17); let b = `<defs><linearGradient id="lb" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0a2a22"/><stop offset="1" stop-color="#03100c"/></linearGradient></defs>
+      <rect width="${W}" height="${Hh}" fill="url(#lb)"/>`;
+    let y = 210; for (let k = 0; k < 12; k++) { const h = 18 + r() * 22, w = 220 + r() * 420, x = 300 + r() * 80; const c = ["#2f8f72", "#1d5f4c", "#47b892", "#174a3c"][k % 4];
+      b += `<rect x="${x.toFixed(0)}" y="${y.toFixed(0)}" width="${w.toFixed(0)}" height="${h.toFixed(0)}" rx="3" fill="${c}" opacity="${(.55 + r() * .4).toFixed(2)}"/>`; y += h + 6; }
+    return b; },
+  // 7 Apple Music — grooves: concentric rings off-canvas with one lit arc
+  () => { let b = `<defs><radialGradient id="ab" cx=".9" cy=".55" r="1"><stop offset="0" stop-color="#5a1430"/><stop offset=".55" stop-color="#22080f"/><stop offset="1" stop-color="#0d0306"/></radialGradient></defs>
+      <rect width="${W}" height="${Hh}" fill="url(#ab)"/>`;
+    for (let k = 0; k < 40; k++) b += `<circle cx="860" cy="430" r="${120 + k * 11}" fill="none" stroke="#ff8fab" stroke-width="1" stroke-opacity="${(.22 - k * .004).toFixed(3)}"/>`;
+    b += `<path d="M ${860 - 340} 430 A 340 340 0 0 1 ${860 - 120} ${430 - 265}" fill="none" stroke="#ffb3c4" stroke-width="3" stroke-opacity=".8"/>
+          <circle cx="860" cy="430" r="110" fill="#2a0a14"/><circle cx="860" cy="430" r="14" fill="#ff7593"/>`;
+    return b; },
+];
+
+const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+$("#plate").innerHTML = PLATES.map((f, i) => `<div class="art" data-i="${i}"><svg viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">${f()}</svg></div>`).join("") + `<div class="plate-grain"></div>`;
+$("#index").innerHTML = APPS.map((a, i) => `<div class="entry" data-i="${i}" style="--acc:${a.acc}"><span class="load"></span><div class="num">${String(i + 1).padStart(2, "0")}</div><div class="name">${a.wm}</div></div>`).join("");
+
+const tf = new Intl.DateTimeFormat("pl-PL", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Europe/Warsaw" });
+const df = new Intl.DateTimeFormat("pl-PL", { weekday: "long", day: "numeric", month: "long", timeZone: "Europe/Warsaw" });
+const tick = () => { const n = new Date(); $("#clock").textContent = tf.format(n); const d = df.format(n); $("#date").textContent = d.charAt(0).toUpperCase() + d.slice(1); };
+tick(); setInterval(tick, 1000);
+
+const S = { zone: "dock", dock: 0, top: 0, cc: false, cci: 0, launching: -1 };
+let shown = -1, shownL = false, artT = 0, leadT = 0;
+
+function setLead(dir) {
+  const a = APPS[S.dock], L = $("#lead"), launching = S.launching === S.dock;
+  const fill = () => {
+    $("#kicker").innerHTML = `<b>${String(S.dock + 1).padStart(2, "0")}</b> / 08`;
+    $("#headline").textContent = a.name;
+    $("#deck").textContent = a.deck;
+    $("#cuetext").textContent = launching ? "Otwieranie…" : "Otwórz";
+    $("#lead").style.setProperty("--acc", a.acc);
+  };
+  if (shown === S.dock && shownL === launching) return;
+  const first = shown < 0 || shown === S.dock; shown = S.dock; shownL = launching;
+  clearTimeout(leadT);
+  if (first) return fill();
+  L.className = "lead-inner " + (dir > 0 ? "out-l" : "out-r");
+  leadT = setTimeout(() => { fill(); L.className = "lead-inner " + (dir > 0 ? "in-r" : "in-l"); void L.offsetWidth; L.className = "lead-inner"; }, 160);
+}
+function render(dir = 1) {
+  $$(".entry").forEach((el, i) => {
+    el.classList.toggle("focus", !S.cc && S.zone === "dock" && i === S.dock);
+    el.classList.toggle("sel", (S.cc || S.zone !== "dock") && i === S.dock);
+    el.classList.toggle("launching", i === S.launching);
+  });
+  $$(".act").forEach((el, i) => el.classList.toggle("focus", !S.cc && S.zone === "top" && i === S.top));
+  $$(".row").forEach((el, i) => el.classList.toggle("focus", S.cc && i === S.cci));
+  $("#stage").classList.toggle("open", S.cc);
+  setLead(dir);
+  clearTimeout(artT); artT = setTimeout(() => $$(".art").forEach((el, i) => el.classList.toggle("on", i === S.dock)), 200);
+}
+function bump(d) { const x = $("#index"); x.classList.remove("bump-l", "bump-r"); void x.offsetWidth; x.classList.add(d < 0 ? "bump-l" : "bump-r"); }
+function toast(m) { const t = $("#toast"); t.textContent = m; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 2600); }
+function nearestTop() {
+  const e = $$(".entry")[S.dock].getBoundingClientRect(), cx = e.left + e.width / 2;
+  let best = 0, bd = 1e9; $$(".act").forEach((a, i) => { const r = a.getBoundingClientRect(), d = Math.abs(r.left + r.width / 2 - cx); if (d < bd) { bd = d; best = i; } });
+  return best;
+}
+function move(dir) {
+  if (S.cc) { if (dir === "up") S.cci = Math.max(0, S.cci - 1); if (dir === "down") S.cci = Math.min(CC_N - 1, S.cci + 1); return render(); }
+  if (S.zone === "dock") {
+    if (dir === "left") { if (!S.dock) return bump(-1); S.dock--; return render(-1); }
+    if (dir === "right") { if (S.dock === 7) return bump(1); S.dock++; return render(1); }
+    if (dir === "up") { S.zone = "top"; S.top = nearestTop(); return render(); }
+  } else {
+    if (dir === "left") S.top = Math.max(0, S.top - 1);
+    else if (dir === "right") S.top = Math.min(2, S.top + 1);
+    else if (dir === "down") S.zone = "dock";
+    else return;
+    render();
+  }
+}
+function activate() {
+  if (S.cc) return toast(["Pilot: otwórz velora.local na iPhonie", "Dźwięk", "Tryb obrazu", "Pokaż pulpit"][S.cci]);
+  if (S.zone === "top") { if (!S.top) return toast("Szukaj — wyszukiwanie w aplikacjach"); S.cc = true; S.cci = S.top === 1 ? 0 : 1; return render(); }
+  const i = S.dock; if (S.launching === i) return; S.launching = i; render();
+  setTimeout(() => { if (S.launching === i) { S.launching = -1; render(); } }, 2400);
+}
+function back() { if (S.cc) { S.cc = false; render(); } else if (S.zone === "top") { S.zone = "dock"; render(); } }
+function press(on) { if (!S.cc && S.zone === "dock") $$(".entry")[S.dock].classList.toggle("pressed", on); }
+
+const KEYS = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
+addEventListener("keydown", e => {
+  if (KEYS[e.key]) { e.preventDefault(); move(KEYS[e.key]); }
+  else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); if (!e.repeat) press(true); }
+  else if (e.key === "Escape" || e.key === "Backspace") { e.preventDefault(); back(); }
+  else if (e.key === "F3") { e.preventDefault(); if (S.cc) back(); else { S.cc = true; S.cci = 0; render(); } }
+});
+addEventListener("keyup", e => { if (e.key === "Enter" || e.key === " ") { press(false); activate(); } });
+const pp = {}, pr = {};
+(function poll(ts) {
+  const gp = (navigator.getGamepads ? navigator.getGamepads() : []).find(Boolean);
+  if (gp) {
+    const map = { 12: "up", 13: "down", 14: "left", 15: "right" };
+    for (const b in map) { const d = gp.buttons[b] && gp.buttons[b].pressed;
+      if (d && !pp[b]) { move(map[b]); pr[b] = ts + 420; } else if (d && ts > pr[b]) { move(map[b]); pr[b] = ts + 110; } pp[b] = d; }
+    const x = gp.buttons[0]?.pressed, o = gp.buttons[1]?.pressed, opt = gp.buttons[9]?.pressed;
+    if (x && !pp.x) press(true); if (!x && pp.x) { press(false); activate(); }
+    if (o && !pp.o) back(); if (opt && !pp.opt) { if (S.cc) back(); else { S.cc = true; S.cci = 0; render(); } }
+    pp.x = x; pp.o = o; pp.opt = opt;
+  }
+  requestAnimationFrame(poll);
+})(0);
+
+const H = new URLSearchParams(location.hash.slice(1));
+if (H.has("focus")) S.dock = +H.get("focus");
+if (H.has("top")) { S.zone = "top"; S.top = +H.get("top"); }
+if (H.has("cc")) { S.cc = true; S.cci = +(H.get("cc") || 0); }
+if (H.has("launch")) { S.launching = S.dock = +H.get("launch"); }
+render();
+if (H.has("launch")) $$(".entry")[S.launching].classList.add("frozen");
+$$(".art")[S.dock].classList.add("on");
+</script>
+</body>
+</html>

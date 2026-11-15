@@ -9,17 +9,18 @@ export type HomeZoneAvailability = Record<HomeZone, boolean>;
 
 /** Only VELORA's own elements are matched, so zone detection cannot touch other windows. */
 export const HOME_ZONE_MEMBERS: Record<HomeZone, string> = {
-  controlCenter: ".quick-settings-trigger",
+  controlCenter: ".quick-settings-trigger, .home-actions",
   music: ".music-mini-player",
-  dock: ".dock",
+  dock: ".dock, .lr-dock",
   diagnostics: ".diagnostics-trigger",
 };
 
 /** Element that receives focus when a zone is entered. The dock is focused by the caller. */
-const HOME_ZONE_FOCUS: Record<Exclude<HomeZone, "dock">, string> = {
-  controlCenter: ".quick-settings-trigger",
-  music: ".music-mini-player button:not(:disabled)",
-  diagnostics: ".diagnostics-trigger",
+/** Tried in order. The Living Room top bar remembers its last action (data-remembered); the legacy Home has one trigger. */
+const HOME_ZONE_FOCUS: Record<Exclude<HomeZone, "dock">, readonly string[]> = {
+  controlCenter: [".home-actions [data-remembered=\"true\"]", ".home-actions button", ".quick-settings-trigger"],
+  music: [".music-mini-player button:not(:disabled)"],
+  diagnostics: [".diagnostics-trigger"],
 };
 
 /**
@@ -63,7 +64,11 @@ export function homeZoneAvailability(root: ParentNode): HomeZoneAvailability {
 
 /** Focuses the first control of a non-dock zone. Returns false when it is missing. */
 export function focusHomeZone(root: ParentNode, zone: Exclude<HomeZone, "dock">): boolean {
-  const target = root.querySelector<HTMLElement>(HOME_ZONE_FOCUS[zone]);
+  let target: HTMLElement | null = null;
+  for (const selector of HOME_ZONE_FOCUS[zone]) {
+    target = root.querySelector<HTMLElement>(selector);
+    if (target) break;
+  }
   if (!target) return false;
   target.focus({ preventScroll: true });
   return true;
