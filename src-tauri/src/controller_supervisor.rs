@@ -360,6 +360,21 @@ impl ControllerSupervisor {
 mod tests {
     use super::*;
 
+    #[test]
+    fn session_configuration_matches_the_control_center_wire_contract() {
+        let config: ControllerFallbackConfig = serde_json::from_value(serde_json::json!({
+            "enabled": true, "gesture": "l1R1Options", "holdMs": 2000
+        }))
+        .unwrap();
+        let mut supervisor = ControllerSupervisor::default();
+        let status = serde_json::to_value(supervisor.configure(config).unwrap()).unwrap();
+        assert_eq!(status["gesture"], "l1R1Options");
+        assert_eq!(status["holdMs"], 2000);
+        assert_eq!(status["physicalMappingValidated"], false);
+        assert_eq!(status["primaryChordSuppressed"], true);
+        assert!(!ControllerSupervisor::default().config().enabled);
+    }
+
     fn enabled(hold_ms: u64) -> ControllerSupervisor {
         let mut supervisor = ControllerSupervisor::default();
         supervisor

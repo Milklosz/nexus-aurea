@@ -50,7 +50,6 @@ pub struct StreamingControl {
     config_gate: Mutex<()>,
     epoch: AtomicU64,
     controller_epoch: AtomicU64,
-    reset_pending: AtomicBool,
     enabled: AtomicBool,
     dropped: AtomicU64,
     state: Mutex<RuntimeState>,
@@ -67,6 +66,16 @@ struct RuntimeState {
     rejected: u64,
     engine: InteractionEngine,
     last_remote_at: Option<Instant>,
+    engine_controller_epoch: u64,
+}
+
+impl RuntimeState {
+    fn rearm_controller_generation(&mut self, epoch: u64) {
+        if self.engine_controller_epoch != epoch {
+            self.engine = InteractionEngine::default();
+            self.engine_controller_epoch = epoch;
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -450,7 +459,6 @@ pub(crate) fn route_controller_report(
                 // A lost release invalidates the whole controller generation.
                 // Never continue a held action from an incomplete report stream.
                 control.controller_epoch.fetch_add(1, Ordering::AcqRel);
-                control.reset_pending.store(true, Ordering::Release);
                 queue.last_sample_ms = None;
                 queue.last_buttons = None;
             } else {
@@ -462,7 +470,6 @@ pub(crate) fn route_controller_report(
     } else {
         control.dropped.fetch_add(1, Ordering::Relaxed);
         control.controller_epoch.fetch_add(1, Ordering::AcqRel);
-        control.reset_pending.store(true, Ordering::Release);
     };
 }
 
@@ -484,9 +491,9 @@ fn dispatch_packet(app: &AppHandle, packet: Packet) {
     if !generation_active(&control, packet.epoch, packet.controller_epoch) {
         return;
     }
-    if control.reset_pending.swap(false, Ordering::AcqRel) {
-        state.engine = InteractionEngine::default();
-    }
+    // Generation is the reset signal itself. A separate flag could be observed
+    // after the first packet of a new device generation was already processed.
+    state.rearm_controller_generation(packet.controller_epoch);
     let Some(target) = target else {
         crate::pointer_indicator::update(0, false);
         state.active_service = None;
@@ -533,7 +540,10 @@ fn dispatch_packet(app: &AppHandle, packet: Packet) {
             }
         }
     }
-    crate::pointer_indicator::update(target.hwnd, state.pointer_mode);
+    crate::pointer_indicator::update(
+        target.hwnd,
+        state.pointer_mode && generation_active(&control, packet.epoch, packet.controller_epoch),
+    );
 }
 
 fn send_owned_action(
@@ -577,7 +587,6 @@ fn generation_active(control: &StreamingControl, epoch: u64, controller_epoch: u
 pub(crate) fn invalidate_controller_streaming(app: &AppHandle) {
     let control = app.state::<StreamingControl>();
     control.controller_epoch.fetch_add(1, Ordering::AcqRel);
-    control.reset_pending.store(true, Ordering::Release);
 }
 
 /// Called only after RemoteAccess has authenticated/authorized its command.
@@ -981,6 +990,26 @@ mod tests {
         assert!(engine.update("pad", &input, 2, false, 100).is_empty());
         assert!(engine.update("pad", &input, 2, false, 500).is_empty());
     }
+    #[test]
+    fn generation_change_requires_neutral_even_without_a_separate_reset_signal() {
+        let mut state = RuntimeState::default();
+        let mut input = report();
+        state.engine.update("pad", &input, 1, false, 0);
+        state.rearm_controller_generation(1);
+        input.buttons.set(Ds4Button::Cross, true);
+        assert!(state.engine.update("pad", &input, 1, false, 50).is_empty());
+        input.buttons.set(Ds4Button::Cross, false);
+        state.engine.update("pad", &input, 1, false, 100);
+        state.rearm_controller_generation(1);
+        input.buttons.set(Ds4Button::Cross, true);
+        assert_eq!(
+            state.engine.update("pad", &input, 1, false, 150),
+            vec![Action::Select]
+        );
+        state.rearm_controller_generation(2);
+        assert!(state.engine.update("pad", &input, 1, false, 200).is_empty());
+    }
+
     #[test]
     fn home_constituents_suppress_controls_until_neutral() {
         let mut engine = InteractionEngine::default();

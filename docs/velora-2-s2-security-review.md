@@ -42,7 +42,7 @@ Independent review found and integration corrected two remote issues: Home's fro
 
 The pointer indicator uses a nonactivating, disabled native window with bounded latest-state publication, focus/staleness hiding and joined shutdown. Its visibility is not evidence of a website processing an action. Native window creation failure is not a hardware PASS and must not be concealed by UI claims.
 
-Reliability review additionally requested explicit streaming epoch invalidation on physical device arrival/removal and prompt batch cancellation on configuration changes; final resolution must be checked in the exact delivered candidate. A queued report's 200 ms age cap alone is insufficient proof of immediate disconnect invalidation.
+Reliability review additionally required streaming generation invalidation on device arrival/removal, silence recovery and queue loss, plus prompt per-action cancellation. These hooks are integrated. The engine stores its last controller generation and resets on a generation difference rather than a separate reset flag, closing the first-packet publication race. A queued report's 200 ms age cap alone is not used as disconnect invalidation.
 
 Focused integration Vitest on `702de87` plus then-pending remote changes passed 65 tests across five files: remote security invariants, permissions, PWA, command routing and living-room adapters (1.69 s). This is working-tree unit evidence, not final committed CI and not physical validation.
 

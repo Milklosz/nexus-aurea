@@ -25,12 +25,15 @@ Results below distinguish implementation tests from hardware. Final delivery upd
 |---|---|
 | Full frontend after managed resume + remote integration | 877 passed, 94 files; 20.58 s |
 | TypeScript | Passed |
-| Production frontend | Passed; Vite bundle 539 ms in this environment |
+| Production frontend | Passed; final Vite bundle 297 ms in this environment |
 | Provenance + Claude adapter Node checks | 37 passed (31 provenance + 6 adapter), 54.62 s |
 | Initial integrated Rust before supervisor fixes | 363 passed, 32 failed, 2 ignored; 104.39 s |
 | Initial Rust failure details | 31 Credential Manager access failures; 1 nested provenance fixture linker failure in long sandbox TEMP path |
-| Final native/full Rust, Clippy and formatting | Pending integrated verification; see final delivery update |
-| Windows/macOS/Playnite exact-head CI | Pending new S2 Draft PR; S1.4 green CI is not S2 evidence |
+| Integrated full Rust with short external TEMP | 379 passed, 31 failed, 2 ignored; 102.79 s. All failures are Credential Manager access; no fallback/streaming test failure |
+| Final available Rust checks after generation fix and wire-contract regression | 373 passed, 0 failed, 2 ignored, 39 explicitly filtered; 5.17 s. Filtered Windows vault groups include the 31 unavailable tests plus 8 that passed in the full run; none is relabeled passed here |
+| Clippy all targets | Passed with warnings; final check repeated after the generation fix |
+| Formatting | Eleven modified native core modules pass rustfmt. Whole-crate formatting still fails in inherited modules; it is not reported as passed |
+| Exact-head Windows/macOS/Playnite CI | Check the S2 Draft PR source SHA and checks; dependency PR #57 is not S2 evidence |
 | Live desktop inspection | BLOCKED: `failed to launch codex app-server: program not found` |
 | HID/HDMI detection | BLOCKED: Windows CIM access denied; connected hardware not inferred |
 | Physical DS4/streaming/Steam/Playnite/reconnect/10x Home | BLOCKED; no hardware PASS claimed |
@@ -40,6 +43,8 @@ Results below distinguish implementation tests from hardware. Final delivery upd
 ## Performance
 
 Only build/test durations above were measured. Live idle CPU, private working set, startup, physical HID event rate, UI responsiveness, actual focus-switch latency and reconnect time are BLOCKED by the unavailable desktop/hardware environment. Queue size, sampling cadence, repeat and timeout constants are engineering bounds, not measurements. No fabricated resource or latency claims are made.
+
+Independent final review found a generation/reset publication race. The final implementation stores the controller generation in the runtime engine and rearms on every generation difference, without depending on a separately published reset flag. A behavioral regression proves that a held Cross cannot cross generations, while subsequent neutral/repress works. A native serialization regression also checks the exact Control Center fallback configuration/status wire contract. The engineering candidate is accepted for Draft delivery; stable S2 is rejected until real hardware acceptance.
 
 ## Startup and TV mode
 
@@ -51,4 +56,4 @@ Exit the separately built candidate and reopen the unchanged installed 0.9.2 exe
 
 Before stable release: verify the exact candidate's Windows/macOS/Playnite CI; complete every physical row in `velora-2-s2-hardware-validation.md`; validate PS/Options or the deliberate fallback with real buttons; verify service navigation/login/playback and real application resumption; measure runtime performance; test paired iPhone/network loss if available; resolve observed failures and rerun relevant checks. Keep the PR Draft while any mandatory gate is blocked.
 
-Minimum initial user-assisted proof: run the separate candidate, enable session Home in Control Center, release the pad, open Netflix and try PS+Options; if unobservable, return via the already configured alternate remote, locally enable the provisional fallback and validate it. Then perform Netflix → Home → YouTube → Home, Steam → Home, Playnite → Home, reconnect, and ten Home cycles. Record actual foreground and diagnostics at each failure, not only a chord counter.
+Minimum initial user-assisted proof: run the separate candidate, enable session Home in Control Center, release the pad, open Netflix and try PS+Options. If Home fails, record FAIL and recover with a configured alternate remote or the keyboard for setup only; that attempt is not couch-only PASS. Locally select the provisional fallback, release all gesture buttons, and validate its deliberate hold; enabling it suppresses primary PS+Options. Then perform Netflix → Home → YouTube → Home, Steam → Home, Playnite → Home, reconnect, and ten Home cycles. Record actual foreground and diagnostics at each failure, not only a chord counter.
