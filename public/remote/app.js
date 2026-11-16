@@ -7,6 +7,9 @@
     storageReady: false,
     paired: false,
     inFlight: false,
+    statusInFlight: false,
+    hasConnected: false,
+    authorizationRejected: false,
     record: null,
     rejectedUnconfirmedRecord: false,
   };
@@ -20,6 +23,7 @@
   const message = document.getElementById("remote-message");
   const pairingForm = document.getElementById("pairing-form");
   const pairButton = document.getElementById("pair-button");
+  const retryButton = document.getElementById("retry-button");
   const commandButtons = [...document.querySelectorAll("[data-command]")];
   const commandLabels = {
     up: "Góra",
@@ -45,6 +49,22 @@
     message.dataset.kind = error ? "error" : "normal";
   }
 
+  function setConnectionState(text, kind) {
+    connection.textContent = text;
+    connection.dataset.state = kind;
+  }
+
+  function showRetryButton(label) {
+    if (!retryButton) return;
+    retryButton.hidden = false;
+    retryButton.textContent = label;
+    retryButton.disabled = !state.secure || !navigator.onLine || state.statusInFlight || state.inFlight;
+  }
+
+  function hideRetryButton() {
+    if (retryButton) retryButton.hidden = true;
+  }
+
   const requestTimeoutMs = 8000;
 
   async function fetchWithTimeout(resource, options) {
@@ -58,9 +78,10 @@
   }
 
   function updateControls() {
-    const canSend = state.secure && state.serverReady && state.storageReady && state.paired && navigator.onLine && !state.inFlight;
+    const canSend = state.secure && state.serverReady && state.storageReady && state.paired && navigator.onLine && !state.inFlight && !state.statusInFlight;
     for (const button of commandButtons) button.disabled = !canSend;
-    pairButton.disabled = !state.secure || !state.serverReady || !state.storageReady || state.paired || !navigator.onLine || state.inFlight;
+    pairButton.disabled = !state.secure || !state.serverReady || !state.storageReady || state.paired || !navigator.onLine || state.inFlight || state.statusInFlight;
+    if (retryButton) retryButton.disabled = !state.secure || !navigator.onLine || state.statusInFlight || state.inFlight;
   }
 
   function bytesToBase64Url(bytes) {
@@ -126,22 +147,41 @@
     });
   }
 
+  async function rejectStoredRecord() {
+    try {
+      await clearRecord();
+    } catch {
+      // Leave a non-secret tombstone where possible so a later page load does
+      // not trust a credential that the server has already rejected.
+      try { await writeRecord({ rejectedByServer: true }); } catch { /* authorizationRejected still fails closed in this page */ }
+    }
+  }
+
   async function refreshStatus() {
     const requestId = ++statusRequestId;
     if (!state.secure) {
-      connection.textContent = "wymaga zaufanego HTTPS";
+      state.statusInFlight = false;
+      setConnectionState("wymaga zaufanego HTTPS", "insecure");
       server.textContent = "wyłączony";
       origin.textContent = "brak bezpiecznego kontekstu";
       pairingState.textContent = "parowanie wyłączone";
+      hideRetryButton();
       updateControls();
       showMessage("Otwórz dokładny adres HTTPS pokazany w VELORA. Nie kontynuuj po ostrzeżeniu certyfikatu.", true);
       return;
     }
 
     if (!navigator.onLine) {
+      state.statusInFlight = false;
       showOfflineStatus();
       return;
     }
+
+    state.statusInFlight = true;
+    setConnectionState(state.hasConnected ? "ponowne łączenie…" : "sprawdzam połączenie…", state.hasConnected ? "reconnecting" : "checking");
+    hideRetryButton();
+    if (state.hasConnected) showMessage("Sprawdzam ponownie bezpieczne połączenie. Polecenia są chwilowo wstrzymane.");
+    updateControls();
 
     try {
       const response = await fetchWithTimeout("./api/status", {
@@ -154,36 +194,39 @@
       if (!response.ok) throw new Error("Serwer pilota jest niedostępny.");
       const remote = await response.json();
       if (requestId !== statusRequestId) return;
+      state.hasConnected = true;
       state.serverReady = remote.enabled === true;
       server.textContent = state.serverReady ? "włączony" : "wyłączony";
       origin.textContent = "HTTPS";
       pairingState.textContent = state.serverReady ? "oczekuje na parowanie" : "niedostępne";
       pairedCount.textContent = String(Number.isInteger(remote.pairedDeviceCount) ? remote.pairedDeviceCount : 0);
-      connection.textContent = state.serverReady ? "HTTPS · lokalnie" : "serwer LAN wyłączony";
+      setConnectionState(state.serverReady ? "HTTPS · połączono" : "serwer LAN wyłączony", state.serverReady ? "connected" : "server-off");
       if (!state.serverReady) {
         state.storageReady = false;
         state.paired = false;
         state.record = null;
         state.rejectedUnconfirmedRecord = false;
         pairingForm.hidden = true;
+        showRetryButton("Sprawdź ponownie");
         showMessage("Serwer LAN został wyłączony w VELORA.");
       } else {
         try {
           const storedRecord = await readRecord();
           if (requestId !== statusRequestId) return;
+          if (storedRecord?.rejectedByServer === true) state.authorizationRejected = true;
           const confirmed = Boolean(
             storedRecord
             && storedRecord.key
             && storedRecord.deviceId
             && storedRecord.confirmedByServer === true,
           );
-          if (storedRecord && !confirmed) {
+          if (storedRecord && (!confirmed || state.authorizationRejected)) {
             try { await clearRecord(); } catch { /* the unconfirmed record stays unusable */ }
             if (requestId !== statusRequestId) return;
           }
-          state.record = confirmed ? storedRecord : null;
+          state.record = confirmed && !state.authorizationRejected ? storedRecord : null;
           state.storageReady = true;
-          state.rejectedUnconfirmedRecord = Boolean(storedRecord && !confirmed);
+          state.rejectedUnconfirmedRecord = Boolean(storedRecord && !confirmed && storedRecord.rejectedByServer !== true);
         } catch {
           if (requestId !== statusRequestId) return;
           state.record = null;
@@ -192,14 +235,22 @@
           state.rejectedUnconfirmedRecord = false;
           pairingForm.hidden = true;
           pairingState.textContent = "pamięć klucza niedostępna";
-          connection.textContent = "wymagana bezpieczna pamięć";
+          setConnectionState("wymagana bezpieczna pamięć", "storage-error");
           showMessage("Bezpieczna pamięć klucza jest niedostępna. Parowanie i polecenia pozostają wyłączone.", true);
           updateControls();
           return;
         }
         state.paired = Boolean(state.record);
+        pairingState.textContent = state.authorizationRejected
+          ? "wymagane ponowne parowanie"
+          : state.paired ? "sparowane" : "oczekuje na parowanie";
         pairingForm.hidden = state.paired;
-        if (state.paired) showMessage("Pilot jest sparowany. Każda komenda wymaga podpisu urządzenia.");
+        if (state.authorizationRejected) {
+          pairingForm.hidden = false;
+          pairingState.textContent = "wymagane ponowne parowanie";
+          setConnectionState("wymagane parowanie", "needs-pairing");
+          showMessage("VELORA nie akceptuje już poświadczeń tego iPhone'a. Sparuj go ponownie z nowym kodem.", true);
+        } else if (state.paired) showMessage("Pilot jest sparowany. Każda komenda wymaga podpisu urządzenia.");
         else if (state.rejectedUnconfirmedRecord) showMessage("Zapisany klucz nie ma potwierdzenia serwera. Sparuj iPhone'a ponownie.", true);
         else showMessage("Wpisz jednorazowy kod wygenerowany w Control Center.");
       }
@@ -213,21 +264,28 @@
       server.textContent = "niedostępny";
       origin.textContent = "HTTPS bez odpowiedzi";
       pairingState.textContent = "niedostępne";
-      connection.textContent = "brak połączenia";
+      setConnectionState("brak odpowiedzi · ponów połączenie", "disconnected");
+      showRetryButton("Ponów połączenie");
       showMessage("Nie można połączyć z VELORA. Sprawdź tę samą sieć Wi‑Fi i czy serwer LAN działa.", true);
+    } finally {
+      if (requestId === statusRequestId) {
+        state.statusInFlight = false;
+        updateControls();
+      }
     }
-    updateControls();
   }
 
   function showOfflineStatus() {
-    connection.textContent = "offline";
+    state.statusInFlight = false;
+    setConnectionState("offline", "offline");
+    showRetryButton("Sprawdź połączenie");
     showMessage("iPhone jest offline. Polecenia są wstrzymane.", true);
     updateControls();
   }
 
   async function pair(event) {
     event.preventDefault();
-    if (!state.secure || !state.serverReady || !state.storageReady || state.inFlight) return;
+    if (!state.secure || !state.serverReady || !state.storageReady || state.inFlight || state.statusInFlight) return;
     const code = document.getElementById("pairing-code").value.trim();
     const name = document.getElementById("device-name").value.trim().slice(0, 32);
     if (!/^\d{6}$/.test(code) || !name) {
@@ -292,6 +350,7 @@
       state.record = record;
       state.paired = true;
       state.rejectedUnconfirmedRecord = false;
+      state.authorizationRejected = false;
       pairingForm.hidden = true;
       pairedCount.textContent = String(Number(pairedCount.textContent || "0") + 1);
       pairingState.textContent = "sparowane";
@@ -313,7 +372,7 @@
   }
 
   async function sendCommand(command) {
-    if (!state.storageReady || !state.paired || !state.record || state.inFlight || !navigator.onLine) return;
+    if (!state.storageReady || !state.paired || !state.record || state.inFlight || state.statusInFlight || !navigator.onLine) return;
     const requestId = ++commandRequestId;
     state.inFlight = true;
     const commandLabel = commandLabels[command] || "polecenie";
@@ -347,16 +406,21 @@
       });
       if (requestId !== commandRequestId) return;
       if (response.status === 401) {
-        await clearRecord();
-        if (requestId !== commandRequestId) return;
+        state.authorizationRejected = true;
         state.record = null;
         state.paired = false;
         pairingForm.hidden = false;
-        pairingState.textContent = "odwołane lub ponownie wymagane";
-        connection.textContent = "wymagane parowanie";
-        showMessage("Dostęp tego iPhone'a został odwołany. Sparuj urządzenie ponownie.", true);
+        pairingState.textContent = "wymagane ponowne parowanie";
+        setConnectionState("wymagane parowanie", "needs-pairing");
+        await rejectStoredRecord();
+        if (requestId !== commandRequestId) return;
+        showMessage("VELORA nie akceptuje już poświadczeń tego iPhone'a. Sparuj go ponownie z nowym kodem.", true);
+      } else if (response.status === 409) {
+        showMessage("VELORA nie może potwierdzić wyniku polecenia. Sprawdź stan urządzenia przed ręcznym ponowieniem.", true);
+      } else if (response.status === 429) {
+        showMessage("VELORA chwilowo ogranicza liczbę poleceń. Poczekaj i sprawdź stan urządzenia.", true);
       } else if (!response.ok) {
-        showMessage("VELORA odrzuciła polecenie. Połączenie pozostaje zabezpieczone.", true);
+        showMessage("VELORA nie potwierdziła polecenia. Sprawdź stan urządzenia przed ręcznym ponowieniem.", true);
       } else {
         showMessage("Wysłano: " + commandLabel + ".");
       }
@@ -391,7 +455,8 @@
     commandRequestId += 1;
     showOfflineStatus();
   });
-  window.addEventListener("online", () => void refreshStatus());
+    window.addEventListener("online", () => void refreshStatus());
+    retryButton?.addEventListener("click", () => void refreshStatus());
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") void refreshStatus();
   });

@@ -8,7 +8,7 @@ import {
   type HomeZoneAvailability,
 } from "../services/homeZones";
 
-const all: HomeZoneAvailability = { controlCenter: true, music: true, dock: true, diagnostics: true };
+const all: HomeZoneAvailability = { controlCenter: true, smartHome: false, music: true, dock: true, diagnostics: true };
 
 describe("nextHomeZone", () => {
   it("moves down through the zones in visual order", () => {
@@ -35,7 +35,7 @@ describe("nextHomeZone", () => {
   });
 
   it("returns null when no zone lies in that direction", () => {
-    const onlyDock = { controlCenter: false, music: false, dock: true, diagnostics: false };
+    const onlyDock = { controlCenter: false, smartHome: false, music: false, dock: true, diagnostics: false };
     expect(nextHomeZone("dock", 1, onlyDock)).toBeNull();
     expect(nextHomeZone("dock", -1, onlyDock)).toBeNull();
   });
@@ -79,6 +79,7 @@ describe("homeZoneOfElement, availability and focus (DOM)", () => {
     const withoutMusic = homeScreen(false);
     expect(homeZoneAvailability(document)).toEqual({
       controlCenter: true,
+      smartHome: false,
       music: false,
       dock: true,
       diagnostics: true,
@@ -94,6 +95,18 @@ describe("homeZoneOfElement, availability and focus (DOM)", () => {
     expect(document.activeElement).toBe(root.querySelector(".music-mini-player button"));
     root.querySelector(".music-mini-player")?.remove();
     expect(focusHomeZone(root, "music")).toBe(false);
+    root.remove();
+  });
+
+  it("reaches Smart Home between the top actions and dock without stealing its zone", () => {
+    const root = homeScreen(false);
+    root.insertAdjacentHTML("beforeend", '<section class="smart-home-panel home-actions"><button>Moje aplikacje</button></section>');
+    const available = homeZoneAvailability(root);
+    expect(nextHomeZone("dock", -1, available)).toBe("smartHome");
+    expect(nextHomeZone("smartHome", -1, available)).toBe("controlCenter");
+    expect(homeZoneOfElement(root.querySelector(".smart-home-panel button"))).toBe("smartHome");
+    expect(focusHomeZone(root, "smartHome")).toBe(true);
+    expect(document.activeElement?.textContent).toBe("Moje aplikacje");
     root.remove();
   });
 });

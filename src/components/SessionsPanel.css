@@ -1,0 +1,13 @@
+.velora-sessions { color: var(--ivory, #f4eee1); padding: 1rem 0; }
+.velora-sessions header, .velora-session { display: flex; gap: 1rem; align-items: center; justify-content: space-between; }
+.velora-sessions h3 { margin: 0; font-weight: 500; font-size: 1.15rem; }
+.velora-sessions header p, .velora-session span { opacity: .65; font-size: .86rem; }
+.velora-session { flex-wrap: wrap; padding: .9rem 0; border-top: 1px solid rgba(244,238,225,.12); }
+.velora-session span { display: block; margin-top: .3rem; }
+.velora-session-actions { display: flex; gap: .65rem; }
+.velora-sessions button { min-height: 44px; padding: .6rem .9rem; border: 1px solid rgba(244,238,225,.25); border-radius: 8px; background: rgba(40,20,23,.65); color: inherit; cursor: pointer; }
+.velora-sessions button:focus-visible { outline: 3px solid #f4eee1; outline-offset: 3px; }
+.velora-sessions button:disabled { opacity: .4; cursor: default; }
+.velora-session-confirm { width: 100%; padding: .8rem; background: rgba(90,21,30,.25); border-radius: 8px; }
+.velora-session-confirm button { margin: .25rem .5rem .25rem 0; }
+@media (max-width: 600px) { .velora-sessions header { align-items: flex-start; flex-direction: column; } }

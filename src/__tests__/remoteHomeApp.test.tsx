@@ -71,13 +71,13 @@ describe("App receives authorized remote commands", () => {
     await waitFor(() => expect(remote.returnHome).toHaveBeenCalledTimes(1));
   });
 
-  it("opens application switching on the search tab through the accepted remote event", async () => {
+  it("opens managed sessions through the accepted remote switch event", async () => {
     render(<App />);
     await waitFor(() => expect(remote.emit).not.toBeNull());
     await emit("switch-apps");
-    const tab = screen.getByRole("tab", { name: "Szukaj" });
+    const tab = screen.getByRole("tab", { name: "Sesje" });
     expect(tab.getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByRole("tabpanel", { name: "Szukaj" }).hidden).toBe(false);
+    expect(screen.getByRole("tabpanel", { name: "Sesje" }).hidden).toBe(false);
     expect(remote.returnHome).not.toHaveBeenCalled();
   });
 

@@ -80,6 +80,7 @@ export type DiagnosticsSnapshot = {
   controlService: ControlServiceStatus;
   nativeController: NativeControllerStatus;
   displayAudio: DisplayAudioSnapshot;
+  remote?: { enabled: boolean; secureOriginAvailable: boolean; pairedDeviceCount: number; recoveryRequired: boolean };
   errors: DiagnosticsError[];
   limitations: string[];
 };
