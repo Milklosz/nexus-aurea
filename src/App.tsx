@@ -762,7 +762,8 @@ export default function App() {
       if (!active) return;
       // A successful spawn receipt is not proof that the app window appeared.
       // Surface only a real terminal failure from the authoritative registry.
-      if (event.session.phase === "windowAppeared" || event.session.phase === "sessionActive") {
+      if (event.previousPhase !== event.session.phase
+        && (event.session.phase === "windowAppeared" || event.session.phase === "sessionActive")) {
         const id = event.session.appId;
         const service = streamingServices.find(service => service.kind === "managed" ? service.managedAppId === id : `edge-cinema:${service.id}` === id);
         if (service) recordSmartHomeLaunch(service.id);

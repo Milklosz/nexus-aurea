@@ -166,6 +166,7 @@ pub fn run() {
             window_broker::stop_foreground_monitor();
             display_audio::stop_monitor();
             session_monitor::stop();
+            single_instance::release_for_shutdown();
         }
     });
 }

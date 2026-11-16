@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type { AudioEndpointInfo } from "./displayAudio";
 
 function requireNative(): void {
@@ -21,4 +22,8 @@ export async function setSystemAudioVolume(percent: number, expectedEndpointId: 
 export async function setSystemAudioMute(muted: boolean, expectedEndpointId: string): Promise<AudioEndpointInfo> {
   requireNative();
   return invoke<AudioEndpointInfo>("set_system_audio_mute", { muted, expectedEndpointId });
+}
+/** Invalidation only; read back the current endpoint before showing or writing it. */
+export async function listenForSystemAudioChange(callback: () => void): Promise<() => void> {
+  return isTauri() ? listen("velora-audio-changed", callback) : () => {};
 }

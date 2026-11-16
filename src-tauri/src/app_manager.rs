@@ -1026,6 +1026,7 @@ mod tests {
             window_id: Some(77),
             started_at_ms: 1,
             updated_at_ms: 1,
+            last_activation_at_ms: None,
             error: None,
             restore: None,
             session_revision: None,

@@ -27,6 +27,8 @@ pub struct TvDisplay {
     scale_factor: f64,
     primary: bool,
     current: bool,
+    refresh_hz: Option<u32>,
+    connection_type: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -126,24 +128,35 @@ pub fn get_tv_mode_status(app: AppHandle) -> Result<TvModeStatus, String> {
         Ok(value) => (value.display_id, None),
         Err(message) => (None, Some(message)),
     };
+    let names: Vec<_> = monitors
+        .iter()
+        .take(16)
+        .map(|monitor| monitor.name().cloned().unwrap_or_default())
+        .collect();
+    let details = crate::display_audio::monitor_details(&names);
     let displays: Vec<_> = monitors
         .into_iter()
         .take(16)
-        .map(|monitor| {
+        .zip(details)
+        .map(|(monitor, details)| {
             let identity = id(&monitor);
             TvDisplay {
                 primary: primary.as_ref() == Some(&identity),
                 current: current.as_ref() == Some(&identity),
                 id: identity,
-                name: monitor
-                    .name()
-                    .map(|name| name.chars().filter(|c| !c.is_control()).take(96).collect())
-                    .unwrap_or_else(|| "Ekran".into()),
+                name: details.friendly_name.unwrap_or_else(|| {
+                    monitor
+                        .name()
+                        .map(|name| name.chars().filter(|c| !c.is_control()).take(96).collect())
+                        .unwrap_or_else(|| "Ekran".into())
+                }),
                 width: monitor.size().width,
                 height: monitor.size().height,
                 x: monitor.position().x,
                 y: monitor.position().y,
                 scale_factor: monitor.scale_factor(),
+                refresh_hz: details.refresh_hz,
+                connection_type: details.connection_type,
             }
         })
         .collect();
@@ -206,6 +219,8 @@ pub fn set_tv_mode(
     let _guard = CONFIG_LOCK
         .try_lock()
         .map_err(|_| "Ustawienia ekranu są zajęte.")?;
+    // Reject corrupt/future settings before changing the live window.
+    let previous = preference(&app)?;
     let window = app
         .get_webview_window("main")
         .ok_or("Okno VELORA jest niedostępne.")?;
@@ -230,7 +245,6 @@ pub fn set_tv_mode(
     } else {
         return Err("Wybierz dostępny ekran.".into());
     }
-    let previous = preference(&app)?;
     persist(
         &app,
         &TvPreference {

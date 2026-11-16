@@ -2352,7 +2352,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "nexus-aurea"
-version = "0.10.0-rc.1"
+version = "0.10.0-rc.2"
 dependencies = [
  "axum",
  "axum-server",
@@ -2371,6 +2371,7 @@ dependencies = [
  "tauri-plugin-opener",
  "time",
  "windows",
+ "windows-core",
 ]
 
 [[package]]

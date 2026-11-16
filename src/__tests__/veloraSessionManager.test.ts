@@ -22,7 +22,7 @@ it("rejects unconfirmed destructive actions and malformed IDs before native IPC"
 
 it("never invents sessions or performs native actions in web preview", async () => {
   mocks.isTauri.mockReturnValue(false);
-  expect(await getManagedSessions()).toEqual({ supported: false, sessions: [] });
+  expect(await getManagedSessions()).toEqual({ supported: false, sessions: [], applications: [] });
   await expect(resumeManagedSession("cinema-1")).rejects.toThrow("natywnej");
   expect(mocks.invoke).not.toHaveBeenCalled();
 });

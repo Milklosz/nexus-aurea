@@ -661,6 +661,7 @@ mod tests {
             window_id: None,
             started_at_ms: 1,
             updated_at_ms: 2,
+            last_activation_at_ms: None,
             error: Some("C:\\Users\\mil\\game.log".into()),
             restore: None,
             session_revision: Some(1),

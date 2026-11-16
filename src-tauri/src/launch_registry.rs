@@ -65,6 +65,10 @@ pub struct LaunchSession {
     pub window_id: Option<u64>,
     pub started_at_ms: u64,
     pub updated_at_ms: u64,
+    /// Last observed foreground entry of the exact captured process/window owner.
+    /// Snapshot reads and failed activation requests never advance this timestamp.
+    #[serde(default)]
+    pub last_activation_at_ms: Option<u64>,
     pub error: Option<String>,
     pub restore: Option<RestoreResult>,
     /// Session revision at the launch transition, paired with `id` (the
@@ -452,6 +456,9 @@ fn advance(tracked: &mut TrackedLaunch, observation: &Observation) -> Option<Lau
     if tracked.session.phase.is_terminal() {
         return None;
     }
+    let previous_foreground = tracked.session.foreground;
+    let previous_activation = tracked.session.last_activation_at_ms;
+    let previous_window = tracked.session.window_id;
     // A recycled PID is a different process. Detect it before matching
     // descendants or windows so an unrelated process cannot keep a dead
     // session alive.
@@ -541,6 +548,25 @@ fn advance(tracked: &mut TrackedLaunch, observation: &Observation) -> Option<Lau
     let mut process_ids = window_pids.into_iter().collect::<Vec<_>>();
     process_ids.sort_unstable();
     tracked.session.process_ids = process_ids;
+    let previously_foreground = tracked.session.foreground;
+    let verified_foreground_owner = !tracked.session.pid_reuse_detected
+        && windows.iter().any(|window| {
+            Some(window.hwnd) == observation.foreground.hwnd
+                && observation
+                    .identities
+                    .get(&window.process_id)
+                    .is_some_and(|live| {
+                        live.created_at_100ns != 0
+                            && tracked.known_identities.get(&window.process_id)
+                                == Some(&live.created_at_100ns)
+                            && window.process_created_at_100ns == Some(live.created_at_100ns)
+                    })
+        });
+    if verified_foreground_owner
+        && (!previously_foreground || tracked.session.last_activation_at_ms.is_none())
+    {
+        tracked.session.last_activation_at_ms = Some(observation.at_ms);
+    }
     tracked.session.foreground = foreground_matches;
     // Keep the last known HWND when the window list is temporarily empty. The
     // close guard below must be able to distinguish a closed window from one
@@ -665,6 +691,22 @@ fn advance(tracked: &mut TrackedLaunch, observation: &Observation) -> Option<Lau
         tracked.absent_since_ms = None;
     }
     next.and_then(|phase| set_phase(tracked, phase, observation.at_ms, None))
+        .or_else(|| {
+            // Reuse the existing event channel for visible ownership/focus changes.
+            // Stable watcher ticks remain silent; no second polling loop is added.
+            if tracked.session.foreground == previous_foreground
+                && tracked.session.last_activation_at_ms == previous_activation
+                && tracked.session.window_id == previous_window
+            {
+                return None;
+            }
+            tracked.session.updated_at_ms = observation.at_ms;
+            Some(LaunchEvent {
+                previous_phase: tracked.session.phase,
+                at_ms: observation.at_ms,
+                session: tracked.session.clone(),
+            })
+        })
 }
 
 impl LaunchRegistry {
@@ -711,6 +753,7 @@ impl LaunchRegistry {
             window_id: None,
             started_at_ms: at_ms,
             updated_at_ms: at_ms,
+            last_activation_at_ms: None,
             error: None,
             restore: None,
             session_revision: None,
@@ -1437,6 +1480,7 @@ mod tests {
                 window_id: None,
                 started_at_ms: 1_000,
                 updated_at_ms: 1_000,
+                last_activation_at_ms: None,
                 error: None,
                 restore: None,
                 session_revision: None,
@@ -1517,6 +1561,100 @@ mod tests {
             identities: HashMap::new(),
             at_ms,
         }
+    }
+
+    #[test]
+    fn activation_time_records_owned_foreground_entries_not_observation_ticks() {
+        let mut launch = tracked();
+        launch.watch.root_process_id = Some(200);
+        let observed = |foreground, at_ms, created_at| {
+            let mut value = observation(
+                vec![(200, 1, "Playnite.FullscreenApp.exe")],
+                vec![(700, 200, "SDL_app")],
+                foreground,
+                at_ms,
+            );
+            value.windows[0].process_created_at_100ns = Some(created_at);
+            value.identities.insert(
+                200,
+                ProcessIdentity {
+                    process_id: 200,
+                    created_at_100ns: created_at,
+                },
+            );
+            value
+        };
+        advance(&mut launch, &observed(Some(700), 2_000, 123));
+        assert_eq!(launch.session.last_activation_at_ms, Some(2_000));
+        advance(&mut launch, &observed(Some(700), 3_000, 123));
+        assert_eq!(launch.session.last_activation_at_ms, Some(2_000));
+        advance(&mut launch, &observed(None, 4_000, 123));
+        assert_eq!(launch.session.last_activation_at_ms, Some(2_000));
+        advance(&mut launch, &observed(Some(700), 5_000, 123));
+        assert_eq!(launch.session.last_activation_at_ms, Some(5_000));
+        advance(&mut launch, &observed(None, 6_000, 123));
+        advance(&mut launch, &observed(Some(700), 7_000, 999));
+        assert!(launch.session.pid_reuse_detected);
+        assert_eq!(launch.session.last_activation_at_ms, Some(5_000));
+    }
+
+    #[test]
+    fn active_foreground_changes_notify_existing_subscribers_without_tick_spam() {
+        let mut launch = tracked();
+        launch.watch.root_process_id = Some(200);
+        launch.session.phase = LaunchPhase::SessionActive;
+        launch.session.foreground = true;
+        launch.session.window_id = Some(700);
+        launch.session.last_activation_at_ms = Some(1_500);
+        let observed = |foreground, at_ms| {
+            let mut value = observation(
+                vec![(200, 1, "Playnite.FullscreenApp.exe")],
+                vec![(700, 200, "SDL_app")],
+                foreground,
+                at_ms,
+            );
+            value.windows[0].process_created_at_100ns = Some(123);
+            value.identities.insert(
+                200,
+                ProcessIdentity {
+                    process_id: 200,
+                    created_at_100ns: 123,
+                },
+            );
+            value
+        };
+        assert!(advance(&mut launch, &observed(Some(700), 2_000)).is_none());
+        let background = advance(&mut launch, &observed(None, 3_000)).unwrap();
+        assert_eq!(background.previous_phase, LaunchPhase::SessionActive);
+        assert_eq!(background.session.phase, LaunchPhase::SessionActive);
+        assert!(!background.session.foreground);
+        assert_eq!(background.session.last_activation_at_ms, Some(1_500));
+        assert!(advance(&mut launch, &observed(None, 4_000)).is_none());
+        let foreground = advance(&mut launch, &observed(Some(700), 5_000)).unwrap();
+        assert!(foreground.session.foreground);
+        assert_eq!(foreground.session.last_activation_at_ms, Some(5_000));
+        assert!(advance(&mut launch, &observed(Some(700), 6_000)).is_none());
+    }
+
+    #[test]
+    fn matching_an_unowned_process_name_does_not_record_an_activation() {
+        let mut launch = tracked();
+        let mut value = observation(
+            vec![(200, 1, "Playnite.FullscreenApp.exe")],
+            vec![(700, 200, "SDL_app")],
+            Some(700),
+            2_000,
+        );
+        value.windows[0].process_created_at_100ns = Some(123);
+        value.identities.insert(
+            200,
+            ProcessIdentity {
+                process_id: 200,
+                created_at_100ns: 123,
+            },
+        );
+        advance(&mut launch, &value);
+        assert_eq!(launch.session.last_activation_at_ms, None);
     }
 
     #[test]
@@ -1725,6 +1863,7 @@ mod tests {
                 window_id: None,
                 started_at_ms: 1_000,
                 updated_at_ms: 1_000,
+                last_activation_at_ms: None,
                 error: None,
                 restore: None,
                 session_revision: None,
@@ -1804,6 +1943,7 @@ mod tests {
                 window_id: None,
                 started_at_ms: 1_000,
                 updated_at_ms: 1_000,
+                last_activation_at_ms: None,
                 error: None,
                 restore: None,
                 session_revision: None,
@@ -1860,6 +2000,7 @@ mod tests {
                 window_id: None,
                 started_at_ms: 1_000,
                 updated_at_ms: 1_000,
+                last_activation_at_ms: None,
                 error: None,
                 restore: None,
                 session_revision: None,
@@ -1872,11 +2013,14 @@ mod tests {
             known_identities: HashMap::new(),
         };
         // The browser process still exists, but its visible app window is gone.
-        assert!(advance(
+        let background = advance(
             &mut session,
             &observation(vec![(300, 1, "msedge.exe")], vec![], None, 2_000),
         )
-        .is_none());
+        .unwrap();
+        assert_eq!(background.previous_phase, LaunchPhase::SessionActive);
+        assert_eq!(background.session.phase, LaunchPhase::SessionActive);
+        assert!(!background.session.foreground);
         assert_eq!(session.session.phase, LaunchPhase::SessionActive);
         let event = advance(
             &mut session,
@@ -1921,6 +2065,7 @@ mod tests {
                 window_id: None,
                 started_at_ms: 1_000,
                 updated_at_ms: 1_000,
+                last_activation_at_ms: None,
                 error: None,
                 restore: None,
                 session_revision: None,
@@ -1932,11 +2077,14 @@ mod tests {
             window_absent_since_ms: None,
             known_identities: HashMap::new(),
         };
-        assert!(advance(
+        let background = advance(
             &mut session,
             &observation(vec![(300, 1, "msedge.exe")], vec![], None, 2_000),
         )
-        .is_none());
+        .unwrap();
+        assert_eq!(background.previous_phase, LaunchPhase::SessionActive);
+        assert_eq!(background.session.phase, LaunchPhase::SessionActive);
+        assert!(!background.session.foreground);
         assert!(session.window_absent_since_ms.is_some());
         advance(
             &mut session,
@@ -2030,6 +2178,7 @@ mod tests {
                 window_id: Some(700),
                 started_at_ms: 1_000,
                 updated_at_ms: 1_000,
+                last_activation_at_ms: None,
                 error: None,
                 restore: None,
                 session_revision: None,
@@ -2157,6 +2306,7 @@ mod tests {
                 window_id: None,
                 started_at_ms: 1_000,
                 updated_at_ms: 1_000,
+                last_activation_at_ms: None,
                 error: None,
                 restore: None,
                 session_revision: None,
@@ -2342,6 +2492,7 @@ mod session_owner_tests {
                 window_id: None,
                 started_at_ms: 1_000,
                 updated_at_ms: 1_000,
+                last_activation_at_ms: None,
                 error: None,
                 restore: None,
                 session_revision: None,

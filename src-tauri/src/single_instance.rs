@@ -19,6 +19,9 @@ pub(crate) const WINDOW_TITLE: &str = "VELORA";
 const ERROR_ALREADY_EXISTS: u32 = 183;
 const SW_RESTORE: i32 = 9;
 
+#[cfg(windows)]
+static INSTANCE_HANDLE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Claim {
     /// This process created the mutex and is the only instance.
@@ -41,41 +44,72 @@ pub(crate) fn classify_mutex_error(last_error: u32) -> Claim {
 /// the front and this process should exit without starting Tauri.
 #[cfg(target_os = "windows")]
 pub(crate) fn claim_or_activate_existing() -> bool {
-    use std::ffi::c_void;
-
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn CreateMutexW(attributes: *const c_void, initial_owner: i32, name: *const u16) -> *mut c_void;
-        fn GetLastError() -> u32;
-        fn CloseHandle(handle: *mut c_void) -> i32;
-    }
-
     fn wide(text: &str) -> Vec<u16> {
         text.encode_utf16().chain(std::iter::once(0)).collect()
     }
-
-    let name = wide(MUTEX_NAME);
-    // SAFETY: `name` is a valid NUL-terminated UTF-16 string that outlives the call.
-    let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
-    if handle.is_null() {
+    let Some((handle, claim)) = native::create(MUTEX_NAME) else {
         // Fail open: if the mutex cannot be created, start normally.
         return true;
-    }
-    // SAFETY: plain Win32 call with no pointer arguments.
-    let last_error = unsafe { GetLastError() };
-    match classify_mutex_error(last_error) {
+    };
+    match claim {
         Claim::Primary => {
-            // Keep the handle open for the life of the process; closing it releases the lock.
+            INSTANCE_HANDLE.store(handle, std::sync::atomic::Ordering::Release);
             true
         }
         Claim::AlreadyRunning => {
-            // SAFETY: `handle` was returned by CreateMutexW in this process.
-            unsafe {
-                CloseHandle(handle);
-            }
+            native::close(handle);
             activate_existing_window(&wide(WINDOW_CLASS), &wide(WINDOW_TITLE));
             false
         }
+    }
+}
+
+/// Called only after Tauri enters its orderly Exit event and worker shutdown
+/// has been requested. Tauri spawns a restart child before the old process exits;
+/// retaining this handle until process teardown would make that child reject
+/// itself as a duplicate. Never release it on a mere restart request or read.
+pub(crate) fn release_for_shutdown() {
+    #[cfg(windows)]
+    release_handle(&INSTANCE_HANDLE);
+}
+
+#[cfg(windows)]
+fn release_handle(slot: &std::sync::atomic::AtomicUsize) {
+    let handle = slot.swap(0, std::sync::atomic::Ordering::AcqRel);
+    if handle != 0 {
+        native::close(handle);
+    }
+}
+
+#[cfg(windows)]
+mod native {
+    use super::{classify_mutex_error, Claim};
+    use std::ffi::c_void;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CreateMutexW(
+            attributes: *const c_void,
+            initial_owner: i32,
+            name: *const u16,
+        ) -> *mut c_void;
+        fn GetLastError() -> u32;
+        fn CloseHandle(handle: *mut c_void) -> i32;
+    }
+    pub(super) fn create(name: &str) -> Option<(usize, Claim)> {
+        let name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+        // SAFETY: the NUL-terminated name lives throughout the call. No ownership
+        // is acquired: handle lifetime is the existing single-instance protocol.
+        let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+        if handle.is_null() {
+            return None;
+        }
+        let last_error = unsafe { GetLastError() };
+        Some((handle as usize, classify_mutex_error(last_error)))
+    }
+    pub(super) fn close(handle: usize) {
+        // SAFETY: handles originate in CreateMutexW and each caller releases
+        // its own reference exactly once (the shared slot uses an atomic swap).
+        let _ = unsafe { CloseHandle(handle as *mut c_void) };
     }
 }
 
@@ -141,5 +175,25 @@ mod tests {
     #[test]
     fn window_class_is_the_tauri_default() {
         assert_eq!(WINDOW_CLASS, "Tauri Window");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn orderly_exit_releases_only_its_guard_before_restart_and_is_idempotent() {
+        use std::sync::atomic::AtomicUsize;
+        // Test-only name: never touch the running user's real VELORA guard.
+        let name = format!("Local\\pl.nexus.aurea.tests.restart.{}", std::process::id());
+        let (first, claim) = super::native::create(&name).expect("create isolated test mutex");
+        assert_eq!(claim, Claim::Primary);
+        let slot = AtomicUsize::new(first);
+        let (duplicate, claim) = super::native::create(&name).unwrap();
+        assert_eq!(claim, Claim::AlreadyRunning);
+        super::native::close(duplicate);
+        // A normal second launch remains a duplicate until orderly shutdown.
+        super::release_handle(&slot);
+        super::release_handle(&slot);
+        let (replacement, claim) = super::native::create(&name).unwrap();
+        assert_eq!(claim, Claim::Primary);
+        super::native::close(replacement);
     }
 }

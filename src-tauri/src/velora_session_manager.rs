@@ -8,6 +8,7 @@ use crate::{process_table, window_broker};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ManagedSessionState {
+    NotRunning,
     Launching,
     Running,
     Foreground,
@@ -17,16 +18,29 @@ pub enum ManagedSessionState {
     Failed,
 }
 
+/// The native launch adapter family, never an executable path, URI or arguments.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ManagedLaunchMethod {
+    OwnedBrowserWindow,
+    SteamClient,
+    GameLauncher,
+    PlayniteClient,
+    ManagedExecutable,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedSession {
     pub session_id: String,
     pub app_id: String,
     pub application_type: LaunchKind,
+    pub launch_method: ManagedLaunchMethod,
     pub name: String,
     pub state: ManagedSessionState,
     pub launched_at_ms: u64,
     pub last_observed_at_ms: u64,
+    pub last_activation_at_ms: Option<u64>,
     pub can_resume: bool,
     pub can_close: bool,
     pub last_failure: Option<String>,
@@ -37,6 +51,59 @@ pub struct ManagedSession {
 pub struct ManagedSessionsSnapshot {
     pub supported: bool,
     pub sessions: Vec<ManagedSession>,
+    /// Application-level state is separate: no fictional launch IDs or ownership.
+    pub applications: Vec<ManagedApplicationState>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedApplicationState {
+    pub app_id: String,
+    pub name: String,
+    pub state: ManagedSessionState,
+    pub session_id: Option<String>,
+}
+
+const HOME_APPLICATIONS: &[(&str, &str)] = &[
+    ("netflix", "Netflix"),
+    ("disney", "Disney+"),
+    ("max", "HBO Max"),
+    ("prime", "Prime Video"),
+    ("youtube", "YouTube"),
+    ("steam", "Steam"),
+    ("playnite", "Playnite"),
+    ("appleMusic", "Apple Music"),
+];
+
+fn application_states(sessions: &[ManagedSession]) -> Vec<ManagedApplicationState> {
+    HOME_APPLICATIONS
+        .iter()
+        .map(|(app_id, name)| {
+            // A retained ended launch must not hide a newer active session.
+            let latest = sessions
+                .iter()
+                .filter(|session| session.app_id == *app_id)
+                .max_by_key(|session| {
+                    (
+                        matches!(
+                            session.state,
+                            ManagedSessionState::Launching
+                                | ManagedSessionState::Running
+                                | ManagedSessionState::Foreground
+                                | ManagedSessionState::Background
+                                | ManagedSessionState::Unavailable
+                        ),
+                        session.launched_at_ms,
+                    )
+                });
+            ManagedApplicationState {
+                app_id: (*app_id).into(),
+                name: (*name).into(),
+                state: latest.map_or(ManagedSessionState::NotRunning, |session| session.state),
+                session_id: latest.map(|session| session.session_id.clone()),
+            }
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -92,10 +159,18 @@ fn projection(
         session_id: launch.id.clone(),
         app_id: app_id.into(),
         application_type: launch.kind,
+        launch_method: match launch.kind {
+            LaunchKind::Cinema => ManagedLaunchMethod::OwnedBrowserWindow,
+            LaunchKind::Steam => ManagedLaunchMethod::SteamClient,
+            LaunchKind::Game => ManagedLaunchMethod::GameLauncher,
+            LaunchKind::Playnite => ManagedLaunchMethod::PlayniteClient,
+            LaunchKind::ManagedApp => ManagedLaunchMethod::ManagedExecutable,
+        },
         name: name.into(),
         state,
         launched_at_ms: launch.started_at_ms,
         last_observed_at_ms: launch.updated_at_ms,
+        last_activation_at_ms: launch.last_activation_at_ms,
         can_resume,
         can_close: can_resume
             && launch.kind == LaunchKind::Cinema
@@ -141,10 +216,18 @@ pub fn get_managed_sessions(app: AppHandle) -> ManagedSessionsSnapshot {
             )
         })
         .collect();
-    sessions.sort_by(|a, b| b.last_observed_at_ms.cmp(&a.last_observed_at_ms));
+    sessions.sort_by_key(|session| {
+        std::cmp::Reverse(
+            session
+                .last_activation_at_ms
+                .unwrap_or(session.launched_at_ms),
+        )
+    });
+    let applications = application_states(&sessions);
     ManagedSessionsSnapshot {
         supported: cfg!(target_os = "windows"),
         sessions,
+        applications,
     }
 }
 
@@ -213,12 +296,79 @@ mod tests {
             window_id: Some(100),
             started_at_ms: 12,
             updated_at_ms: 14,
+            last_activation_at_ms: None,
             error: None,
             restore: None,
             session_revision: None,
             pid_reuse_detected: false,
             attention: None,
         }
+    }
+
+    #[test]
+    fn projection_preserves_observed_activation_and_adapter_family_without_paths() {
+        let mut launch = launch();
+        launch.last_activation_at_ms = Some(13);
+        let session = projection(&launch, true, true);
+        assert_eq!(session.last_activation_at_ms, Some(13));
+        assert_eq!(
+            session.launch_method,
+            ManagedLaunchMethod::OwnedBrowserWindow
+        );
+        assert_eq!(
+            projection(&launch, true, true).last_activation_at_ms,
+            Some(13)
+        );
+        launch.kind = LaunchKind::Steam;
+        assert_eq!(
+            projection(&launch, true, true).launch_method,
+            ManagedLaunchMethod::SteamClient
+        );
+        launch.kind = LaunchKind::Playnite;
+        assert_eq!(
+            projection(&launch, true, true).launch_method,
+            ManagedLaunchMethod::PlayniteClient
+        );
+        launch.kind = LaunchKind::Game;
+        launch.app_id = Some("opaque-game-id".into());
+        assert_eq!(
+            projection(&launch, true, true).launch_method,
+            ManagedLaunchMethod::GameLauncher
+        );
+        launch.kind = LaunchKind::ManagedApp;
+        assert_eq!(
+            projection(&launch, true, true).launch_method,
+            ManagedLaunchMethod::ManagedExecutable
+        );
+    }
+
+    #[test]
+    fn idle_applications_have_no_invented_sessions_and_retained_exits_do_not_hide_active_ones() {
+        let empty = application_states(&[]);
+        assert!(empty
+            .iter()
+            .all(|app| app.state == ManagedSessionState::NotRunning && app.session_id.is_none()));
+        let active = projection(&launch(), true, true);
+        let mut ended = launch();
+        ended.id = "cinema-ended".into();
+        ended.started_at_ms = 15;
+        ended.phase = LaunchPhase::Ended;
+        let apps = application_states(&[active, projection(&ended, false, true)]);
+        let netflix = apps.iter().find(|app| app.app_id == "netflix").unwrap();
+        assert_eq!(netflix.state, ManagedSessionState::Background);
+        assert_eq!(netflix.session_id.as_deref(), Some("cinema-1"));
+        let youtube = apps.iter().find(|app| app.app_id == "youtube").unwrap();
+        assert_eq!(youtube.state, ManagedSessionState::NotRunning);
+        assert!(youtube.session_id.is_none());
+        let unavailable = projection(&launch(), false, true);
+        let apps = application_states(&[unavailable, projection(&ended, false, true)]);
+        assert_eq!(
+            apps.iter()
+                .find(|app| app.app_id == "netflix")
+                .unwrap()
+                .state,
+            ManagedSessionState::Unavailable
+        );
     }
 
     #[test]

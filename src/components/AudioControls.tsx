@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import type { AudioEndpointInfo } from "../services/displayAudio";
-import { getSystemAudio, setSystemAudioMute, setSystemAudioVolume } from "../services/audioControl";
+import { getSystemAudio, listenForSystemAudioChange, setSystemAudioMute, setSystemAudioVolume } from "../services/audioControl";
 import "./AudioControls.css";
 
 /** Core Audio writes occur only from deliberate user button actions. */
@@ -12,15 +12,18 @@ export function AudioControls() {
   const [error, setError] = useState("");
   const alive = useRef(false);
   const inFlight = useRef(false);
+  const generation = useRef(0);
+  const refreshPending = useRef(false);
 
   const perform = async (operation: () => Promise<AudioEndpointInfo>) => {
     if (!native || inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
     setError("");
+    const startedGeneration = generation.current;
     try {
       const next = await operation();
-      if (alive.current) setAudio(next);
+      if (alive.current && startedGeneration === generation.current) setAudio(next);
     } catch (cause) {
       if (alive.current) {
         setAudio(null);
@@ -29,6 +32,10 @@ export function AudioControls() {
     } finally {
       inFlight.current = false;
       if (alive.current) setBusy(false);
+      if (alive.current && refreshPending.current) {
+        refreshPending.current = false;
+        void perform(getSystemAudio);
+      }
     }
   };
 
@@ -36,11 +43,29 @@ export function AudioControls() {
     alive.current = true;
     if (!native) return () => { alive.current = false; };
     void perform(getSystemAudio);
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+    void listenForSystemAudioChange(() => {
+      if (disposed) return;
+      generation.current += 1;
+      setAudio(null);
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        if (inFlight.current) refreshPending.current = true;
+        else void perform(getSystemAudio);
+      }, 100);
+    }).then(stop => { if (disposed) stop(); else unlisten = stop; }).catch(() => {
+      // Manual/focus refresh remains available if Windows notifications fail.
+    });
     const refresh = () => { if (document.visibilityState === "visible") void perform(getSystemAudio); };
     window.addEventListener("focus", refresh);
     document.addEventListener("visibilitychange", refresh);
     return () => {
       alive.current = false;
+      disposed = true;
+      clearTimeout(refreshTimer);
+      unlisten?.();
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", refresh);
     };

@@ -4,6 +4,7 @@ use tauri::AppHandle;
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) const DISPLAY_CHANGED_EVENT: &str = "velora-display-changed";
+pub(crate) const AUDIO_CHANGED_EVENT: &str = "velora-audio-changed";
 
 const MAX_DISPLAYS: usize = 16;
 
@@ -185,6 +186,9 @@ pub(crate) fn start_monitor(app: AppHandle) {
         let spawned = std::thread::Builder::new()
             .name("velora-display-monitor".into())
             .spawn(move || {
+                // Keep the COM apartment and subscription on this existing worker.
+                // The callback only invalidates frontend state; it never writes audio.
+                let _audio_subscription = windows_native::AudioSubscription::register(app.clone());
                 let mut previous_signature: Option<String> = None;
                 loop {
                     if DISPLAY_MONITOR_STOP.load(Ordering::Acquire) {
@@ -329,6 +333,25 @@ fn validate_audio_target(current: &str, expected: Option<&str>) -> Result<(), St
     Ok(())
 }
 
+#[derive(Default)]
+pub(crate) struct MonitorDetails {
+    pub refresh_hz: Option<u32>,
+    pub connection_type: Option<&'static str>,
+    pub friendly_name: Option<String>,
+}
+
+/// Resolve only native-enumerated names. No display number or HDMI guess is used.
+pub(crate) fn monitor_details(names: &[String]) -> Vec<MonitorDetails> {
+    #[cfg(windows)]
+    {
+        windows_native::monitor_details(names)
+    }
+    #[cfg(not(windows))]
+    {
+        names.iter().map(|_| MonitorDetails::default()).collect()
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn normalize_identifier(raw: &str) -> String {
     let trimmed =
@@ -394,14 +417,18 @@ fn sanitize_label(raw: &str) -> String {
 mod windows_native {
     use super::{
         hash_identifier, normalize_identifier, sanitize_label, AudioEndpointInfo, DisplayInfo,
-        MAX_AUDIO_ENDPOINTS, MAX_DISPLAYS,
+        MonitorDetails, MAX_AUDIO_ENDPOINTS, MAX_DISPLAYS,
     };
     use ::windows::core::{BOOL, PCWSTR, PWSTR};
     use ::windows::Win32::Devices::Display::{
         DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QueryDisplayConfig,
         DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO,
         DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
-        DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO, DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO,
+        DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO, DISPLAYCONFIG_MODE_INFO,
+        DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EMBEDDED,
+        DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EXTERNAL, DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DVI,
+        DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HDMI, DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INTERNAL,
+        DISPLAYCONFIG_OUTPUT_TECHNOLOGY_LVDS, DISPLAYCONFIG_PATH_INFO,
         DISPLAYCONFIG_SOURCE_DEVICE_NAME, DISPLAYCONFIG_TARGET_DEVICE_NAME, QDC_ONLY_ACTIVE_PATHS,
     };
     use ::windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
@@ -414,8 +441,9 @@ mod windows_native {
     };
     use ::windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
     use ::windows::Win32::Media::Audio::{
-        eConsole, eRender, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE,
-        DEVICE_STATEMASK_ALL, DEVICE_STATE_ACTIVE, DEVICE_STATE_DISABLED, DEVICE_STATE_NOTPRESENT,
+        eConsole, eRender, EDataFlow, ERole, IMMDevice, IMMDeviceEnumerator, IMMNotificationClient,
+        IMMNotificationClient_Impl, MMDeviceEnumerator, DEVICE_STATE, DEVICE_STATEMASK_ALL,
+        DEVICE_STATE_ACTIVE, DEVICE_STATE_DISABLED, DEVICE_STATE_NOTPRESENT,
         DEVICE_STATE_UNPLUGGED,
     };
     use ::windows::Win32::System::Com::StructuredStorage::{
@@ -451,6 +479,125 @@ mod windows_native {
         friendly_name: Option<String>,
         hdr: Option<bool>,
         hdr_error: Option<String>,
+        connection_type: Option<&'static str>,
+    }
+
+    #[windows::core::implement(IMMNotificationClient)]
+    struct AudioNotifications {
+        app: tauri::AppHandle,
+    }
+
+    impl AudioNotifications_Impl {
+        fn invalidate(&self) {
+            use tauri::Emitter;
+            // No raw device identity, local path or credential crosses this event.
+            let _ = self.app.emit(super::AUDIO_CHANGED_EVENT, ());
+        }
+    }
+
+    #[allow(non_snake_case)]
+    impl IMMNotificationClient_Impl for AudioNotifications_Impl {
+        fn OnDeviceStateChanged(&self, _: &PCWSTR, _: DEVICE_STATE) -> windows::core::Result<()> {
+            self.invalidate();
+            Ok(())
+        }
+        fn OnDeviceAdded(&self, _: &PCWSTR) -> windows::core::Result<()> {
+            self.invalidate();
+            Ok(())
+        }
+        fn OnDeviceRemoved(&self, _: &PCWSTR) -> windows::core::Result<()> {
+            self.invalidate();
+            Ok(())
+        }
+        fn OnDefaultDeviceChanged(
+            &self,
+            flow: EDataFlow,
+            role: ERole,
+            _: &PCWSTR,
+        ) -> windows::core::Result<()> {
+            if flow == eRender && role == eConsole {
+                self.invalidate();
+            }
+            Ok(())
+        }
+        fn OnPropertyValueChanged(
+            &self,
+            _: &PCWSTR,
+            _: &windows::Win32::Foundation::PROPERTYKEY,
+        ) -> windows::core::Result<()> {
+            self.invalidate();
+            Ok(())
+        }
+    }
+
+    pub(super) struct AudioSubscription {
+        enumerator: IMMDeviceEnumerator,
+        callback: IMMNotificationClient,
+        _apartment: ComApartment,
+    }
+
+    impl AudioSubscription {
+        pub(super) fn register(app: tauri::AppHandle) -> Result<Self, String> {
+            let apartment = ComApartment::initialize()?;
+            let enumerator: IMMDeviceEnumerator =
+                unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }
+                    .map_err(|_| "Powiadomienia audio są niedostępne.")?;
+            let callback: IMMNotificationClient = AudioNotifications { app }.into();
+            unsafe { enumerator.RegisterEndpointNotificationCallback(&callback) }
+                .map_err(|_| "Powiadomienia audio są niedostępne.")?;
+            Ok(Self {
+                enumerator,
+                callback,
+                _apartment: apartment,
+            })
+        }
+    }
+
+    impl Drop for AudioSubscription {
+        fn drop(&mut self) {
+            let _ = unsafe {
+                self.enumerator
+                    .UnregisterEndpointNotificationCallback(&self.callback)
+            };
+        }
+    }
+
+    pub(super) fn monitor_details(names: &[String]) -> Vec<MonitorDetails> {
+        let entries = read_display_config_entries();
+        names
+            .iter()
+            .take(MAX_DISPLAYS)
+            .map(|name| {
+                let key = normalize_identifier(name);
+                let mut matching = entries.iter().filter(|entry| entry.source_key == key);
+                let first = matching.next();
+                // Mirrored sources may have multiple targets: report unknown, not a guessed transport.
+                let unique = if matching.next().is_none() {
+                    first
+                } else {
+                    None
+                };
+                let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+                let mut mode = DEVMODEW {
+                    dmSize: core::mem::size_of::<DEVMODEW>() as u16,
+                    ..Default::default()
+                };
+                let available = unsafe {
+                    EnumDisplaySettingsW(PCWSTR(wide.as_ptr()), ENUM_CURRENT_SETTINGS, &mut mode)
+                }
+                .as_bool();
+                MonitorDetails {
+                    refresh_hz: (available
+                        && (2..=MAX_REFRESH_HZ).contains(&mode.dmDisplayFrequency))
+                    .then_some(mode.dmDisplayFrequency),
+                    connection_type: unique.and_then(|entry| entry.connection_type),
+                    friendly_name: unique
+                        .and_then(|entry| entry.friendly_name.as_deref())
+                        .map(sanitize_label)
+                        .filter(|name| !name.is_empty()),
+                }
+            })
+            .collect()
     }
 
     struct ActivePaths {
@@ -669,6 +816,15 @@ mod windows_native {
                 friendly_name,
                 hdr,
                 hdr_error,
+                connection_type: match path.targetInfo.outputTechnology {
+                    DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HDMI => Some("HDMI"),
+                    DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INTERNAL
+                    | DISPLAYCONFIG_OUTPUT_TECHNOLOGY_LVDS
+                    | DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EMBEDDED => Some("internal"),
+                    DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EXTERNAL => Some("DisplayPort"),
+                    DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DVI => Some("DVI"),
+                    _ => None,
+                },
             });
         }
         entries

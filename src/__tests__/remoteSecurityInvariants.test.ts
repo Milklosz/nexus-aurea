@@ -111,7 +111,7 @@ describe("iPhone Remote security regression guard", () => {
   it("keeps the offline Service Worker cache name at the confirmed-command revision", () => {
     // P1 intentionally bumped the cache to command-5 so devices drop the shell
     // that could show an unconfirmed pairing record as usable.
-    expect(sw).toContain('CACHE_NAME = "nexus-aurea-remote-v0.9.2-velora-offline-command-6"');
+    expect(sw).toContain('CACHE_NAME = "nexus-aurea-remote-v0.10.0-velora-offline-command-8"');
   });
 
   it("keeps the RemoteCommand enum strings present", () => {

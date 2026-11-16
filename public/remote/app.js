@@ -10,6 +10,7 @@
     statusInFlight: false,
     hasConnected: false,
     authorizationRejected: false,
+    rejectedRecord: null,
     record: null,
     rejectedUnconfirmedRecord: false,
   };
@@ -25,6 +26,11 @@
   const pairButton = document.getElementById("pair-button");
   const retryButton = document.getElementById("retry-button");
   const commandButtons = [...document.querySelectorAll("[data-command]")];
+  const touchpad = document.getElementById("navigation-touchpad");
+  const padMode = document.getElementById("pad-mode");
+  const touchMode = document.getElementById("touch-mode");
+  const directionPad = document.querySelector?.(".remote-pad");
+  let touchGesture = null;
   const commandLabels = {
     up: "Góra",
     down: "Dół",
@@ -80,6 +86,8 @@
   function updateControls() {
     const canSend = state.secure && state.serverReady && state.storageReady && state.paired && navigator.onLine && !state.inFlight && !state.statusInFlight;
     for (const button of commandButtons) button.disabled = !canSend;
+    if (touchpad) touchpad.disabled = !canSend;
+    if (!canSend) touchGesture = null;
     pairButton.disabled = !state.secure || !state.serverReady || !state.storageReady || state.paired || !navigator.onLine || state.inFlight || state.statusInFlight;
     if (retryButton) retryButton.disabled = !state.secure || !navigator.onLine || state.statusInFlight || state.inFlight;
   }
@@ -120,40 +128,78 @@
     });
   }
 
-  async function writeRecord(record) {
+  function sameCredential(current, expected) {
+    if (!current || !expected) return current === expected;
+    // A pairing always generates a new random deviceId. The local generation
+    // also distinguishes new records; absent generations keep legacy keys usable.
+    return current.deviceId === expected.deviceId
+      && current.credentialGeneration === expected.credentialGeneration;
+  }
+
+  function sameRecordVersion(current, expected) {
+    return sameCredential(current, expected) && (!current || (
+      current.sequence === expected.sequence
+      && current.confirmedByServer === expected.confirmedByServer
+      && current.rejectedByServer === expected.rejectedByServer
+      && Boolean(current.key) === Boolean(expected.key)
+    ));
+  }
+
+  // All read/check/write operations stay in one IndexedDB readwrite transaction.
+  // Web Locks improve command ordering but are never the storage safety boundary.
+  async function mutateRecord(mutate) {
     const database = await openDatabase();
     return new Promise((resolve, reject) => {
       const transaction = database.transaction(storeName, "readwrite");
-      transaction.objectStore(storeName).put(record, "active");
+      const store = transaction.objectStore(storeName);
+      const request = store.get("active");
+      let result = null;
+      request.onsuccess = () => {
+        const next = mutate(request.result || null);
+        if (next === undefined) return;
+        if (next === null) store.delete("active");
+        else store.put(next, "active");
+        result = { record: next };
+      };
       transaction.oncomplete = () => {
         database.close();
-        resolve();
+        resolve(result);
       };
-      transaction.onerror = () => reject(new Error("Nie można zapisać klucza na tym iPhonie."));
-      transaction.onabort = () => reject(new Error("Nie można zapisać klucza na tym iPhonie."));
+      const fail = () => { database.close(); reject(new Error("Nie można bezpiecznie zmienić klucza pilota.")); };
+      request.onerror = fail;
+      transaction.onerror = fail;
+      transaction.onabort = fail;
     });
   }
 
-  async function clearRecord() {
-    const database = await openDatabase();
-    return new Promise((resolve, reject) => {
-      const transaction = database.transaction(storeName, "readwrite");
-      transaction.objectStore(storeName).delete("active");
-      transaction.oncomplete = () => {
-        database.close();
-        resolve();
-      };
-      transaction.onerror = () => reject(new Error("Nie można usunąć klucza pilota."));
+  async function reserveSequence(expected) {
+    const result = await mutateRecord(record => {
+      if (!record || !sameCredential(record, expected) || !record.key
+        || record.confirmedByServer !== true || record.rejectedByServer === true
+        || !Number.isSafeInteger(record.sequence) || record.sequence < 0
+        || record.sequence >= Number.MAX_SAFE_INTEGER) return undefined;
+      return { ...record, sequence: record.sequence + 1 };
     });
+    return result?.record || null;
   }
 
-  async function rejectStoredRecord() {
+  async function clearObservedRecord(expected) {
+    return mutateRecord(current => sameRecordVersion(current, expected) ? null : undefined);
+  }
+
+  async function rejectStoredRecord(expected) {
     try {
-      await clearRecord();
+      await mutateRecord(current => sameCredential(current, expected) ? null : undefined);
     } catch {
-      // Leave a non-secret tombstone where possible so a later page load does
-      // not trust a credential that the server has already rejected.
-      try { await writeRecord({ rejectedByServer: true }); } catch { /* authorizationRejected still fails closed in this page */ }
+      // A failed deletion may leave a matching credential. A guarded, non-secret
+      // tombstone must never replace a different tab's newly confirmed pairing.
+      try {
+        await mutateRecord(current => sameCredential(current, expected) ? {
+          deviceId: expected.deviceId,
+          credentialGeneration: expected.credentialGeneration,
+          rejectedByServer: true,
+        } : undefined);
+      } catch { /* authorizationRejected still fails closed for this key in this page */ }
     }
   }
 
@@ -213,7 +259,8 @@
         try {
           const storedRecord = await readRecord();
           if (requestId !== statusRequestId) return;
-          if (storedRecord?.rejectedByServer === true) state.authorizationRejected = true;
+          if (storedRecord) state.authorizationRejected = storedRecord.rejectedByServer === true
+            || Boolean(state.rejectedRecord && sameCredential(storedRecord, state.rejectedRecord));
           const confirmed = Boolean(
             storedRecord
             && storedRecord.key
@@ -221,7 +268,7 @@
             && storedRecord.confirmedByServer === true,
           );
           if (storedRecord && (!confirmed || state.authorizationRejected)) {
-            try { await clearRecord(); } catch { /* the unconfirmed record stays unusable */ }
+            try { await clearObservedRecord(storedRecord); } catch { /* the unconfirmed record stays unusable */ }
             if (requestId !== statusRequestId) return;
           }
           state.record = confirmed && !state.authorizationRejected ? storedRecord : null;
@@ -285,7 +332,7 @@
 
   async function pair(event) {
     event.preventDefault();
-    if (!state.secure || !state.serverReady || !state.storageReady || state.inFlight || state.statusInFlight) return;
+    if (!state.secure || !state.serverReady || !state.storageReady || state.paired || state.inFlight || state.statusInFlight) return;
     const code = document.getElementById("pairing-code").value.trim();
     const name = document.getElementById("device-name").value.trim().slice(0, 32);
     if (!/^\d{6}$/.test(code) || !name) {
@@ -299,6 +346,13 @@
     const token = bytesToBase64Url(tokenBytes);
     const deviceId = randomHex(16);
     try {
+      const previousRecord = await readRecord();
+      if (previousRecord?.confirmedByServer === true && previousRecord.key
+        && !(state.rejectedRecord && sameCredential(previousRecord, state.rejectedRecord))) {
+        await refreshStatus();
+        showMessage("Inna karta zapisała już parowanie. Korzystaj z aktualnego klucza pilota.");
+        return;
+      }
       const key = await crypto.subtle.importKey(
         "raw",
         tokenBytes,
@@ -331,7 +385,8 @@
         return;
       }
       if (response.status !== 201) {
-        try { await clearRecord(); } catch { /* the key remains unusable until a confirmed pairing */ }
+        // This attempt has not stored a key. A failed response cannot revoke
+        // a confirmed pairing written by another tab in the meantime.
         state.record = null;
         state.paired = false;
         pairingForm.hidden = false;
@@ -345,12 +400,18 @@
         showMessage(reason, true);
         return;
       }
-      const record = { deviceId, key, sequence: 0, confirmedByServer: true };
-      await writeRecord(record);
+      const record = { deviceId, key, credentialGeneration: randomHex(16), sequence: 0, confirmedByServer: true };
+      const saved = await mutateRecord(current => sameCredential(current, previousRecord) ? record : undefined);
+      if (!saved) {
+        await refreshStatus();
+        showMessage("Parowanie zmieniło się w innej karcie. Zachowano nowszy klucz; sprawdź połączenie.", true);
+        return;
+      }
       state.record = record;
       state.paired = true;
       state.rejectedUnconfirmedRecord = false;
       state.authorizationRejected = false;
+      state.rejectedRecord = null;
       pairingForm.hidden = true;
       pairedCount.textContent = String(Number(pairedCount.textContent || "0") + 1);
       pairingState.textContent = "sparowane";
@@ -371,18 +432,45 @@
     }
   }
 
+  // Do not queue user actions behind another tab. Each accepted action reads
+  // the latest persisted sequence while holding the same-origin browser lock.
   async function sendCommand(command) {
-    if (!state.storageReady || !state.paired || !state.record || state.inFlight || state.statusInFlight || !navigator.onLine) return;
+    if (navigator.locks?.request) {
+      try {
+        await navigator.locks.request("velora-remote-command", { ifAvailable: true }, async (lock) => {
+          if (!lock) {
+            showMessage("Inna karta pilota wysyła polecenie. Poczekaj i spróbuj ręcznie.", true);
+            return;
+          }
+          await sendCommandUnlocked(command);
+        });
+      } catch {
+        showMessage("Nie można bezpiecznie zarezerwować polecenia. Odśwież pilot.", true);
+      }
+      return;
+    }
+    await sendCommandUnlocked(command);
+  }
+
+  async function sendCommandUnlocked(command) {
+    if (!Object.prototype.hasOwnProperty.call(commandLabels, command)
+      || !state.secure || !state.serverReady || !state.storageReady || !state.paired
+      || !state.record || state.inFlight || state.statusInFlight || !navigator.onLine) return;
     const requestId = ++commandRequestId;
     state.inFlight = true;
     const commandLabel = commandLabels[command] || "polecenie";
     showMessage("Wysyłam: " + commandLabel + "…");
     updateControls();
-    const record = state.record;
-    const sequence = record.sequence + 1;
-    record.sequence = sequence;
     try {
-      await writeRecord(record);
+      const expectedRecord = state.record;
+      const record = await reserveSequence(expectedRecord);
+      if (!record) {
+        showMessage("Zapisane parowanie zmieniło się lub jest nieprawidłowe. Sprawdź połączenie pilota.", true);
+        return;
+      }
+      if (requestId !== commandRequestId || !navigator.onLine) return;
+      const sequence = record.sequence;
+      state.record = record;
       if (requestId !== commandRequestId) return;
       const payload = ["NEXUS-AUREA-REMOTE-V1", record.deviceId, String(sequence), command].join("\n");
       const signature = await crypto.subtle.sign(
@@ -407,12 +495,13 @@
       if (requestId !== commandRequestId) return;
       if (response.status === 401) {
         state.authorizationRejected = true;
+        state.rejectedRecord = { deviceId: record.deviceId, credentialGeneration: record.credentialGeneration };
         state.record = null;
         state.paired = false;
         pairingForm.hidden = false;
         pairingState.textContent = "wymagane ponowne parowanie";
         setConnectionState("wymagane parowanie", "needs-pairing");
-        await rejectStoredRecord();
+        await rejectStoredRecord(record);
         if (requestId !== commandRequestId) return;
         showMessage("VELORA nie akceptuje już poświadczeń tego iPhone'a. Sparuj go ponownie z nowym kodem.", true);
       } else if (response.status === 409) {
@@ -433,6 +522,51 @@
       updateControls();
     }
   }
+
+  function selectInputMode(useTouchpad) {
+    touchGesture = null;
+    if (touchpad) touchpad.hidden = !useTouchpad;
+    if (directionPad) directionPad.hidden = useTouchpad;
+    padMode?.setAttribute("aria-pressed", String(!useTouchpad));
+    touchMode?.setAttribute("aria-pressed", String(useTouchpad));
+  }
+
+  padMode?.addEventListener("click", () => selectInputMode(false));
+  touchMode?.addEventListener("click", () => selectInputMode(true));
+  touchpad?.addEventListener("pointerdown", (event) => {
+    // A second finger, cancellation, connection change or mode switch cancels
+    // the gesture. Send at most one allowlisted command on a clean release.
+    if (touchpad.disabled || touchpad.hidden || event.isPrimary === false || event.button !== 0) {
+      touchGesture = null;
+      return;
+    }
+    touchGesture = { id: event.pointerId, x: event.clientX, y: event.clientY, time: event.timeStamp };
+    try { touchpad.setPointerCapture(event.pointerId); } catch { touchGesture = null; }
+  });
+  touchpad?.addEventListener("pointerup", (event) => {
+    const gesture = touchGesture;
+    touchGesture = null;
+    if (!gesture || gesture.id !== event.pointerId || touchpad.disabled || touchpad.hidden) return;
+    const x = event.clientX - gesture.x;
+    const y = event.clientY - gesture.y;
+    const elapsed = event.timeStamp - gesture.time;
+    if (elapsed < 0 || elapsed > 1500 || !Number.isFinite(x) || !Number.isFinite(y)) return;
+    const distance = Math.max(Math.abs(x), Math.abs(y));
+    if (distance >= 24) {
+      void sendCommand(Math.abs(x) > Math.abs(y) ? (x > 0 ? "right" : "left") : (y > 0 ? "down" : "up"));
+    } else if (distance <= 8 && elapsed <= 450) {
+      void sendCommand("select");
+    }
+  });
+  for (const type of ["pointercancel", "lostpointercapture"]) {
+    touchpad?.addEventListener(type, () => { touchGesture = null; });
+  }
+  touchpad?.addEventListener("keydown", (event) => {
+    if ((event.key === "Enter" || event.key === " ") && !event.repeat && !touchpad.disabled) {
+      event.preventDefault();
+      void sendCommand("select");
+    }
+  });
 
   if (!state.secure || !window.crypto?.subtle || !window.indexedDB) {
     state.secure = false;

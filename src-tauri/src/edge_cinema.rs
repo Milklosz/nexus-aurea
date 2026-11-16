@@ -1654,6 +1654,7 @@ mod tests {
             window_id: Some(55),
             started_at_ms: 1000,
             updated_at_ms: 1100,
+            last_activation_at_ms: None,
             error: None,
             restore: None,
             session_revision: Some(3),
