@@ -202,9 +202,13 @@ pub(crate) fn start_monitor(app: AppHandle) {
                                     at_ms: now_ms(),
                                 };
                                 let _ = app.emit(DISPLAY_CHANGED_EVENT, event);
+                                let _ = crate::tv_mode::restore_tv_mode(&app);
                                 previous_signature = Some(signature);
                             }
-                            None => previous_signature = Some(signature),
+                            None => {
+                                let _ = crate::tv_mode::restore_tv_mode(&app);
+                                previous_signature = Some(signature);
+                            }
                             _ => {}
                         }
                     }

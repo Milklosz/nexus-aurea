@@ -1,0 +1,7 @@
+.tv-mode-panel { padding: 1rem 0; border-top: 1px solid rgba(239,229,212,.15); }
+.tv-mode-panel h4 { margin: 0 0 .75rem; }
+.tv-mode-panel p { max-width: 56ch; }
+.tv-mode-display { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .7rem 0; }
+.tv-mode-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: .75rem; }
+.tv-mode-panel button:focus-visible { outline: 2px solid #eee4d3; outline-offset: 4px; }
+@media (max-width: 640px) { .tv-mode-display { align-items: start; flex-direction: column; } }

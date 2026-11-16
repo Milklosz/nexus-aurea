@@ -9,6 +9,7 @@ import { AutostartPanel } from "./AutostartPanel";
 import { AudioControls } from "./AudioControls";
 import { SessionsPanel } from "./SessionsPanel";
 import { DesktopRecoveryControls } from "./DesktopRecoveryControls";
+import { TvModePanel } from "./TvModePanel";
 import { PlayniteLibrary } from "./PlayniteLibrary";
 import { AppSearchPanel } from "./AppSearchPanel";
 import type { SearchEntry } from "../services/appSearch";
@@ -582,6 +583,7 @@ export function ControlCenter(props: ControlCenterProps) {
           <AutostartPanel />
           <AudioControls />
           <DesktopRecoveryControls />
+          {activePanel === "cinema" && <TvModePanel />}
         </div>
         {error && <p className="cc-feedback cc-error" role="alert">{error}</p>}
         {notice && <p className="cc-feedback" role="status">{notice}</p>}

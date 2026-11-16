@@ -12,6 +12,8 @@ import {
   type ManagedGame,
 } from "../services/appManager";
 import { PLAYNITE_DOWNLOAD_URL, openOfficialPlayniteDownload } from "../services/playniteSupport";
+import { favoriteGame, gameCollection, readGamingCollections, recordGameLaunch, saveGamingCollections, validSteamGameId, type GamingCollections } from "../services/gamingCollections";
+import "./GamingCollections.css";
 
 type GamingHubProps = { onActivateGaming: () => Promise<boolean> };
 
@@ -27,6 +29,12 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
   const [diagnostics, setDiagnostics] = useState<GamingDiagnostics | null>(null);
   const [diagnosticsBusy, setDiagnosticsBusy] = useState(false);
   const [diagnosticsError, setDiagnosticsError] = useState("");
+  const [collections, setCollections] = useState(readGamingCollections);
+  const [collectionView, setCollectionView] = useState<"all" | "favorites" | "recent">("all");
+  const updateCollections = (next: GamingCollections) => {
+    setCollections(next);
+    if (!saveGamingCollections(next)) setError("Nie udało się zapisać kolekcji gier. Zmiany pozostają dostępne do zamknięcia VELORA.");
+  };
 
   const refresh = async () => {
     if (refreshRequestInFlight.current) return;
@@ -59,7 +67,8 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
   const apps = snapshot.apps ?? [];
   const steam = apps.find((app) => app.id === "steamBigPicture");
   const playnite = apps.find((app) => app.id === "playniteFullscreen");
-  const games = snapshot.games ?? [];
+  const games = (snapshot.games ?? []).filter(game => validSteamGameId(game.id)).slice(0, 4096);
+  const visibleGames = collectionView === "all" ? games : gameCollection(games, collections[collectionView === "favorites" ? "favorites" : "recent"]);
 
   const launchLauncher = async (id: ManagedAppId) => {
     if (busy) return;
@@ -93,6 +102,7 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
       if (!await onActivateGaming()) throw new Error("Nie udało się wybrać profilu Gaming.");
       const receipt = await launchManagedGame(game.id);
       if (!receipt.launched) throw new Error("Steam nie potwierdził uruchomienia gry.");
+      updateCollections(recordGameLaunch(collections, game.id));
       setNotice("Wysłano żądanie uruchomienia " + game.name + " przez Steam.");
     } catch (cause) {
       setNotice("");
@@ -166,13 +176,23 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
     {snapshot.gamesError && <p role="alert">Biblioteka Steam: {snapshot.gamesError}</p>}
 
     <h4>Wykryte gry Steam</h4>
+    <div className="gaming-collection-tabs" role="group" aria-label="Kolekcja gier">
+      <button type="button" aria-pressed={collectionView === "all"} onClick={() => setCollectionView("all")}>Zainstalowane ({games.length})</button>
+      <button type="button" aria-pressed={collectionView === "favorites"} onClick={() => setCollectionView("favorites")}>Ulubione gry</button>
+      <button type="button" aria-pressed={collectionView === "recent"} onClick={() => setCollectionView("recent")}>Ostatnio uruchamiane</button>
+    </div>
+    {collectionView !== "all" && visibleGames.length === 0 && <p>Ta kolekcja nie zawiera dostępnych zainstalowanych gier Steam.</p>}
     {games.length > 0
       ? <div className="gaming-game-list">
-        {games.map((game) => <div className="gaming-game-row" key={game.id}>
+        {visibleGames.map((game) => <div className="gaming-game-row" key={game.id}>
           <div><strong>{game.name}</strong><span>{game.launcher} · App ID {game.id}</span></div>
           <button type="button" aria-busy={busy === game.id} disabled={!steam?.installed || Boolean(snapshot.gamesError) || statusUnavailable || busy !== null}
             onClick={() => void launchGame(game)}>
             {busy === game.id ? "Uruchamiam…" : "Uruchom"}
+          </button>
+          <button type="button" aria-label={`${collections.favorites.includes(game.id) ? "Odepnij" : "Przypnij"} ${game.name}`} aria-pressed={collections.favorites.includes(game.id)} disabled={busy !== null}
+            onClick={() => updateCollections(favoriteGame(collections, game.id))}>
+            {collections.favorites.includes(game.id) ? "Odepnij" : "Przypnij"}
           </button>
         </div>)}
       </div>
