@@ -10,6 +10,7 @@
     statusInFlight: false,
     hasConnected: false,
     authorizationRejected: false,
+    rejectedRecord: null,
     record: null,
     rejectedUnconfirmedRecord: false,
   };
@@ -127,40 +128,78 @@
     });
   }
 
-  async function writeRecord(record) {
+  function sameCredential(current, expected) {
+    if (!current || !expected) return current === expected;
+    // A pairing always generates a new random deviceId. The local generation
+    // also distinguishes new records; absent generations keep legacy keys usable.
+    return current.deviceId === expected.deviceId
+      && current.credentialGeneration === expected.credentialGeneration;
+  }
+
+  function sameRecordVersion(current, expected) {
+    return sameCredential(current, expected) && (!current || (
+      current.sequence === expected.sequence
+      && current.confirmedByServer === expected.confirmedByServer
+      && current.rejectedByServer === expected.rejectedByServer
+      && Boolean(current.key) === Boolean(expected.key)
+    ));
+  }
+
+  // All read/check/write operations stay in one IndexedDB readwrite transaction.
+  // Web Locks improve command ordering but are never the storage safety boundary.
+  async function mutateRecord(mutate) {
     const database = await openDatabase();
     return new Promise((resolve, reject) => {
       const transaction = database.transaction(storeName, "readwrite");
-      transaction.objectStore(storeName).put(record, "active");
+      const store = transaction.objectStore(storeName);
+      const request = store.get("active");
+      let result = null;
+      request.onsuccess = () => {
+        const next = mutate(request.result || null);
+        if (next === undefined) return;
+        if (next === null) store.delete("active");
+        else store.put(next, "active");
+        result = { record: next };
+      };
       transaction.oncomplete = () => {
         database.close();
-        resolve();
+        resolve(result);
       };
-      transaction.onerror = () => reject(new Error("Nie można zapisać klucza na tym iPhonie."));
-      transaction.onabort = () => reject(new Error("Nie można zapisać klucza na tym iPhonie."));
+      const fail = () => { database.close(); reject(new Error("Nie można bezpiecznie zmienić klucza pilota.")); };
+      request.onerror = fail;
+      transaction.onerror = fail;
+      transaction.onabort = fail;
     });
   }
 
-  async function clearRecord() {
-    const database = await openDatabase();
-    return new Promise((resolve, reject) => {
-      const transaction = database.transaction(storeName, "readwrite");
-      transaction.objectStore(storeName).delete("active");
-      transaction.oncomplete = () => {
-        database.close();
-        resolve();
-      };
-      transaction.onerror = () => reject(new Error("Nie można usunąć klucza pilota."));
+  async function reserveSequence(expected) {
+    const result = await mutateRecord(record => {
+      if (!record || !sameCredential(record, expected) || !record.key
+        || record.confirmedByServer !== true || record.rejectedByServer === true
+        || !Number.isSafeInteger(record.sequence) || record.sequence < 0
+        || record.sequence >= Number.MAX_SAFE_INTEGER) return undefined;
+      return { ...record, sequence: record.sequence + 1 };
     });
+    return result?.record || null;
   }
 
-  async function rejectStoredRecord() {
+  async function clearObservedRecord(expected) {
+    return mutateRecord(current => sameRecordVersion(current, expected) ? null : undefined);
+  }
+
+  async function rejectStoredRecord(expected) {
     try {
-      await clearRecord();
+      await mutateRecord(current => sameCredential(current, expected) ? null : undefined);
     } catch {
-      // Leave a non-secret tombstone where possible so a later page load does
-      // not trust a credential that the server has already rejected.
-      try { await writeRecord({ rejectedByServer: true }); } catch { /* authorizationRejected still fails closed in this page */ }
+      // A failed deletion may leave a matching credential. A guarded, non-secret
+      // tombstone must never replace a different tab's newly confirmed pairing.
+      try {
+        await mutateRecord(current => sameCredential(current, expected) ? {
+          deviceId: expected.deviceId,
+          credentialGeneration: expected.credentialGeneration,
+          rejectedByServer: true,
+        } : undefined);
+      } catch { /* authorizationRejected still fails closed for this key in this page */ }
     }
   }
 
@@ -220,7 +259,8 @@
         try {
           const storedRecord = await readRecord();
           if (requestId !== statusRequestId) return;
-          if (storedRecord?.rejectedByServer === true) state.authorizationRejected = true;
+          if (storedRecord) state.authorizationRejected = storedRecord.rejectedByServer === true
+            || Boolean(state.rejectedRecord && sameCredential(storedRecord, state.rejectedRecord));
           const confirmed = Boolean(
             storedRecord
             && storedRecord.key
@@ -228,7 +268,7 @@
             && storedRecord.confirmedByServer === true,
           );
           if (storedRecord && (!confirmed || state.authorizationRejected)) {
-            try { await clearRecord(); } catch { /* the unconfirmed record stays unusable */ }
+            try { await clearObservedRecord(storedRecord); } catch { /* the unconfirmed record stays unusable */ }
             if (requestId !== statusRequestId) return;
           }
           state.record = confirmed && !state.authorizationRejected ? storedRecord : null;
@@ -292,7 +332,7 @@
 
   async function pair(event) {
     event.preventDefault();
-    if (!state.secure || !state.serverReady || !state.storageReady || state.inFlight || state.statusInFlight) return;
+    if (!state.secure || !state.serverReady || !state.storageReady || state.paired || state.inFlight || state.statusInFlight) return;
     const code = document.getElementById("pairing-code").value.trim();
     const name = document.getElementById("device-name").value.trim().slice(0, 32);
     if (!/^\d{6}$/.test(code) || !name) {
@@ -306,6 +346,13 @@
     const token = bytesToBase64Url(tokenBytes);
     const deviceId = randomHex(16);
     try {
+      const previousRecord = await readRecord();
+      if (previousRecord?.confirmedByServer === true && previousRecord.key
+        && !(state.rejectedRecord && sameCredential(previousRecord, state.rejectedRecord))) {
+        await refreshStatus();
+        showMessage("Inna karta zapisała już parowanie. Korzystaj z aktualnego klucza pilota.");
+        return;
+      }
       const key = await crypto.subtle.importKey(
         "raw",
         tokenBytes,
@@ -338,7 +385,8 @@
         return;
       }
       if (response.status !== 201) {
-        try { await clearRecord(); } catch { /* the key remains unusable until a confirmed pairing */ }
+        // This attempt has not stored a key. A failed response cannot revoke
+        // a confirmed pairing written by another tab in the meantime.
         state.record = null;
         state.paired = false;
         pairingForm.hidden = false;
@@ -352,12 +400,18 @@
         showMessage(reason, true);
         return;
       }
-      const record = { deviceId, key, sequence: 0, confirmedByServer: true };
-      await writeRecord(record);
+      const record = { deviceId, key, credentialGeneration: randomHex(16), sequence: 0, confirmedByServer: true };
+      const saved = await mutateRecord(current => sameCredential(current, previousRecord) ? record : undefined);
+      if (!saved) {
+        await refreshStatus();
+        showMessage("Parowanie zmieniło się w innej karcie. Zachowano nowszy klucz; sprawdź połączenie.", true);
+        return;
+      }
       state.record = record;
       state.paired = true;
       state.rejectedUnconfirmedRecord = false;
       state.authorizationRejected = false;
+      state.rejectedRecord = null;
       pairingForm.hidden = true;
       pairedCount.textContent = String(Number(pairedCount.textContent || "0") + 1);
       pairingState.textContent = "sparowane";
@@ -408,18 +462,14 @@
     showMessage("Wysyłam: " + commandLabel + "…");
     updateControls();
     try {
-      const record = await readRecord();
-      if (!record || record.confirmedByServer !== true || record.rejectedByServer === true
-        || record.deviceId !== state.record?.deviceId || !record.key
-        || !Number.isSafeInteger(record.sequence) || record.sequence < 0
-        || record.sequence >= Number.MAX_SAFE_INTEGER) {
+      const expectedRecord = state.record;
+      const record = await reserveSequence(expectedRecord);
+      if (!record) {
         showMessage("Zapisane parowanie zmieniło się lub jest nieprawidłowe. Sprawdź połączenie pilota.", true);
         return;
       }
       if (requestId !== commandRequestId || !navigator.onLine) return;
-      const sequence = record.sequence + 1;
-      record.sequence = sequence;
-      await writeRecord(record);
+      const sequence = record.sequence;
       state.record = record;
       if (requestId !== commandRequestId) return;
       const payload = ["NEXUS-AUREA-REMOTE-V1", record.deviceId, String(sequence), command].join("\n");
@@ -445,12 +495,13 @@
       if (requestId !== commandRequestId) return;
       if (response.status === 401) {
         state.authorizationRejected = true;
+        state.rejectedRecord = { deviceId: record.deviceId, credentialGeneration: record.credentialGeneration };
         state.record = null;
         state.paired = false;
         pairingForm.hidden = false;
         pairingState.textContent = "wymagane ponowne parowanie";
         setConnectionState("wymagane parowanie", "needs-pairing");
-        await rejectStoredRecord();
+        await rejectStoredRecord(record);
         if (requestId !== commandRequestId) return;
         showMessage("VELORA nie akceptuje już poświadczeń tego iPhone'a. Sparuj go ponownie z nowym kodem.", true);
       } else if (response.status === 409) {

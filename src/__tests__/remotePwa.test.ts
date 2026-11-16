@@ -59,7 +59,7 @@ describe("VELORA iPhone Remote", () => {
     expect(manifest.scope).toBe("./");
     expect(html).toContain('name="apple-mobile-web-app-capable"');
     const serviceWorker = readFileSync("public/remote/sw.js", "utf8");
-    expect(serviceWorker).toContain("nexus-aurea-remote-v0.10.0-velora-offline-command-7");
+    expect(serviceWorker).toContain("nexus-aurea-remote-v0.10.0-velora-offline-command-8");
     expect(serviceWorker).toContain('key.startsWith("nexus-aurea-remote-")');
     expect(serviceWorker).toContain("self.skipWaiting()");
     expect(serviceWorker).toContain('event.request.method !== "GET"');
@@ -69,7 +69,7 @@ describe("VELORA iPhone Remote", () => {
   it("requires pairing again after rejected authorization and never retries an uncertain command", () => {
     expect(script).toContain("if (response.status === 401)");
     expect(script).toContain("state.authorizationRejected = true");
-    expect(script).toContain("await rejectStoredRecord()");
+    expect(script).toContain("await rejectStoredRecord(record)");
     expect(script).toContain("confirmed && !state.authorizationRejected");
     expect(script).toContain("if (response.status === 409)");
     expect(script).toContain("Sprawdź stan urządzenia przed ręcznym ponowieniem.");

@@ -1,4 +1,4 @@
-const CACHE_NAME = "nexus-aurea-remote-v0.10.0-velora-offline-command-7";
+const CACHE_NAME = "nexus-aurea-remote-v0.10.0-velora-offline-command-8";
 const SHELL = [
   "./",
   "./index.html",
