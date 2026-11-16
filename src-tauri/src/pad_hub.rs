@@ -19,11 +19,17 @@
 //! NOT TESTED ON HARDWARE.
 
 use crate::ds4::{
-    is_neutral, Ds4Buttons, Ds4Revision, Ds4Snapshot, Ds4Tracker, Ds4Transport, PadEvent, PadInfo,
+    is_neutral, Ds4Buttons, Ds4Report, Ds4Revision, Ds4Snapshot, Ds4Tracker, Ds4Transport,
+    PadEvent, PadInfo,
 };
 use crate::gamepad_home::{ChordOutcome, ComboTracker, DualSenseButtons};
+#[path = "controller_supervisor.rs"]
+mod controller_supervisor;
+pub use controller_supervisor::{
+    ControllerFallbackConfig, ControllerFallbackGesture, ControllerFallbackStatus,
+};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub(crate) const CONTROLLER_EVENT: &str = "velora-controller";
 
@@ -169,6 +175,10 @@ pub(crate) struct CoreOutput {
     pub events: Vec<ControllerEvent>,
     pub chord: bool,
     pub chord_outcome: Option<ChordOutcome>,
+    /// Hashed device label and full semantic report for a bounded streaming route.
+    pub streaming_report: Option<(String, Ds4Report)>,
+    /// A valid report resumed after a long gap; invalidate queued bridge input first.
+    pub streaming_reset: bool,
 }
 
 /// Platform-independent heart of the hub: DS4 tracking, chord detection, and the
@@ -180,12 +190,16 @@ pub(crate) struct HubCore {
     home_override: Option<bool>,
     legacy_chord_enabled: bool,
     chord_enabled: bool,
+    primary_chord_suppressed: bool,
     foreground: bool,
     last_heartbeat_ms: u64,
     received_reports: u64,
     valid_reports: u64,
     background_reports: u64,
     last_report_at_ms: Option<u64>,
+    streaming_report_at_ms: HashMap<String, u64>,
+    silent_streaming_devices: HashSet<String>,
+    streaming_silence_reset: bool,
     home_buttons: HashMap<String, DualSenseButtons>,
     last_home_buttons: Option<NativeHomeButtons>,
     ps_rising_count: u64,
@@ -199,12 +213,22 @@ pub(crate) struct HubCore {
 
 impl HubCore {
     pub(crate) fn set_chord_sources(&mut self, home_override: Option<bool>, legacy_enabled: bool) {
-        let enabled = home_override.unwrap_or(legacy_enabled);
+        self.home_override = home_override;
+        self.legacy_chord_enabled = legacy_enabled;
+        self.recompute_chord_enabled();
+    }
+
+    pub(crate) fn set_primary_chord_suppressed(&mut self, suppressed: bool) {
+        self.primary_chord_suppressed = suppressed;
+        self.recompute_chord_enabled();
+    }
+
+    fn recompute_chord_enabled(&mut self) {
+        let enabled = self.home_override.unwrap_or(self.legacy_chord_enabled)
+            && !self.primary_chord_suppressed;
         if enabled && !self.chord_enabled {
             self.chord.require_neutral_rearm();
         }
-        self.home_override = home_override;
-        self.legacy_chord_enabled = legacy_enabled;
         self.chord_enabled = enabled;
     }
 
@@ -267,6 +291,13 @@ impl HubCore {
             .map(ControllerEvent::from)
             .collect();
         if let (Some(label), Some(buttons)) = (ingest.label, ingest.buttons) {
+            let previous_report_at = self.streaming_report_at_ms.get(&label).copied();
+            let resumed_after_gap = previous_report_at
+                .is_some_and(|last| at_ms.saturating_sub(last) >= crate::ds4::SILENCE_RELEASE_MS);
+            let already_invalidated = self.silent_streaming_devices.remove(&label);
+            out.streaming_reset = resumed_after_gap && !already_invalidated;
+            self.streaming_report_at_ms.insert(label.clone(), at_ms);
+            out.streaming_report = ingest.report.map(|report| (label.clone(), report));
             self.valid_reports = self.valid_reports.saturating_add(1);
             self.last_report_at_ms = Some(at_ms);
             let current_buttons = chord_buttons(buttons);
@@ -328,6 +359,8 @@ impl HubCore {
 
     pub(crate) fn on_removed(&mut self, path: &str) -> Vec<ControllerEvent> {
         let label = crate::gamepad_home::device_label(path);
+        self.streaming_report_at_ms.remove(&label);
+        self.silent_streaming_devices.remove(&label);
         self.chord.remove_device(&label);
         self.home_buttons.remove(&label);
         if self.last_home_buttons_label.as_deref() == Some(label.as_str()) {
@@ -344,9 +377,19 @@ impl HubCore {
     /// Periodic housekeeping: drops silent pads, resynchronises the frontend when VELORA
     /// becomes the foreground window, and re-sends held state as a heartbeat.
     pub(crate) fn tick(&mut self, at_ms: u64, foreground: bool) -> Vec<ControllerEvent> {
+        self.streaming_silence_reset = false;
+        for (label, last_report_at) in &self.streaming_report_at_ms {
+            if at_ms.saturating_sub(*last_report_at) >= crate::ds4::SILENCE_RELEASE_MS
+                && self.silent_streaming_devices.insert(label.clone())
+            {
+                self.streaming_silence_reset = true;
+            }
+        }
         let mut events: Vec<ControllerEvent> = Vec::new();
         for event in self.tracker.prune(at_ms) {
             if let PadEvent::Disconnected { label } = &event {
+                self.streaming_report_at_ms.remove(label);
+                self.silent_streaming_devices.remove(label);
                 self.chord.remove_device(label);
                 self.home_buttons.remove(label);
                 if self.last_home_buttons_label.as_deref() == Some(label.as_str()) {
@@ -361,6 +404,20 @@ impl HubCore {
         let released = self
             .tracker
             .release_silent(at_ms, crate::ds4::SILENCE_RELEASE_MS);
+        for snapshot in &released {
+            // A partial PS + Options gesture may straddle a Bluetooth/report gap.
+            // Treat the silent release as a fresh device epoch; other pads retain
+            // their independent chord state.
+            self.chord.remove_device(&snapshot.device);
+            self.home_buttons.remove(&snapshot.device);
+            if self.last_home_buttons_label.as_deref() == Some(snapshot.device.as_str()) {
+                self.last_home_buttons = Some(NativeHomeButtons {
+                    ps: false,
+                    options: false,
+                    at_ms,
+                });
+            }
+        }
         if foreground {
             events.extend(released.into_iter().map(ControllerEvent::State));
             events.extend(
@@ -394,6 +451,10 @@ impl HubCore {
         events
     }
 
+    pub(crate) fn take_streaming_silence_reset(&mut self) -> bool {
+        std::mem::take(&mut self.streaming_silence_reset)
+    }
+
     /// Everything is released and every pad forgotten, e.g. when the hub stops.
     pub(crate) fn shutdown(&mut self) -> Vec<ControllerEvent> {
         self.tracker
@@ -416,7 +477,9 @@ pub(crate) use runtime::{PadHub, RawMessage, RawSubscription};
 
 #[cfg(not(target_os = "windows"))]
 #[derive(Default)]
-pub(crate) struct PadHub;
+pub(crate) struct PadHub {
+    fallback: std::sync::Mutex<controller_supervisor::ControllerSupervisor>,
+}
 
 #[cfg(not(target_os = "windows"))]
 impl PadHub {
@@ -436,6 +499,26 @@ impl PadHub {
     pub(crate) fn status(&self) -> NativeControllerStatus {
         NativeControllerStatus::default()
     }
+
+    pub(crate) fn controller_fallback_status(&self) -> ControllerFallbackStatus {
+        self.fallback
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .status()
+    }
+
+    pub(crate) fn configure_controller_fallback(
+        &self,
+        config: ControllerFallbackConfig,
+    ) -> Result<ControllerFallbackStatus, String> {
+        if config.enabled {
+            return Err("Fallback Home jest dostępny tylko w aplikacji Windows.".into());
+        }
+        self.fallback
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .configure(config)
+    }
 }
 
 /// Current native controller state, so the frontend can seed itself after it starts
@@ -454,14 +537,27 @@ pub fn set_controller_home_enabled(
     Ok(hub.status())
 }
 
+#[tauri::command]
+pub fn get_controller_fallback_status(hub: tauri::State<'_, PadHub>) -> ControllerFallbackStatus {
+    hub.controller_fallback_status()
+}
+
+#[tauri::command]
+pub fn configure_controller_fallback(
+    hub: tauri::State<'_, PadHub>,
+    config: ControllerFallbackConfig,
+) -> Result<ControllerFallbackStatus, String> {
+    hub.configure_controller_fallback(config)
+}
+
 #[cfg(target_os = "windows")]
 mod runtime {
     use super::*;
     use crate::gamepad_home::native;
     use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
     use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
-    use std::sync::{Arc, Mutex, PoisonError, RwLock};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
+    use std::time::Instant;
     use tauri::{AppHandle, Emitter};
 
     /// Unmodified reports and device notifications for consumers other than DS4.
@@ -487,6 +583,7 @@ mod runtime {
         home_policy_gate: Mutex<()>,
         thread_id: AtomicU32,
         status: RwLock<NativeControllerStatus>,
+        supervisor: Mutex<controller_supervisor::ControllerSupervisor>,
         /// (subscription id, sender). The id lets a dropped old subscription leave a newer one alone.
         subscriber: Mutex<Option<(u64, SyncSender<RawEnvelope>)>>,
         overflow_epoch: std::sync::atomic::AtomicU64,
@@ -526,10 +623,12 @@ mod runtime {
     }
 
     fn now_ms() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
-            .unwrap_or(0)
+        static START: OnceLock<Instant> = OnceLock::new();
+        START
+            .get_or_init(Instant::now)
+            .elapsed()
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64
     }
 
     fn session_home_override(shared: &Shared) -> Option<bool> {
@@ -543,6 +642,15 @@ mod runtime {
     fn effective_home_enabled(shared: &Shared) -> bool {
         session_home_override(shared)
             .unwrap_or_else(|| shared.legacy_chord_enabled.load(Ordering::Acquire))
+    }
+
+    fn primary_home_chord_enabled(shared: &Shared) -> bool {
+        effective_home_enabled(shared)
+            && !shared
+                .supervisor
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .suppress_primary_chord()
     }
 
     impl PadHub {
@@ -618,6 +726,33 @@ mod runtime {
                 .unwrap_or_else(PoisonError::into_inner);
             status.home_override = self.home_override();
             status.home_enabled = self.effective_home_enabled();
+        }
+
+        pub(crate) fn controller_fallback_status(&self) -> ControllerFallbackStatus {
+            self.shared
+                .supervisor
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .status()
+        }
+
+        pub(crate) fn configure_controller_fallback(
+            &self,
+            config: ControllerFallbackConfig,
+        ) -> Result<ControllerFallbackStatus, String> {
+            let _policy = self
+                .shared
+                .home_policy_gate
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let status = self
+                .shared
+                .supervisor
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .configure(config)?;
+            self.publish_home_policy();
+            Ok(status)
         }
 
         pub(crate) fn set_chord_enabled(&self, enabled: bool) {
@@ -727,6 +862,8 @@ mod runtime {
             shared: Arc::clone(&shared),
             clean: false,
         };
+        let initial_home_override = session_home_override(&shared);
+        let initial_home_enabled = effective_home_enabled(&shared);
         {
             let mut status = shared
                 .status
@@ -735,6 +872,8 @@ mod runtime {
             *status = NativeControllerStatus {
                 supported: true,
                 running: true,
+                home_override: initial_home_override,
+                home_enabled: initial_home_enabled,
                 ..Default::default()
             };
         }
@@ -769,21 +908,33 @@ mod runtime {
                         if message.w_param == native::GIDC_REMOVAL
                             || message.w_param == native::GIDC_ARRIVAL
                         {
+                            // A same-path reconnect starts a new controller epoch.
+                            // Drop queued stream reports before they can act on it.
+                            crate::streaming_control::invalidate_controller_streaming(&app);
                             let mut dualsense = false;
                             if let Some(entry) = devices.remove(&device) {
                                 dualsense = entry.dualsense;
                                 if entry.ds4.is_some() {
+                                    let label = crate::gamepad_home::device_label(&entry.path);
+                                    shared
+                                        .supervisor
+                                        .lock()
+                                        .unwrap_or_else(PoisonError::into_inner)
+                                        .remove_device(&label);
                                     emit_all(&app, core.on_removed(&entry.path));
                                 }
                             }
                             if dualsense {
-                                forward(
+                                let overflowed = forward(
                                     &shared,
                                     RawMessage::DeviceChange {
                                         w_param: message.w_param,
                                         device,
                                     },
                                 );
+                                if overflowed {
+                                    crate::streaming_control::invalidate_controller_streaming(&app);
+                                }
                             }
                             publish_status(&shared, &core);
                         }
@@ -791,18 +942,52 @@ mod runtime {
                     _ => {}
                 }
             }
-            {
+            let at_ms = now_ms();
+            let session_gate_open = crate::session_orchestrator::current_snapshot(&app).current
+                != crate::session_orchestrator::SessionId::VeloraHome;
+            let streaming_silence_reset = {
                 let _policy = shared
                     .home_policy_gate
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner);
+                let mut supervisor = shared
+                    .supervisor
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                supervisor.set_home_gate(effective_home_enabled(&shared));
+                supervisor.set_session_gate(session_gate_open);
+                let reset_streaming = supervisor.tick(at_ms);
                 core.set_chord_sources(
                     session_home_override(&shared),
                     shared.legacy_chord_enabled.load(Ordering::Acquire),
                 );
+                core.set_primary_chord_suppressed(supervisor.suppress_primary_chord());
+                reset_streaming
+            };
+            if streaming_silence_reset {
+                crate::streaming_control::invalidate_controller_streaming(&app);
             }
-            let events = core.tick(now_ms(), native::foreground_is_own_process());
+            let events = core.tick(at_ms, native::foreground_is_own_process());
+            if core.take_streaming_silence_reset() {
+                crate::streaming_control::invalidate_controller_streaming(&app);
+            }
             if !events.is_empty() {
+                let disconnected: Vec<String> = events
+                    .iter()
+                    .filter_map(|event| match event {
+                        ControllerEvent::Disconnected { device } => Some(device.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                if !disconnected.is_empty() {
+                    let mut supervisor = shared
+                        .supervisor
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    for device in disconnected {
+                        supervisor.remove_device(&device);
+                    }
+                }
                 emit_all(&app, events);
                 publish_status(&shared, &core);
             }
@@ -903,15 +1088,24 @@ mod runtime {
         devices: &mut std::collections::HashMap<usize, DeviceEntry>,
         l_param: isize,
     ) {
+        let session_gate_open = crate::session_orchestrator::current_snapshot(app).current
+            != crate::session_orchestrator::SessionId::VeloraHome;
         {
             let _policy = shared
                 .home_policy_gate
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
+            let mut supervisor = shared
+                .supervisor
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            supervisor.set_home_gate(effective_home_enabled(shared));
+            supervisor.set_session_gate(session_gate_open);
             core.set_chord_sources(
                 session_home_override(shared),
                 shared.legacy_chord_enabled.load(Ordering::Acquire),
             );
+            core.set_primary_chord_suppressed(supervisor.suppress_primary_chord());
         }
         let Some(reports) = native::read_raw_input(l_param) else {
             return;
@@ -924,7 +1118,9 @@ mod runtime {
             };
             if !devices.contains_key(&handle) {
                 if devices.len() >= 64 {
-                    devices.clear();
+                    // Do not evict live handle-to-path mappings: doing so leaves
+                    // tracker/chord state orphaned and can misidentify a report.
+                    continue;
                 }
                 let Some(path) = native::device_path(handle) else {
                     continue;
@@ -967,13 +1163,53 @@ mod runtime {
                             status.last_trace = core.last_trace;
                         }
                     }
+                    let chord = out.chord;
+                    let streaming_report = out.streaming_report;
+                    let streaming_reset = out.streaming_reset;
                     emit_all(app, out.events);
-                    if out.chord {
+                    if streaming_reset {
+                        crate::streaming_control::invalidate_controller_streaming(app);
+                    }
+                    let fallback_triggered =
+                        if let Some((label, parsed)) = streaming_report.as_ref() {
+                            let _policy = shared
+                                .home_policy_gate
+                                .lock()
+                                .unwrap_or_else(PoisonError::into_inner);
+                            let decision = {
+                                let mut supervisor = shared
+                                    .supervisor
+                                    .lock()
+                                    .unwrap_or_else(PoisonError::into_inner);
+                                supervisor.set_home_gate(effective_home_enabled(shared));
+                                supervisor.set_session_gate(session_gate_open);
+                                supervisor.observe_report(label, parsed.buttons, at_ms)
+                            };
+                            if decision.streaming_reset && !streaming_reset {
+                                crate::streaming_control::invalidate_controller_streaming(app);
+                            }
+                            if decision.triggered {
+                                // The configuration lock stays held through the bounded
+                                // Home enqueue, so disabling fallback cannot race a dispatch.
+                                trigger_home(app, shared, core, at_ms);
+                            }
+                            decision.triggered
+                        } else {
+                            false
+                        };
+                    if let Some((label, parsed)) = streaming_report.as_ref() {
+                        // `route_controller_report` is required to be nonblocking;
+                        // its consumer owns the bounded work queue.
+                        crate::streaming_control::route_controller_report(
+                            app, label, parsed, at_ms,
+                        );
+                    }
+                    if chord && !fallback_triggered {
                         let _policy = shared
                             .home_policy_gate
                             .lock()
                             .unwrap_or_else(PoisonError::into_inner);
-                        if effective_home_enabled(shared) {
+                        if primary_home_chord_enabled(shared) {
                             trigger_home(app, shared, core, at_ms);
                         } else {
                             if let Some(mut chord) = core.last_chord {
@@ -1005,7 +1241,9 @@ mod runtime {
             }
         }
         if !forwarded.is_empty() {
-            forward(shared, RawMessage::Reports(forwarded));
+            if forward(shared, RawMessage::Reports(forwarded)) {
+                crate::streaming_control::invalidate_controller_streaming(app);
+            }
         }
     }
 
@@ -1118,11 +1356,13 @@ mod runtime {
         }
     }
 
-    fn forward(shared: &Shared, message: RawMessage) {
+    /// Returns true when a full bounded queue dropped this message.
+    fn forward(shared: &Shared, message: RawMessage) -> bool {
         let mut guard = shared
             .subscriber
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
+        let mut overflowed = false;
         if let Some((_, sender)) = guard.as_ref() {
             let epoch = shared.overflow_epoch.load(Ordering::Acquire);
             match sender.try_send(RawEnvelope { epoch, message }) {
@@ -1131,6 +1371,7 @@ mod runtime {
                 Err(TrySendError::Full(_)) => {
                     // Invalidate every queued chord fragment after a lost edge.
                     shared.overflow_epoch.fetch_add(1, Ordering::AcqRel);
+                    overflowed = true;
                     let mut status = shared
                         .status
                         .write()
@@ -1139,6 +1380,7 @@ mod runtime {
                 }
             }
         }
+        overflowed
     }
 
     #[cfg(test)]
@@ -1342,6 +1584,38 @@ mod tests {
     }
 
     #[test]
+    fn streaming_invalidates_once_when_a_pad_goes_silent_or_resumes_after_gap() {
+        let mut core = HubCore::default();
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 0);
+        core.tick(crate::ds4::SILENCE_RELEASE_MS, false);
+        assert!(core.take_streaming_silence_reset());
+        assert!(!core.take_streaming_silence_reset());
+        let resumed = core.on_report(
+            USB_PATH,
+            Ds4Revision::V2,
+            &usb(0, 0, 0),
+            crate::ds4::SILENCE_RELEASE_MS + 1,
+        );
+        assert!(
+            !resumed.streaming_reset,
+            "the silence tick already invalidated it"
+        );
+
+        let mut delayed_pump = HubCore::default();
+        delayed_pump.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 0);
+        let resumed = delayed_pump.on_report(
+            USB_PATH,
+            Ds4Revision::V2,
+            &usb(0, 0, 0),
+            crate::ds4::SILENCE_RELEASE_MS + 1,
+        );
+        assert!(
+            resumed.streaming_reset,
+            "a resumed report can race a delayed tick"
+        );
+    }
+
+    #[test]
     fn removal_emits_disconnect_once() {
         let mut core = HubCore::default();
         core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 0);
@@ -1503,6 +1777,55 @@ mod tests {
         assert_eq!(core.background_reports, 2);
         assert_eq!(core.last_home_buttons.unwrap().ps, true);
         assert_eq!(core.last_home_buttons.unwrap().options, true);
+    }
+
+    #[test]
+    fn full_ds4_report_is_available_to_streaming_even_in_the_background() {
+        let mut core = HubCore::default();
+        let mut report = usb(0, 0x20, 0x01);
+        report[1] = 255;
+        report[8] = 128;
+        let out = core.on_report_with_foreground(USB_PATH, Ds4Revision::V2, &report, 10, false);
+        assert_eq!(
+            states(&out.events),
+            0,
+            "background navigation stays withheld"
+        );
+        let (device, parsed) = out.streaming_report.expect("parsed report route");
+        assert_eq!(
+            device.len(),
+            16,
+            "only a hashed device label leaves the hub"
+        );
+        assert_eq!(parsed.left_x, 1.0);
+        assert!((parsed.l2 - 128.0 / 255.0).abs() < 0.001);
+        assert!(parsed.buttons.is_pressed(Ds4Button::Options));
+    }
+
+    #[test]
+    fn configured_fallback_suppresses_primary_and_reenable_requires_neutral() {
+        let mut core = HubCore::default();
+        core.set_chord_sources(Some(true), false);
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 0);
+        core.set_primary_chord_suppressed(true);
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0), 10);
+        assert!(
+            !core
+                .on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 20)
+                .chord
+        );
+        core.set_primary_chord_suppressed(false);
+        assert!(
+            !core
+                .on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 30)
+                .chord
+        );
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 40);
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0), 50);
+        assert!(
+            core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 60)
+                .chord
+        );
     }
 
     #[test]

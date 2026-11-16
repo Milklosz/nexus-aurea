@@ -358,6 +358,9 @@ pub(crate) struct Ingest {
     pub buttons: Option<Ds4Buttons>,
     /// Opaque device label the report belongs to.
     pub label: Option<String>,
+    /// Valid, fully parsed report for the optional streaming route. Only tracked
+    /// devices reach this field; raw report bytes and device paths do not escape.
+    pub report: Option<Ds4Report>,
 }
 
 /// A tracked pad as the status command reports it.
@@ -495,6 +498,7 @@ impl Ds4Tracker {
         }
         out.label = Some(label);
         out.buttons = Some(parsed.buttons);
+        out.report = Some(parsed);
         out
     }
 
