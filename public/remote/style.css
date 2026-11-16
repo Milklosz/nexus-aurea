@@ -41,7 +41,7 @@ h1 { margin: 10px 0; font-size: clamp(2rem, 8vw, 3rem); font-weight: 450; letter
 .remote-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; width: min(100%, 280px); margin: 22px auto 15px; }
 .remote-pad button { aspect-ratio: 1.35; font-size: 24px; }
 .remote-pad button[data-command="select"] { color: var(--gold); font-size: 14px; }
-.remote-dock { position: fixed; z-index: 20; bottom: 0; left: 50%; transform: translateX(-50%); width: min(100%, 520px); padding: 8px max(18px, env(safe-area-inset-left)) calc(8px + env(safe-area-inset-bottom)); border: 1px solid rgba(210,180,132,.28); border-bottom: 0; border-radius: 22px 22px 0 0; background: rgba(13,14,18,.94); box-shadow: 0 -16px 45px rgba(0,0,0,.38); backdrop-filter: blur(22px); }
+.remote-dock { position: fixed; z-index: 20; bottom: 0; left: 50%; transform: translateX(-50%); width: min(100%, 520px); padding: 8px max(18px, env(safe-area-inset-left)) calc(8px + env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-right)); border: 1px solid rgba(210,180,132,.28); border-bottom: 0; border-radius: 22px 22px 0 0; background: rgba(13,14,18,.94); box-shadow: 0 -16px 45px rgba(0,0,0,.38); backdrop-filter: blur(22px); }
 .remote-dock .remote-pad { width: min(100%, 188px); gap: 4px; margin: 0 auto 8px; }
 .remote-dock .remote-pad button { min-height: 48px; aspect-ratio: 1; font-size: 20px; }
 .remote-dock .remote-pad button[data-command="select"] { font-size: 14px; }

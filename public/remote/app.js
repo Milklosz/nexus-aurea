@@ -241,6 +241,9 @@
           return;
         }
         state.paired = Boolean(state.record);
+        pairingState.textContent = state.authorizationRejected
+          ? "wymagane ponowne parowanie"
+          : state.paired ? "sparowane" : "oczekuje na parowanie";
         pairingForm.hidden = state.paired;
         if (state.authorizationRejected) {
           pairingForm.hidden = false;
