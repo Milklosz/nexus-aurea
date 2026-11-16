@@ -33,6 +33,7 @@ mod session_orchestrator;
 mod session_store;
 mod single_instance;
 mod streaming_control;
+mod tv_mode;
 mod velora_session_manager;
 mod window_broker;
 
@@ -64,6 +65,8 @@ pub fn run() {
             velora_session_manager::close_managed_session,
             lifecycle_control::exit_velora,
             lifecycle_control::restart_velora,
+            tv_mode::get_tv_mode_status,
+            tv_mode::set_tv_mode,
             platform_launchers::get_platform_launcher_status,
             claude_usage::get_claude_usage,
             platform_launchers::launch_platform,
@@ -145,6 +148,8 @@ pub fn run() {
                     window.set_fullscreen(false)?;
                     window.set_decorations(true)?;
                 }
+            } else {
+                let _ = tv_mode::restore_tv_mode(app.handle());
             }
             Ok(())
         })

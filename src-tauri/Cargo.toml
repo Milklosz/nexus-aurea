@@ -1,6 +1,6 @@
 [package]
 name = "nexus-aurea"
-version = "0.9.2"
+version = "0.10.0-rc.1"
 description = "VELORA by Milklosh Studio — Grand Cinema entertainment launcher"
 authors = ["Milklosh Studio"]
 edition = "2021"

@@ -1,0 +1,4 @@
+.gaming-collection-tabs { display: flex; flex-wrap: wrap; gap: .6rem; margin: 1rem 0; }
+.gaming-collection-tabs button[aria-pressed="true"] { color: #f5ebdc; border-color: rgba(238,228,211,.65); background: rgba(238,228,211,.08); }
+.gaming-collection-tabs button:focus-visible { outline: 2px solid #eee4d3; outline-offset: 3px; }
+.gaming-game-row > button { flex-shrink: 0; }
