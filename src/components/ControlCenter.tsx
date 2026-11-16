@@ -321,8 +321,8 @@ export function ControlCenter(props: ControlCenterProps) {
         setHomeError("Nie udało się ustawić powrotu na tę sesję.");
       } else {
         setHomeNotice(enabled
-          ? "Powrót PS + Options jest włączony do zamknięcia VELORA."
-          : "Powrót PS + Options jest wyłączony na tę sesję.");
+          ? "Powrót padem jest włączony do zamknięcia VELORA. Obowiązuje wybrany poniżej gest."
+          : "Powrót padem jest wyłączony na tę sesję.");
       }
     } catch (cause) {
       setHomeError(cause instanceof Error ? cause.message : "Nie udało się ustawić powrotu pada.");
@@ -555,9 +555,9 @@ export function ControlCenter(props: ControlCenterProps) {
             </button>}
           </section>
           <section className="cc-card cc-card-wide" aria-label="Powrót do VELORA padem" data-remote-admin="">
-            <div className="cc-card-heading"><span className="cc-card-index">09</span><div><h3>Powrót do VELORA</h3><p>PS + Options na lokalnym DualShock 4.</p></div></div>
+            <div className="cc-card-heading"><span className="cc-card-index">09</span><div><h3>Powrót do VELORA</h3><p>Sesyjny powrót na lokalnym DualShock 4.</p></div></div>
             <p role="status">Natywny odczyt: {!nativeController.supported ? "niedostępny" : nativeController.running ? `${nativeController.pads.length} pad(y) podłączone` : "zatrzymany"} · powrót: {nativeController.homeEnabled ? "włączony" : "wyłączony"}{nativeController.homeOverride === null ? " · podąża za Control Service" : " · ustawienie na tę sesję"}</p>
-            <p>To ustawienie działa tylko do zamknięcia VELORA. Naciśnij PS + Options niemal jednocześnie (w ciągu około 250 ms), a potem zwolnij oba. Nie zmienia mapowania Steam ani Windows.</p>
+            <p>To ustawienie działa tylko do zamknięcia VELORA. Gdy gest zastępczy jest wyłączony, naciśnij PS + Options niemal jednocześnie (w ciągu około 250 ms), a potem zwolnij oba. Wybrany gest zastępczy zastępuje PS + Options. Nie zmienia mapowania Steam ani Windows.</p>
             <button type="button" data-remote-admin="" aria-expanded={homeDiagnostics} aria-controls="cc-home-diagnostics"
               onClick={() => setHomeDiagnostics(!homeDiagnostics)}>Diagnostyka raportu pada</button>
             {homeDiagnostics && <div id="cc-home-diagnostics">
