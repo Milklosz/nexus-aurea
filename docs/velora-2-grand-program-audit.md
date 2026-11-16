@@ -30,3 +30,9 @@ Already present: Steam local discovery, Playnite extension/manifest, installed/r
 Existing overlap between cinema session, launch registry and high-level session state requires projection, not replacement. Native foreground denial must remain visible. Browser previews cannot prove native ownership, volume, device discovery or controller behavior. Never claim success from launch requests alone.
 
 Computer Use initialization imports @oai/sky, but list_apps fails: `failed to launch codex app-server: program not found`. The documented entry point is used; no custom helper or unrelated system installation is attempted. CU scenarios are BLOCKED pending a working helper. Physical DS4/iPhone/TV checks remain BLOCKED by intentional deferral. No installer replacement is authorized.
+
+## Follow-up audit, same date
+
+An existing integrated `work/grand` repository, two Draft PRs (#59/#60), rc.1 artifacts and an untracked engineering report were found at the start of the follow-up. They were preserved and audited before continuing. The untracked rc.1 report is retained as an archive; the current report separates inherited implementation from newly observed evidence. The supplied source checkout and installed 0.9.2 remain untouched.
+
+The documented Computer Use `list_apps()` now succeeds. Luna is executing keyboard/mouse scenarios on the exact existing rc.1 debug build. Earlier all-BLOCKED CU documentation is superseded only by individually observed rows, never by inference. Source gaps identified and addressed in rc.2: missing actual activation/adapter/not-running session metadata, stale same-phase foreground notifications, remote gesture/multi-tab handling, default-audio change notifications and TV refresh/transport metadata. Existing authorities remain unchanged. There are no new privileged drivers, hooks, endpoints, watchdogs or startup registrations.

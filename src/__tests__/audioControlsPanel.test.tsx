@@ -3,11 +3,11 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AudioControls } from "../components/AudioControls";
 
-const mocks = vi.hoisted(() => ({ isTauri: vi.fn(() => true), getSystemAudio: vi.fn(), setSystemAudioVolume: vi.fn(), setSystemAudioMute: vi.fn() }));
+const mocks = vi.hoisted(() => ({ isTauri: vi.fn(() => true), getSystemAudio: vi.fn(), listenForSystemAudioChange: vi.fn(), setSystemAudioVolume: vi.fn(), setSystemAudioMute: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: mocks.isTauri }));
 vi.mock("../services/audioControl", () => mocks);
 const output = { id: "0123456789abcdef", name: "HDMI audio", state: "active", defaultDevice: true, volumePercent: 45, muted: false };
-beforeEach(() => { vi.clearAllMocks(); mocks.isTauri.mockReturnValue(true); mocks.getSystemAudio.mockResolvedValue(output); });
+beforeEach(() => { vi.clearAllMocks(); mocks.isTauri.mockReturnValue(true); mocks.getSystemAudio.mockResolvedValue(output); mocks.listenForSystemAudioChange.mockResolvedValue(() => {}); });
 afterEach(cleanup);
 
 describe("Audio Control Center panel", () => {
@@ -70,5 +70,38 @@ describe("Audio Control Center panel", () => {
     view.unmount();
     fireEvent.focus(window);
     expect(mocks.getSystemAudio).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates a changed endpoint immediately and refreshes without writing the new output", async () => {
+    let notify!: () => void;
+    const stop = vi.fn();
+    mocks.listenForSystemAudioChange.mockImplementationOnce(async callback => { notify = callback; return stop; });
+    const view = render(<AudioControls />);
+    await screen.findByText("45%");
+    mocks.getSystemAudio.mockResolvedValueOnce({ ...output, id: "fedcba9876543210", name: "New output", volumePercent: 30 });
+    act(() => { notify(); notify(); });
+    expect(screen.getByRole("button", { name: "Głośniej o 5 procent" })).toHaveProperty("disabled", true);
+    await screen.findByText("30%");
+    expect(mocks.getSystemAudio).toHaveBeenCalledTimes(2);
+    expect(mocks.setSystemAudioVolume).not.toHaveBeenCalled();
+    expect(mocks.setSystemAudioMute).not.toHaveBeenCalled();
+    view.unmount();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("discards an in-flight read of a revoked endpoint and schedules a fresh read", async () => {
+    let notify!: () => void;
+    let complete!: (value: typeof output) => void;
+    mocks.listenForSystemAudioChange.mockImplementationOnce(async callback => { notify = callback; return () => {}; });
+    mocks.getSystemAudio.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    mocks.getSystemAudio.mockResolvedValueOnce({ ...output, name: "New output", volumePercent: 30 });
+    render(<AudioControls />);
+    await waitFor(() => expect(notify).toBeTypeOf("function"));
+    act(() => notify());
+    await new Promise(resolve => setTimeout(resolve, 120));
+    await act(async () => complete(output));
+    await screen.findByText("30%");
+    expect(screen.queryByText("45%")).toBeNull();
+    expect(mocks.setSystemAudioVolume).not.toHaveBeenCalled();
   });
 });

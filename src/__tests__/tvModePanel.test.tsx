@@ -34,4 +34,15 @@ describe("TV selection UI", () => {
     expect(await screen.findByRole("alert")).toBeTruthy();
     expect(screen.queryByRole("status")).toBeNull();
   });
+  it("shows only the refresh rate and transport reported by native Windows data", async () => {
+    mocks.get.mockResolvedValue({ ...ready, displays: [{ ...ready.displays[0], refreshHz: 60, connectionType: "HDMI" }] });
+    render(<TvModePanel />);
+    expect(await screen.findByText(/1920 × 1080 · 60 Hz · HDMI/)).toBeTruthy();
+  });
+  it("keeps unavailable transport and refresh metadata explicitly unknown", async () => {
+    mocks.get.mockResolvedValue({ ...ready, displays: [{ ...ready.displays[0], refreshHz: null, connectionType: null }] });
+    render(<TvModePanel />);
+    expect(await screen.findByText(/odświeżanie nieznane · połączenie nieznane/)).toBeTruthy();
+    expect(screen.queryByText(/HDMI/)).toBeNull();
+  });
 });

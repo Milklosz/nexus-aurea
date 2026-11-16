@@ -23,7 +23,7 @@
     </header>
 
     <section class="remote-card" aria-labelledby="remote-title">
-      <p class="eyebrow">VELORA · BY MILKLOSH STUDIO · v0.9.2</p>
+      <p class="eyebrow">VELORA · BY MILKLOSH STUDIO</p>
       <h1 id="remote-title">VELORA Remote</h1>
       <p class="connection-copy">Połączony pilot działa wyłącznie przez HTTPS z certyfikatem zaufanym na tym iPhonie.</p>
 
@@ -60,6 +60,13 @@
       <p class="remote-note">Jeśli Safari pokazuje ostrzeżenie certyfikatu, zatrzymaj się. Nie omijaj weryfikacji TLS. Dodaj ten pilot do ekranu początkowego dopiero po sparowaniu.</p>
     </section>
     <nav class="remote-dock" aria-label="Szybka nawigacja">
+      <div class="input-mode" role="group" aria-label="Sposób nawigacji">
+        <button type="button" id="pad-mode" aria-pressed="true">Przyciski</button>
+        <button type="button" id="touch-mode" aria-pressed="false">Touchpad</button>
+      </div>
+      <button type="button" id="navigation-touchpad" class="navigation-touchpad" aria-label="Touchpad nawigacyjny: przesuń, aby zmienić fokus; dotknij, aby wybrać" hidden disabled>
+        <span>Przesuń, aby zmienić fokus</span><small>Dotknij, aby wybrać · bez sterowania kursorem Windows</small>
+      </button>
       <div class="remote-pad" role="group" aria-label="Nawigacja VELORA">
         <span></span><button type="button" data-command="up" aria-label="Góra" disabled>↑</button><span></span>
         <button type="button" data-command="left" aria-label="Lewo" disabled>←</button>
@@ -73,6 +80,7 @@
         <button type="button" data-command="menu" aria-label="Control Center" disabled>Panel</button>
         <button type="button" data-command="switch-apps" aria-label="Przełącz aplikację" disabled>Aplikacje</button>
       </div>
+      <p class="favorites-hint">Ulubione: Home → Moje aplikacje</p>
     </nav>
     <footer>Grand Cinema · kremowa typografia · złote akcenty</footer>
   </main>

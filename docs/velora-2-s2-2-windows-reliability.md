@@ -12,4 +12,4 @@ Use the existing local desktop/minimize and normal exit controls. F11/Escape win
 
 ## Unverified
 
-Windows login startup, crash/relaunch behavior with third-party apps, display disconnect and installer upgrade/rollback require live validation. Computer Use currently fails to launch its app-server helper, and no physical DS4/iPhone/TV success is claimed. The build and installer evidence belongs to the integrated release-gate report. No persistent watchdog or automatic VELORA crash restart is implemented.
+Windows login startup, crash/relaunch behavior with third-party apps, display disconnect and installer upgrade/rollback require separate validation. Computer Use now works in the follow-up; actual candidate-specific results are recorded in its scenario matrix, without any physical DS4/iPhone/TV success claim. Build and installer evidence belongs to the integrated release-gate report. No persistent watchdog or automatic VELORA crash restart is implemented.

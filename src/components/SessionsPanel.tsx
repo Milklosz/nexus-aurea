@@ -14,6 +14,7 @@ export function SessionsPanel() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [reading, setReading] = useState(true);
+  const [showIdleApps, setShowIdleApps] = useState(false);
   const alive = useRef(false);
   const busy = useRef(false);
   const readingRef = useRef(false);
@@ -105,6 +106,15 @@ export function SessionsPanel() {
         <button type="button" disabled={pending !== null} onClick={() => setConfirmClose(null)}>Anuluj zamknięcie</button>
       </div>}
     </article>)}
+    {snapshot.supported && (snapshot.applications ?? []).some(app => app.state === "notRunning") && <div>
+      <button type="button" aria-expanded={showIdleApps} aria-controls="velora-idle-applications"
+        onClick={() => setShowIdleApps(current => !current)}>Pozostałe aplikacje</button>
+      {showIdleApps && <div id="velora-idle-applications">
+        <p>Uruchom aplikację z ekranu głównego. Ten stan dotyczy wyłącznie sesji zarządzanych przez VELORA.</p>
+        <ul>{snapshot.applications.filter(app => app.state === "notRunning").map(app =>
+          <li key={app.appId}>{app.name} — {managedSessionLabels.notRunning}</li>)}</ul>
+      </div>}
+    </div>}
     {error && <p role="alert">{error}</p>}
     {message && <p role="status" aria-live="polite">{message}</p>}
   </section>;

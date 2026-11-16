@@ -25,6 +25,11 @@
   const pairButton = document.getElementById("pair-button");
   const retryButton = document.getElementById("retry-button");
   const commandButtons = [...document.querySelectorAll("[data-command]")];
+  const touchpad = document.getElementById("navigation-touchpad");
+  const padMode = document.getElementById("pad-mode");
+  const touchMode = document.getElementById("touch-mode");
+  const directionPad = document.querySelector?.(".remote-pad");
+  let touchGesture = null;
   const commandLabels = {
     up: "Góra",
     down: "Dół",
@@ -80,6 +85,8 @@
   function updateControls() {
     const canSend = state.secure && state.serverReady && state.storageReady && state.paired && navigator.onLine && !state.inFlight && !state.statusInFlight;
     for (const button of commandButtons) button.disabled = !canSend;
+    if (touchpad) touchpad.disabled = !canSend;
+    if (!canSend) touchGesture = null;
     pairButton.disabled = !state.secure || !state.serverReady || !state.storageReady || state.paired || !navigator.onLine || state.inFlight || state.statusInFlight;
     if (retryButton) retryButton.disabled = !state.secure || !navigator.onLine || state.statusInFlight || state.inFlight;
   }
@@ -371,18 +378,49 @@
     }
   }
 
+  // Do not queue user actions behind another tab. Each accepted action reads
+  // the latest persisted sequence while holding the same-origin browser lock.
   async function sendCommand(command) {
-    if (!state.storageReady || !state.paired || !state.record || state.inFlight || state.statusInFlight || !navigator.onLine) return;
+    if (navigator.locks?.request) {
+      try {
+        await navigator.locks.request("velora-remote-command", { ifAvailable: true }, async (lock) => {
+          if (!lock) {
+            showMessage("Inna karta pilota wysyła polecenie. Poczekaj i spróbuj ręcznie.", true);
+            return;
+          }
+          await sendCommandUnlocked(command);
+        });
+      } catch {
+        showMessage("Nie można bezpiecznie zarezerwować polecenia. Odśwież pilot.", true);
+      }
+      return;
+    }
+    await sendCommandUnlocked(command);
+  }
+
+  async function sendCommandUnlocked(command) {
+    if (!Object.prototype.hasOwnProperty.call(commandLabels, command)
+      || !state.secure || !state.serverReady || !state.storageReady || !state.paired
+      || !state.record || state.inFlight || state.statusInFlight || !navigator.onLine) return;
     const requestId = ++commandRequestId;
     state.inFlight = true;
     const commandLabel = commandLabels[command] || "polecenie";
     showMessage("Wysyłam: " + commandLabel + "…");
     updateControls();
-    const record = state.record;
-    const sequence = record.sequence + 1;
-    record.sequence = sequence;
     try {
+      const record = await readRecord();
+      if (!record || record.confirmedByServer !== true || record.rejectedByServer === true
+        || record.deviceId !== state.record?.deviceId || !record.key
+        || !Number.isSafeInteger(record.sequence) || record.sequence < 0
+        || record.sequence >= Number.MAX_SAFE_INTEGER) {
+        showMessage("Zapisane parowanie zmieniło się lub jest nieprawidłowe. Sprawdź połączenie pilota.", true);
+        return;
+      }
+      if (requestId !== commandRequestId || !navigator.onLine) return;
+      const sequence = record.sequence + 1;
+      record.sequence = sequence;
       await writeRecord(record);
+      state.record = record;
       if (requestId !== commandRequestId) return;
       const payload = ["NEXUS-AUREA-REMOTE-V1", record.deviceId, String(sequence), command].join("\n");
       const signature = await crypto.subtle.sign(
@@ -433,6 +471,51 @@
       updateControls();
     }
   }
+
+  function selectInputMode(useTouchpad) {
+    touchGesture = null;
+    if (touchpad) touchpad.hidden = !useTouchpad;
+    if (directionPad) directionPad.hidden = useTouchpad;
+    padMode?.setAttribute("aria-pressed", String(!useTouchpad));
+    touchMode?.setAttribute("aria-pressed", String(useTouchpad));
+  }
+
+  padMode?.addEventListener("click", () => selectInputMode(false));
+  touchMode?.addEventListener("click", () => selectInputMode(true));
+  touchpad?.addEventListener("pointerdown", (event) => {
+    // A second finger, cancellation, connection change or mode switch cancels
+    // the gesture. Send at most one allowlisted command on a clean release.
+    if (touchpad.disabled || touchpad.hidden || event.isPrimary === false || event.button !== 0) {
+      touchGesture = null;
+      return;
+    }
+    touchGesture = { id: event.pointerId, x: event.clientX, y: event.clientY, time: event.timeStamp };
+    try { touchpad.setPointerCapture(event.pointerId); } catch { touchGesture = null; }
+  });
+  touchpad?.addEventListener("pointerup", (event) => {
+    const gesture = touchGesture;
+    touchGesture = null;
+    if (!gesture || gesture.id !== event.pointerId || touchpad.disabled || touchpad.hidden) return;
+    const x = event.clientX - gesture.x;
+    const y = event.clientY - gesture.y;
+    const elapsed = event.timeStamp - gesture.time;
+    if (elapsed < 0 || elapsed > 1500 || !Number.isFinite(x) || !Number.isFinite(y)) return;
+    const distance = Math.max(Math.abs(x), Math.abs(y));
+    if (distance >= 24) {
+      void sendCommand(Math.abs(x) > Math.abs(y) ? (x > 0 ? "right" : "left") : (y > 0 ? "down" : "up"));
+    } else if (distance <= 8 && elapsed <= 450) {
+      void sendCommand("select");
+    }
+  });
+  for (const type of ["pointercancel", "lostpointercapture"]) {
+    touchpad?.addEventListener(type, () => { touchGesture = null; });
+  }
+  touchpad?.addEventListener("keydown", (event) => {
+    if ((event.key === "Enter" || event.key === " ") && !event.repeat && !touchpad.disabled) {
+      event.preventDefault();
+      void sendCommand("select");
+    }
+  });
 
   if (!state.secure || !window.crypto?.subtle || !window.indexedDB) {
     state.secure = false;

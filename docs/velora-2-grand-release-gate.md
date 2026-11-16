@@ -1,18 +1,20 @@
 # Grand Living Room release gate
 
-Candidate version: `0.10.0-rc.1`. Engineering candidate only. Never stable while hardware acceptance is open.
+Current follow-up candidate version: `0.10.0-rc.2`, based on preserved rc.1 `f232ea6`. Engineering candidate only. Never stable while hardware acceptance is open. Artifact and live evidence must distinguish these two builds.
 
 | Gate | Evidence and scope | Status |
 | --- | --- | --- |
 | A Architecture | Single existing launch/window/input authorities, bounded projection and shared IDs | PASS source review |
-| B Implementation | Vitest 924/104 files; available Rust 384 PASS /2 ignored /39 filtered; adapter/provenance 37 PASS; TypeScript/build PASS | PASS within declared local scope |
+| B Implementation | Vitest 933/105 files; full Windows Rust 428 PASS /2 ignored /0 filtered; adapter/provenance 37 PASS; TypeScript/build and Clippy PASS | PASS automated scope |
 | C Integration | Home/CC/session/remote automated integration; actual Windows UI unverified | Automated checks only |
-| D Computer Use | Host cannot launch codex app-server | BLOCKED |
+| D Computer Use | Follow-up host can operate exact rc.1 candidate; per-scenario evidence and rc.2 smoke are recorded separately | In progress, no blanket PASS |
 | E Security | Independent source review; admin-denial and stale SW delivery issues fixed | SOURCE REVIEW PASS |
-| F Installer | Candidate only, identity unchanged, no installation authorized | Packaging evidence pending |
+| F Installer | rc.1 NSIS artifact downloaded/hash verified; rc.2 requires own exact-source build; identity unchanged; no installation authorized | rc.2 packaging pending |
 | G Hardware | DS4, iPhone, Panasonic HDMI/audio | BLOCKED |
 
 ## Test environment and inherited failures
+
+Follow-up complete native execution outside the sandbox passed 428 tests, with 2 ignored and no filters, using unique synthetic test Credential Manager services. This resolves the available test-scope limitation without converting the older sandbox failures into passes. Clippy still reports inherited warnings; modified native modules pass rustfmt. The first follow-up test attempt failed before execution because its explicit temporary directory did not exist; after creating it, the full suite passed.
 
 The full initial S2.0 native run recorded 380 PASS /32 FAIL /2 ignored. Thirty-one failures depend on Windows Credential Manager denied in this sandbox; the other failure was an overlong sandbox temporary linker path. Explicitly filtering the 37 remote Windows-vault tests plus 2 Credential Store tests is a 39-test exclusion, NOT 39 passes. Use a short external temporary directory (outside any Git repository) for the provenance subprocess tests. Whole-crate rustfmt retains inherited drift in unrelated modules; modified native modules are checked separately. Clippy warnings are retained, not described as a warning-free build. Local .NET has only a runtime, so Playnite C# compilation depends on CI.
 

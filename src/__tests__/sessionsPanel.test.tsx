@@ -12,7 +12,8 @@ vi.mock("../services/veloraSessionManager", async () => ({
 }));
 
 const session: ManagedSession = { sessionId: "cinema-1", appId: "netflix", applicationType: "cinema", name: "Netflix",
-  state: "background", launchedAtMs: 1, lastObservedAtMs: 2, canResume: true, canClose: true, lastFailure: null };
+  launchMethod: "ownedBrowserWindow", state: "background", launchedAtMs: 1, lastObservedAtMs: 2,
+  lastActivationAtMs: null, canResume: true, canClose: true, lastFailure: null };
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 it("offers resume for an existing session and reports Windows denial honestly", async () => {
@@ -43,4 +44,19 @@ it("does not offer stale resume or close controls for exited or foreign sessions
   expect(resume.disabled).toBe(true);
   expect(screen.queryByRole("button", { name: "Zamknij Netflix" })).toBeNull();
   expect(screen.getByText("Zakończona")).toBeDefined();
+});
+
+it("discloses applications without managed sessions without fabricating a Resume action", async () => {
+  mocks.get.mockResolvedValue({ supported: true, sessions: [], applications: [
+    { appId: "youtube", name: "YouTube", state: "notRunning", sessionId: null },
+  ] });
+  render(<SessionsPanel />);
+  const showApps = await screen.findByRole("button", { name: "Pozostałe aplikacje" });
+  expect(showApps.getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryByText(/YouTube —/)).toBeNull();
+  fireEvent.click(showApps);
+  expect(showApps.getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getByText(/YouTube — Nie uruchomiono przez VELORA/)).toBeDefined();
+  expect(screen.queryByRole("button", { name: "Wznów YouTube" })).toBeNull();
+  expect(mocks.resume).not.toHaveBeenCalled();
 });

@@ -8,7 +8,7 @@ Only valid nonzero canonical unsigned 32-bit Steam IDs are accepted. Lists are b
 
 ## Verification
 
-The dedicated collections tests cover schema/version rejection, corrupt and oversized input, duplicate removal, list bounds, canonical IDs, persistence, missing installed games, order and storage denial. The existing 19 GamingHub tests pass with the new controls. Steam/Playnite native launch and gameplay are NOT TESTED in this environment. Computer Use is BLOCKED by the missing app-server helper. Steam Input settings are unchanged. Physical controller acceptance is deferred.
+The dedicated collections tests cover schema/version rejection, corrupt and oversized input, duplicate removal, list bounds, canonical IDs, persistence, missing installed games, order and storage denial. Existing GamingHub tests pass with the new controls. Candidate-specific native detection/launch Computer Use results are recorded in the scenario matrix; no physical gameplay follows from these checks. Steam Input settings are unchanged. Physical controller acceptance is deferred.
 
 ## Limits
 

@@ -59,7 +59,7 @@ describe("VELORA iPhone Remote", () => {
     expect(manifest.scope).toBe("./");
     expect(html).toContain('name="apple-mobile-web-app-capable"');
     const serviceWorker = readFileSync("public/remote/sw.js", "utf8");
-    expect(serviceWorker).toContain("nexus-aurea-remote-v0.9.2-velora-offline-command-6");
+    expect(serviceWorker).toContain("nexus-aurea-remote-v0.10.0-velora-offline-command-7");
     expect(serviceWorker).toContain('key.startsWith("nexus-aurea-remote-")');
     expect(serviceWorker).toContain("self.skipWaiting()");
     expect(serviceWorker).toContain('event.request.method !== "GET"');

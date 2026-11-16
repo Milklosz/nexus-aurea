@@ -10,4 +10,4 @@ Storage supports migration of version 0 `{favorites,recentApps}` to version 1 on
 
 AUTOMATED TEST coverage: successful-launch MRU persistence, identity filtering, favorites editing/reordering/defaults, version migration, corrupt/oversized input, unavailable storage, future-version preservation, stable snapshots and subscription lifetime; panel disclosure, launch identity and unavailable-app controls.
 
-COMPUTER USE VERIFIED: BLOCKED by the unavailable Computer Use app-server. PHYSICAL HARDWARE VERIFIED: BLOCKED / deferred. Automated test results are reported in the program test log, not inferred from implementation.
+COMPUTER USE VERIFIED: see individual candidate-specific rows in `velora-2-grand-computer-use-results.md`; the follow-up host can now enumerate and operate Windows. PHYSICAL HARDWARE VERIFIED: BLOCKED / deferred. Automated test results are reported in the program test log, not inferred from implementation. Focus-only lifecycle events do not reorder recents.

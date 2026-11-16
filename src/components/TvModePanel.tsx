@@ -30,12 +30,12 @@ export function TvModePanel() {
   };
   return <section className="tv-mode-panel" aria-label="Tryb telewizora" data-remote-admin="">
     <h4>Tryb telewizora</h4>
-    <p>Wybierz ekran dla VELORA. HDMI i nazwa telewizora nie są zgadywane.</p>
+    <p>Wybierz ekran, na którym chcesz korzystać z VELORA.</p>
     {!status.supported && <p>Natywne wykrywanie ekranów jest niedostępne.</p>}
     {status.error && <p role="alert">{status.error}</p>}
     {status.selectedDisplayId && !status.selectionAvailable && <p>Zapamiętany ekran jest odłączony. Wybierz dostępny ekran.</p>}
     {status.displays.map(display => <div key={display.id} className="tv-mode-display">
-      <span>{display.name} · {display.width} × {display.height}{display.primary ? " · główny" : ""}{display.current ? " · VELORA" : ""}</span>
+      <span>{display.name} · {display.width} × {display.height}{display.refreshHz ? ` · ${display.refreshHz} Hz` : " · odświeżanie nieznane"}{display.connectionType ? ` · ${display.connectionType === "internal" ? "wbudowany" : display.connectionType}` : " · połączenie nieznane"}{display.primary ? " · główny" : ""}{display.current ? " · VELORA" : ""}</span>
       <button type="button" disabled={busy} onClick={() => void apply(display.id, true)}>Pełny ekran: {display.name}</button>
     </div>)}
     <div className="tv-mode-actions">

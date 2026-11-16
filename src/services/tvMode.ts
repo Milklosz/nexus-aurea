@@ -1,6 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 
-export type TvDisplay = { id: string; name: string; width: number; height: number; x: number; y: number; scaleFactor: number; primary: boolean; current: boolean };
+export type TvDisplay = { id: string; name: string; width: number; height: number; x: number; y: number; scaleFactor: number; primary: boolean; current: boolean; refreshHz: number | null; connectionType: "HDMI" | "DisplayPort" | "DVI" | "internal" | null };
 export type TvModeStatus = { supported: boolean; displays: TvDisplay[]; selectedDisplayId: string | null; fullscreen: boolean; selectionAvailable: boolean; error: string | null };
 export const unsupportedTvMode: TvModeStatus = { supported: false, displays: [], selectedDisplayId: null, fullscreen: false, selectionAvailable: false, error: null };
 export async function getTvModeStatus(): Promise<TvModeStatus> {

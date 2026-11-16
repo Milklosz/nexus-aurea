@@ -6,7 +6,7 @@ Status: IMPLEMENTED; automated and live verification recorded separately in prog
 
 The new `audio_control` commands reuse `display_audio`'s COM apartment, Core Audio enumeration, bounded friendly names and hashed endpoint IDs. UI writes include the displayed endpoint hash. A newly selected system default output rejects a stale command instead of changing an unseen device. Invalid/non-finite/out-of-range numbers fail before Windows access. No raw endpoint path leaves native code. Core Audio errors remain recoverable and no retry repeats a mutation.
 
-Refresh occurs on mount, explicit refresh, window focus, or return to visible state. There is no new timer or polling loop. Only one operation can be in flight. A denied command clears the old snapshot and requires another read. Writes require deliberate UI input; development tests do not change the machine volume.
+Refresh occurs on mount, explicit refresh, window focus, return to visible state, and native Core Audio endpoint notifications. `IMMNotificationClient` lives on the existing display worker's COM apartment and unregisters before releasing it. Its invalidation event contains no device identity and never changes audio. Frontend invalidation immediately disables stale controls, coalesces bursts with a 100 ms debounce, discards earlier in-flight reads and schedules a fresh read after an existing operation completes. There is no new periodic polling loop. If notification registration is unavailable, explicit/focus refresh remains usable. Writes require deliberate UI input; physical HDMI/default-output switching remains a separate test.
 
 ## Integration
 
@@ -14,6 +14,6 @@ Register `mod audio_control;` and commands `audio_control::get_system_audio`, `a
 
 ## Verification boundaries
 
-Service tests cover IPC identity, invalid values, unsupported browser behavior and failure propagation. Panel tests cover explicit actions, actual readback, serialization, denial recovery and refresh cleanup. Rust tests cover native numeric and endpoint validation. Physical HDMI output, actual master-volume behavior and Computer Use read/change/restore remain hardware/runtime checks. If the output disappears or refuses endpoint control, UI reports the error; it does not claim success.
+Service tests cover IPC identity, invalid values, unsupported browser behavior and failure propagation. Panel tests cover explicit actions, actual readback, serialization, denial recovery, notification invalidation during an in-flight read and refresh cleanup. Rust tests cover native numeric and endpoint validation. Exact Computer Use read/change/restore results are recorded in the scenario matrix; source or unit checks do not establish physical HDMI behavior. If the output disappears or refuses endpoint control, UI reports the error; it does not claim success.
 
 Output selection is intentionally unavailable: Windows does not provide a supported public default-output setter in the current project. Existing display/audio diagnostics continue to enumerate outputs independently and remain read-only.
