@@ -42,6 +42,7 @@ export type LaunchReceipt = {
   id: string;
   alreadyRunning: boolean;
   focusRestoreSupported: boolean;
+  resumed?: boolean;
 };
 
 export type ManagedAppExit = {

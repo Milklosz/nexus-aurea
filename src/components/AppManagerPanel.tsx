@@ -33,8 +33,10 @@ export function AppManagerPanel() {
     try {
       const receipt = await launchManagedApp(id);
       const app = snapshot.apps.find(candidate => candidate.id === id);
-      if (receipt.alreadyRunning) {
-        setNotice(`${app?.name ?? id} już działa. Przejdź do niego przez Alt+Tab; VELORA nie wymusza fokusu.`);
+      if (receipt.resumed) {
+        setNotice(`Przywrócono okno ${app?.name ?? id}. Powrót do VELORA: skonfigurowany gest Home.`);
+      } else if (receipt.alreadyRunning) {
+        setNotice(`Przekazano polecenie otwarcia ${app?.name ?? id} do istniejącego klienta. Sprawdź wynik; powrót do VELORA: gest Home.`);
       } else if (receipt.focusRestoreSupported) {
         setNotice(`${app?.name ?? id} uruchomiono. Powrót fokusu będzie możliwy po zakończeniu monitorowanego procesu.`);
       } else {
@@ -65,13 +67,13 @@ export function AppManagerPanel() {
                 <span>{!app?.installed ? "Nie wykryto" : app.runningInstances > 0 ? `Działa · ${app.runningInstances}` : "Zainstalowana · nie działa"}</span>
               </div>
               <button type="button" disabled={!app?.installed || Boolean(app.lastError) || busyId !== null} onClick={() => void launch(id)}>
-                {busyId === id ? "Uruchamiam…" : app?.runningInstances ? "Już działa" : "Otwórz"}
+                {busyId === id ? "Uruchamiam…" : app?.runningInstances ? "Wznów" : "Otwórz"}
               </button>
             </div>;
           })}
         </div>
         <button type="button" onClick={() => void refresh()}>Odśwież diagnostykę</button>
-        <p>Steam, Apple Music i przeglądarki mogą przekazać uruchomienie do już istniejącego procesu. Automatyczny powrót fokusu jest deklarowany tylko dla monitorowanego Playnite Fullscreen. Procesów użytkownika VELORA nie kończy.</p>
+        <p>Wznawianie wymaga okna i tożsamości procesu przechwyconych przez VELORA. Usługi streamingowe otwieraj przez ich kafelki. Steam i Playnite mogą przekazać polecenie własnemu istniejącemu klientowi. Powrót z aplikacji: skonfigurowany gest Home.</p>
       </>}
     {error && <p role="alert">{error}</p>}
     {notice && <p role="status">{notice}</p>}
