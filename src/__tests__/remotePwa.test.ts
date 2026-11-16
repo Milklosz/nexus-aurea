@@ -14,6 +14,17 @@ describe("VELORA iPhone Remote", () => {
     expect(html).not.toContain("OGLĄDAJ TERAZ");
   });
 
+  it("provides explicit reconnect feedback and a safe-area thumb dock", () => {
+    const styles = readFileSync("public/remote/style.css", "utf8");
+    expect(html).toContain('id="retry-button"');
+    expect(html).toContain('<nav class="remote-dock"');
+    expect(styles).toContain("env(safe-area-inset-bottom)");
+    expect(styles).toContain("position: fixed");
+    expect(script).toContain('state.hasConnected ? "ponowne łączenie…"');
+    expect(script).toContain('retryButton?.addEventListener("click", () => void refreshStatus())');
+    expect(script).toContain("!state.statusInFlight");
+  });
+
   it("keeps pairing and commands unavailable until HTTPS, server, and device pairing succeed", () => {
     const buttons = [...html.matchAll(/<button[^>]*data-command[^>]*>/g)].map(([tag]) => tag);
     expect(buttons.length).toBeGreaterThan(0);
@@ -48,9 +59,22 @@ describe("VELORA iPhone Remote", () => {
     expect(manifest.scope).toBe("./");
     expect(html).toContain('name="apple-mobile-web-app-capable"');
     const serviceWorker = readFileSync("public/remote/sw.js", "utf8");
-    expect(serviceWorker).toContain("nexus-aurea-remote-v0.9.2-velora-offline-command-5");
+    expect(serviceWorker).toContain("nexus-aurea-remote-v0.9.2-velora-offline-command-6");
     expect(serviceWorker).toContain('key.startsWith("nexus-aurea-remote-")');
     expect(serviceWorker).toContain("self.skipWaiting()");
+    expect(serviceWorker).toContain('event.request.method !== "GET"');
+    expect(serviceWorker).toContain('/\\/api(?:\\/|$)/.test(requestUrl.pathname)');
+  });
+
+  it("requires pairing again after rejected authorization and never retries an uncertain command", () => {
+    expect(script).toContain("if (response.status === 401)");
+    expect(script).toContain("state.authorizationRejected = true");
+    expect(script).toContain("await rejectStoredRecord()");
+    expect(script).toContain("confirmed && !state.authorizationRejected");
+    expect(script).toContain("if (response.status === 409)");
+    expect(script).toContain("Sprawdź stan urządzenia przed ręcznym ponowieniem.");
+    expect(script).toContain("Polecenie nie zostało automatycznie ponowione.");
+    expect(script).not.toMatch(/queueCommand|pendingCommands|resendCommand/i);
   });
 
   it("keeps pairing and commands disabled when secure key storage cannot be read", async () => {
@@ -432,6 +456,13 @@ describe("VELORA iPhone Remote", () => {
     await new Promise((resolve) => setImmediate(resolve));
     expect(elements.get("remote-message")?.textContent).toContain("iPhone jest offline");
     expect(commandButton.disabled).toBe(true);
+
+    const commandRequestsBeforeReconnect = fetch.mock.calls.filter(([url]) => url === "./api/command").length;
+    navigatorState.onLine = true;
+    windowListeners.get("online")?.();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(fetch.mock.calls.filter(([url]) => url === "./api/command")).toHaveLength(commandRequestsBeforeReconnect);
   });
 
   it("does not let a pending status check overwrite the offline state", async () => {

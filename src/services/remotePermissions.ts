@@ -17,7 +17,7 @@ export const REMOTE_ADMIN_ATTRIBUTE = "data-remote-admin";
 
 export function canRemoteSelect(element: Element | null): boolean {
   if (!element || typeof (element as Element).closest !== "function") return false;
-  if (element.closest(`[${REMOTE_ADMIN_ATTRIBUTE}]`) && !element.closest(`[${REMOTE_ALLOW_ATTRIBUTE}]`)) {
+  if (element.closest(`[${REMOTE_ADMIN_ATTRIBUTE}]`)) {
     return false;
   }
   const dialog = element.closest("dialog[open]");

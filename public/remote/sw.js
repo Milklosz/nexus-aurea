@@ -1,4 +1,4 @@
-const CACHE_NAME = "nexus-aurea-remote-v0.9.2-velora-offline-command-5";
+const CACHE_NAME = "nexus-aurea-remote-v0.9.2-velora-offline-command-6";
 const SHELL = [
   "./",
   "./index.html",
@@ -23,6 +23,7 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const requestUrl = new URL(event.request.url);
   const localScope = new URL("./", self.location.href);
+  if (event.request.method !== "GET" || /\/api(?:\/|$)/.test(requestUrl.pathname)) return;
   if (requestUrl.origin !== self.location.origin || !requestUrl.pathname.startsWith(localScope.pathname)) return;
   event.respondWith(caches.match(event.request).then((cached) => cached || fetch(event.request)));
 });

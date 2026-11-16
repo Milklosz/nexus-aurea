@@ -3,13 +3,14 @@
  * left/right keep their existing meaning inside a zone (the dock is the only zone
  * with several items). Zones that are not on screen are skipped, never focused.
  */
-export const HOME_ZONES = ["controlCenter", "music", "dock", "diagnostics"] as const;
+export const HOME_ZONES = ["controlCenter", "smartHome", "music", "dock", "diagnostics"] as const;
 export type HomeZone = (typeof HOME_ZONES)[number];
 export type HomeZoneAvailability = Record<HomeZone, boolean>;
 
 /** Only VELORA's own elements are matched, so zone detection cannot touch other windows. */
 export const HOME_ZONE_MEMBERS: Record<HomeZone, string> = {
-  controlCenter: ".quick-settings-trigger, .home-actions",
+  controlCenter: ".quick-settings-trigger, .home-actions:not(.smart-home-panel)",
+  smartHome: ".smart-home-panel",
   music: ".music-mini-player",
   dock: ".dock, .lr-dock",
   diagnostics: ".diagnostics-trigger",
@@ -18,7 +19,8 @@ export const HOME_ZONE_MEMBERS: Record<HomeZone, string> = {
 /** Element that receives focus when a zone is entered. The dock is focused by the caller. */
 /** Tried in order. The Living Room top bar remembers its last action (data-remembered); the legacy Home has one trigger. */
 const HOME_ZONE_FOCUS: Record<Exclude<HomeZone, "dock">, readonly string[]> = {
-  controlCenter: [".home-actions [data-remembered=\"true\"]", ".home-actions button", ".quick-settings-trigger"],
+  controlCenter: [".home-actions:not(.smart-home-panel) [data-remembered=\"true\"]", ".home-actions:not(.smart-home-panel) button", ".quick-settings-trigger"],
+  smartHome: [".smart-home-panel button:not(:disabled)"],
   music: [".music-mini-player button:not(:disabled)"],
   diagnostics: [".diagnostics-trigger"],
 };
@@ -56,6 +58,7 @@ export function homeZoneOfElement(element: Element | null): HomeZone | null {
 export function homeZoneAvailability(root: ParentNode): HomeZoneAvailability {
   return {
     controlCenter: root.querySelector(HOME_ZONE_MEMBERS.controlCenter) !== null,
+    smartHome: root.querySelector(HOME_ZONE_MEMBERS.smartHome) !== null,
     music: root.querySelector(HOME_ZONE_MEMBERS.music) !== null,
     dock: root.querySelector(HOME_ZONE_MEMBERS.dock) !== null,
     diagnostics: root.querySelector(HOME_ZONE_MEMBERS.diagnostics) !== null,

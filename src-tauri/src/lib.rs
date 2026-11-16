@@ -1,6 +1,7 @@
 use tauri::{Emitter, Manager};
 
 mod app_manager;
+mod audio_control;
 mod autostart;
 mod claude_usage;
 mod control_service;
@@ -12,6 +13,7 @@ mod ds4;
 mod edge_cinema;
 mod gamepad_home;
 mod launch_registry;
+mod lifecycle_control;
 mod music_service;
 mod operation_registry;
 mod pad_hub;
@@ -31,6 +33,7 @@ mod session_orchestrator;
 mod session_store;
 mod single_instance;
 mod streaming_control;
+mod velora_session_manager;
 mod window_broker;
 
 #[cfg(test)]
@@ -53,6 +56,14 @@ pub fn run() {
         .manage(streaming_control::StreamingControl::default())
         .manage(launch_registry::LaunchRegistry::default())
         .invoke_handler(tauri::generate_handler![
+            audio_control::get_system_audio,
+            audio_control::set_system_audio_volume,
+            audio_control::set_system_audio_mute,
+            velora_session_manager::get_managed_sessions,
+            velora_session_manager::resume_managed_session,
+            velora_session_manager::close_managed_session,
+            lifecycle_control::exit_velora,
+            lifecycle_control::restart_velora,
             platform_launchers::get_platform_launcher_status,
             claude_usage::get_claude_usage,
             platform_launchers::launch_platform,

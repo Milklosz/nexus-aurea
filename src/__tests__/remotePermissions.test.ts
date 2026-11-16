@@ -50,12 +50,21 @@ describe("iPhone Remote select permissions", () => {
     expect(canRemoteSelect(document.querySelector("#future"))).toBe(false);
   });
 
-  it("honours an explicit allow override only outside admin zones", () => {
+  it("denies explicit allow markers nested inside admin zones", () => {
     dialogWith(`
       <section data-remote-admin>
         <button id="override" data-remote-allow>Wyraźnie dozwolone</button>
       </section>
     `);
-    expect(canRemoteSelect(document.querySelector("#override"))).toBe(true);
+    expect(canRemoteSelect(document.querySelector("#override"))).toBe(false);
+  });
+
+  it("denies admin controls inside broadly allowed panels and outside dialogs", () => {
+    const panel = document.createElement("section");
+    panel.setAttribute("data-remote-allow", "");
+    panel.innerHTML = '<button id="admin" data-remote-admin><span id="nested">Startup</span></button>';
+    document.body.append(panel);
+    expect(canRemoteSelect(document.querySelector("#admin"))).toBe(false);
+    expect(canRemoteSelect(document.querySelector("#nested"))).toBe(false);
   });
 });

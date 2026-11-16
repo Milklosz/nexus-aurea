@@ -248,8 +248,8 @@ fn read_only_policy() -> DisplayAudioPolicy {
         read_only: true,
         automatic_mode_changes: false,
         notes: vec![
-            "Ten build tylko odczytuje stan wyświetlaczy i audio.".to_string(),
-            "VELORA nie zmienia rozdzielczości, HDR, głośności ani domyślnych urządzeń."
+            "Ten raport tylko odczytuje stan wyświetlaczy i audio.".to_string(),
+            "Odczyt diagnostyczny nie zmienia rozdzielczości, HDR, głośności ani domyślnych urządzeń."
                 .to_string(),
             "Automatyczne przełączanie trybów obrazu i dźwięku jest wyłączone.".to_string(),
             "Tryb 4K 60 Hz dla Panasonic nie jest zakładany; raport pokazuje rzeczywisty tryb zgłoszony przez Windows.".to_string(),
@@ -297,6 +297,32 @@ fn short_hash(value: &str) -> String {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     format!("{hash:016x}")
+}
+
+/// Uses the same Core Audio apartment and identifier handling as diagnostics.
+/// A write is accepted only for the default endpoint the user actually saw.
+pub(crate) fn control_default_audio(
+    volume: Option<f32>,
+    muted: Option<bool>,
+    expected_endpoint_id: Option<&str>,
+) -> Result<AudioEndpointInfo, String> {
+    #[cfg(target_os = "windows")]
+    {
+        windows_native::control_default_audio(volume, muted, expected_endpoint_id)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (volume, muted, expected_endpoint_id);
+        Err("Sterowanie dźwiękiem wymaga natywnej aplikacji Windows.".into())
+    }
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn validate_audio_target(current: &str, expected: Option<&str>) -> Result<(), String> {
+    if expected != Some(current) {
+        return Err("Wyjście audio zmieniło się. Odśwież panel i spróbuj ponownie.".into());
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -778,6 +804,57 @@ mod windows_native {
         }
     }
 
+    pub(super) fn control_default_audio(
+        volume: Option<f32>,
+        muted: Option<bool>,
+        expected_endpoint_id: Option<&str>,
+    ) -> Result<AudioEndpointInfo, String> {
+        let _apartment = ComApartment::initialize()?;
+        let enumerator: IMMDeviceEnumerator =
+            unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }
+                .map_err(|_| "Nie można odczytać domyślnego wyjścia audio.".to_string())?;
+        let device = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }
+            .map_err(|_| "Domyślne wyjście audio jest niedostępne.".to_string())?;
+        let raw_id = read_endpoint_id(&device)
+            .ok_or_else(|| "Nie można ustalić tożsamości wyjścia audio.".to_string())?;
+        let id = hash_identifier("audio", &raw_id, "default-audio");
+        if volume.is_some() || muted.is_some() {
+            super::validate_audio_target(&id, expected_endpoint_id)?;
+        }
+        let endpoint: IAudioEndpointVolume = unsafe { device.Activate(CLSCTX_ALL, None) }
+            .map_err(|_| "Wyjście nie udostępnia regulacji głośności.".to_string())?;
+        if let Some(value) = volume {
+            if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                return Err("Głośność musi należeć do zakresu 0–100%.".into());
+            }
+            unsafe { endpoint.SetMasterVolumeLevelScalar(value, core::ptr::null()) }
+                .map_err(|_| "Windows odmówił zmiany głośności.".to_string())?;
+        }
+        if let Some(value) = muted {
+            unsafe { endpoint.SetMute(value, core::ptr::null()) }
+                .map_err(|_| "Windows odmówił zmiany wyciszenia.".to_string())?;
+        }
+        let volume_percent = unsafe { endpoint.GetMasterVolumeLevelScalar() }
+            .ok()
+            .and_then(volume_percent);
+        let muted = unsafe { endpoint.GetMute() }
+            .ok()
+            .map(|value| value.as_bool());
+        let name = sanitize_label(&read_friendly_name(&device).unwrap_or_default());
+        Ok(AudioEndpointInfo {
+            id,
+            name: if name.is_empty() {
+                "Domyślne wyjście audio".into()
+            } else {
+                name
+            },
+            state: "active".into(),
+            default_device: true,
+            volume_percent,
+            muted,
+        })
+    }
+
     fn read_audio_result() -> Result<(Vec<AudioEndpointInfo>, Option<String>), String> {
         let _apartment = ComApartment::initialize()?;
 
@@ -999,6 +1076,13 @@ mod windows_native {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_write_rejects_changed_or_missing_endpoint_identity() {
+        assert!(validate_audio_target("0123456789abcdef", Some("0123456789abcdef")).is_ok());
+        assert!(validate_audio_target("fedcba9876543210", Some("0123456789abcdef")).is_err());
+        assert!(validate_audio_target("0123456789abcdef", None).is_err());
+    }
 
     fn display(id: &str, width: u32, height: u32, refresh_hz: u32, primary: bool) -> DisplayInfo {
         DisplayInfo {

@@ -1,4 +1,7 @@
 import { GamepadDiagnostics } from "./components/GamepadDiagnostics";
+import { SmartHomePanel } from "./components/SmartHomePanel";
+import { recordSmartHomeLaunch } from "./services/smartHome";
+import { isTauri } from "@tauri-apps/api/core";
 import { ControlCenter, type ControlPanelId } from "./components/ControlCenter";
 import { ControllerHomePreflight } from "./components/ControllerHomePreflight";
 import { LivingRoomHome } from "./components/living-room/LivingRoomHome";
@@ -167,9 +170,11 @@ export default function App() {
         try {
           if (service.kind === "web") {
             await openStreamingService(service);
+            if (isTauri()) recordSmartHomeLaunch(service.id);
             return;
           }
           const receipt = await launchManagedApp(service.managedAppId);
+          recordSmartHomeLaunch(service.id);
           showToast(receipt.alreadyRunning
             ? `${service.name} już działa.`
             : `Uruchamiam ${service.name}${service.id === "steam" ? " Big Picture" : ""}.`);
@@ -415,6 +420,11 @@ export default function App() {
       active.click();
       return;
     }
+    if (!dialog && active instanceof HTMLElement && active.dataset.smartHomeApp) {
+      const index = streamingServices.findIndex(service => service.id === active.dataset.smartHomeApp);
+      if (index >= 0) void openService(index, "controller");
+      return;
+    }
     if (!dialog && activateHomeAction(active)) return;
     activateSelected("controller");
   }, [activateSelected, closeControlCenter, openKeyboardFor, openService]);
@@ -448,6 +458,11 @@ export default function App() {
         return;
       }
       active.click();
+      return;
+    }
+    if (!dialog && active instanceof HTMLElement && active.dataset.smartHomeApp) {
+      const index = streamingServices.findIndex(service => service.id === active.dataset.smartHomeApp);
+      if (index >= 0) void openService(index, "remote");
       return;
     }
     if (!dialog && activateHomeAction(active)) return;
@@ -688,7 +703,7 @@ export default function App() {
           navigation.focusApp(returnHomeFocusTarget(activeServiceRef.current, streamingServices.length));
         },
         menu: () => openControlCenterAt(),
-        switchApplications: () => openControlCenterAt("search"),
+        switchApplications: () => openControlCenterAt("sessions"),
         volume: (action) => {
           void handleSystemVolume(action).catch(() => showToast("Nie udało się zmienić głośności Windows."));
         },
@@ -747,7 +762,12 @@ export default function App() {
       if (!active) return;
       // A successful spawn receipt is not proof that the app window appeared.
       // Surface only a real terminal failure from the authoritative registry.
-      if (event.session.phase === "failed" && event.session.appId === "edge-cinema") {
+      if (event.session.phase === "windowAppeared" || event.session.phase === "sessionActive") {
+        const id = event.session.appId;
+        const service = streamingServices.find(service => service.kind === "managed" ? service.managedAppId === id : `edge-cinema:${service.id}` === id);
+        if (service) recordSmartHomeLaunch(service.id);
+      }
+      if (event.session.phase === "failed" && (event.session.appId === "edge-cinema" || event.session.appId?.startsWith("edge-cinema:"))) {
         showToast(event.session.error || "Nie udało się otworzyć okna Edge Cinema.");
       }
     }).then((stopListening) => {
@@ -793,7 +813,10 @@ export default function App() {
           onSearch={openSearch}
           onRemote={openRemote}
           onSettings={openSettings}
-          aside={musicBackgroundMode ? <MusicMiniPlayer status={musicStatus} profile={cinemaProfile} onControl={handleMusicControl} /> : undefined}
+          aside={<>
+            <SmartHomePanel onSessions={() => openControlCenterAt("sessions")} onLaunch={id => { const index = streamingServices.findIndex(service => service.id === id); if (index >= 0) void openService(index); }} />
+            {musicBackgroundMode && <MusicMiniPlayer status={musicStatus} profile={cinemaProfile} onControl={handleMusicControl} />}
+          </>}
         />
       ) : (
         <>
@@ -803,6 +826,7 @@ export default function App() {
           <StatusBar weatherLabel={weatherLabel} weatherTitle={weatherTitle} />
           <button type="button" className="quick-settings-trigger" onClick={toggleControlCenter} aria-label="Otwórz Control Center">Control Center <kbd>F3</kbd></button>
           <HeroPanel />
+          <SmartHomePanel onSessions={() => openControlCenterAt("sessions")} onLaunch={id => { const index = streamingServices.findIndex(service => service.id === id); if (index >= 0) void openService(index); }} />
           <AppDock
             services={streamingServices}
             activeIndex={navigation.activeIndex}
@@ -833,7 +857,7 @@ export default function App() {
         mediaPlaying={mediaIsPlaying}
         onOpenDiagnostics={openDiagnosticsFromCenter}
         onReturnToNexus={returnToNexus}
-        onSwitchApplications={openSearch}
+        onSwitchApplications={() => openControlCenterAt("sessions")}
         onClose={closeControlCenter}
         appSearch={appSearch}
         initialPanel={controlCenterPanel}

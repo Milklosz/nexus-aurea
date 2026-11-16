@@ -59,8 +59,19 @@ pub struct DiagnosticsSnapshot {
     pub control_service: crate::control_service::ControlServiceStatus,
     pub native_controller: NativeControllerStatus,
     pub display_audio: DisplayAudioSnapshot,
+    pub remote: RemoteDiagnostics,
     pub errors: Vec<DiagnosticsError>,
     pub limitations: Vec<String>,
+}
+
+/// Deliberately excludes device names, origins, pairing credentials and certificate paths.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteDiagnostics {
+    pub enabled: bool,
+    pub secure_origin_available: bool,
+    pub paired_device_count: usize,
+    pub recovery_required: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -209,6 +220,15 @@ pub(crate) fn capture(app: &AppHandle) -> DiagnosticsSnapshot {
     let control_service = app.state::<ControlService>().status();
     let native_controller = app.state::<PadHub>().status();
     let display_audio = display_audio::snapshot();
+    let remote_status = app
+        .state::<crate::remote_access::RemoteAccess>()
+        .status_cached();
+    let remote = RemoteDiagnostics {
+        enabled: remote_status.enabled,
+        secure_origin_available: remote_status.secure_origin_available,
+        paired_device_count: remote_status.paired_device_count,
+        recovery_required: remote_status.recovery_required,
+    };
     let mut snapshot = DiagnosticsSnapshot {
         generated_at_ms: now_ms(),
         build: build_info(),
@@ -220,6 +240,7 @@ pub(crate) fn capture(app: &AppHandle) -> DiagnosticsSnapshot {
         control_service,
         native_controller,
         display_audio,
+        remote,
         errors: Vec::new(),
         limitations: limitations(),
     };
@@ -249,6 +270,26 @@ pub(crate) fn sanitize_text(input: &str) -> String {
             || lower.contains("documents and settings");
         if private_path {
             output.push_str("<redacted-path>");
+        } else if lower.contains("token=")
+            || lower.contains("secret=")
+            || lower.contains("password=")
+            || lower.contains("authorization")
+            || lower.contains("bearer ")
+            || lower.contains("https://")
+            || lower.contains("http://")
+            || lower.contains("\"token\"")
+            || lower.contains("\"secret\"")
+            || lower.contains("\"password\"")
+            || line
+                .split(|c: char| !(c.is_ascii_digit() || c == '.'))
+                .any(|part| part.parse::<std::net::Ipv4Addr>().is_ok())
+            || line.split_whitespace().any(|part| {
+                part.trim_matches(['[', ']', ',', ';'])
+                    .parse::<std::net::Ipv6Addr>()
+                    .is_ok()
+            })
+        {
+            output.push_str("<redacted-detail>");
         } else {
             output.extend(
                 line.chars()
@@ -394,6 +435,30 @@ pub async fn export_diagnostics_report(app: AppHandle) -> Result<DiagnosticsExpo
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn export_redacts_credentials_urls_and_network_addresses() {
+        for text in [
+            "token=private",
+            "password=private",
+            "Authorization: Bearer private",
+            "https://private.example/watch/123",
+            "LAN 192.168.1.42:8765",
+            "[fe80::1234]",
+            "{\"secret\":\"private\"}",
+        ] {
+            assert_eq!(super::sanitize_text(text), "<redacted-detail>");
+        }
+        let json = serde_json::to_string(&super::RemoteDiagnostics {
+            enabled: true,
+            secure_origin_available: true,
+            paired_device_count: 2,
+            recovery_required: false,
+        })
+        .unwrap();
+        for forbidden in ["token", "origin\"", "path", "name", "192.168"] {
+            assert!(!json.contains(forbidden));
+        }
+    }
     use super::{
         sanitize_text, BuildInfo, DiagnosticsError, DiagnosticsSnapshot, MAX_STRING_CHARS,
     };
@@ -475,6 +540,7 @@ mod tests {
                 last_error: None,
             },
             native_controller: NativeControllerStatus::default(),
+            remote: super::RemoteDiagnostics::default(),
             display_audio: DisplayAudioSnapshot {
                 windows: true,
                 supported: true,

@@ -19,6 +19,7 @@
     <header class="remote-header">
       <div class="brand">VELORA <span>Remote</span></div>
       <div class="connection-badge" id="connection-state" role="status" aria-live="polite">sprawdzam bezpieczne połączenie…</div>
+      <button type="button" id="retry-button" class="retry-button" hidden>Sprawdź ponownie</button>
     </header>
 
     <section class="remote-card" aria-labelledby="remote-title">
@@ -43,21 +44,6 @@
         <button type="submit" id="pair-button" disabled>Sparuj iPhone'a</button>
       </form>
 
-      <div class="remote-pad" role="group" aria-label="Nawigacja VELORA">
-        <span></span><button type="button" data-command="up" aria-label="Góra" disabled>↑</button><span></span>
-        <button type="button" data-command="left" aria-label="Lewo" disabled>←</button>
-        <button type="button" data-command="select" aria-label="Wybierz" disabled>OK</button>
-        <button type="button" data-command="right" aria-label="Prawo" disabled>→</button>
-        <span></span><button type="button" data-command="down" aria-label="Dół" disabled>↓</button><span></span>
-      </div>
-
-      <div class="remote-row" role="group" aria-label="Nawigacja główna">
-        <button type="button" data-command="back" aria-label="Wstecz" disabled>Wstecz</button>
-        <button type="button" data-command="home" aria-label="Home" disabled>Home</button>
-        <button type="button" data-command="menu" aria-label="Control Center" disabled>Panel</button>
-        <button type="button" data-command="switch-apps" aria-label="Przełącz aplikację" disabled>Aplikacje</button>
-      </div>
-
       <div class="remote-row" role="group" aria-label="Głośność">
         <button type="button" data-command="volume-down" aria-label="Ciszej" disabled>−</button>
         <button type="button" data-command="mute" aria-label="Wycisz" disabled>Wycisz</button>
@@ -73,6 +59,21 @@
       <p class="remote-note" id="remote-message" role="status" aria-live="polite">Polecenia są wyłączone do czasu bezpiecznego połączenia i parowania.</p>
       <p class="remote-note">Jeśli Safari pokazuje ostrzeżenie certyfikatu, zatrzymaj się. Nie omijaj weryfikacji TLS. Dodaj ten pilot do ekranu początkowego dopiero po sparowaniu.</p>
     </section>
+    <nav class="remote-dock" aria-label="Szybka nawigacja">
+      <div class="remote-pad" role="group" aria-label="Nawigacja VELORA">
+        <span></span><button type="button" data-command="up" aria-label="Góra" disabled>↑</button><span></span>
+        <button type="button" data-command="left" aria-label="Lewo" disabled>←</button>
+        <button type="button" data-command="select" aria-label="Wybierz" disabled>OK</button>
+        <button type="button" data-command="right" aria-label="Prawo" disabled>→</button>
+        <span></span><button type="button" data-command="down" aria-label="Dół" disabled>↓</button><span></span>
+      </div>
+      <div class="remote-row" role="group" aria-label="Nawigacja główna">
+        <button type="button" data-command="back" aria-label="Wstecz" disabled>Wstecz</button>
+        <button type="button" data-command="home" aria-label="Home" disabled>Home</button>
+        <button type="button" data-command="menu" aria-label="Control Center" disabled>Panel</button>
+        <button type="button" data-command="switch-apps" aria-label="Przełącz aplikację" disabled>Aplikacje</button>
+      </div>
+    </nav>
     <footer>Grand Cinema · kremowa typografia · złote akcenty</footer>
   </main>
 </body>

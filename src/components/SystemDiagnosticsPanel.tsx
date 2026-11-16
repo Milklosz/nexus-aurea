@@ -79,6 +79,7 @@ export function SystemDiagnosticsPanel() {
         Wersja {snapshot.build.version} · build {snapshot.build.buildSha} · {snapshot.build.target} · {snapshot.build.profile}
       </p>
       <ul className="system-diagnostics-list">
+        {snapshot.remote && <li>Pilot: {snapshot.remote.enabled ? "włączony" : "wyłączony"} · sparowane urządzenia: {snapshot.remote.pairedDeviceCount} · HTTPS: {snapshot.remote.secureOriginAvailable ? "gotowe" : "niedostępne"}{snapshot.remote.recoveryRequired ? " · wymagane odzyskiwanie" : ""}</li>}
         <li>Sesja: <strong>{sessionLabel(snapshot.session.current)}</strong> · rewizja {snapshot.session.revision}</li>
         <li>Operacje sesji: {snapshot.sessionOperations.filter((operation) => operation.status === "pending").length} oczekujących</li>
         <li>Uruchomienia: {snapshot.launchRegistry.activeSessions} aktywne · {snapshot.launchRegistry.sessions.length} zapisanych</li>

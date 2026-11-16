@@ -6,6 +6,9 @@ import { nextAmbientDelay, AMBIENT_IDLE_OPTIONS } from "../services/ambient";
 import type { SystemVolumeAction } from "../services/musicBridge";
 import { GamingHub } from "./GamingHub";
 import { AutostartPanel } from "./AutostartPanel";
+import { AudioControls } from "./AudioControls";
+import { SessionsPanel } from "./SessionsPanel";
+import { DesktopRecoveryControls } from "./DesktopRecoveryControls";
 import { PlayniteLibrary } from "./PlayniteLibrary";
 import { AppSearchPanel } from "./AppSearchPanel";
 import type { SearchEntry } from "../services/appSearch";
@@ -70,13 +73,14 @@ const profiles: Array<{ id: CinemaProfile; label: string }> = [
   { id: "desktop", label: "Desktop" },
 ];
 
-const livingRoomPanelLabels: Record<string, string> = { cinema: "Kino", gaming: "Gry", remote: "Pilot", search: "Szukaj" };
+const livingRoomPanelLabels: Record<string, string> = { cinema: "Kino", gaming: "Gry", remote: "Pilot", search: "Szukaj", sessions: "Sesje" };
 
 const controlPanels = [
   { id: "cinema", label: "Cinema" },
   { id: "gaming", label: "Gaming" },
   { id: "remote", label: "iPhone Remote" },
   { id: "search", label: "Szukaj" },
+  { id: "sessions", label: "Sesje" },
 ] as const;
 
 export type ControlPanelId = (typeof controlPanels)[number]["id"];
@@ -576,11 +580,16 @@ export function ControlCenter(props: ControlCenterProps) {
           </section>
           <SessionControllerControls homeEnabled={nativeController.homeEnabled} nativeRunning={nativeController.supported && nativeController.running} />
           <AutostartPanel />
+          <AudioControls />
+          <DesktopRecoveryControls />
         </div>
         {error && <p className="cc-feedback cc-error" role="alert">{error}</p>}
         {notice && <p className="cc-feedback" role="status">{notice}</p>}
       </section>
 
+      <section id="cc-panel-sessions" className="cc-panel" role="tabpanel" aria-labelledby="cc-tab-sessions" tabIndex={0} hidden={activePanel !== "sessions"}>
+        {activePanel === "sessions" && <SessionsPanel />}
+      </section>
       <section id="cc-panel-gaming" className="cc-panel cc-gaming-panel" role="tabpanel"
         aria-labelledby="cc-tab-gaming" tabIndex={0} hidden={activePanel !== "gaming"}>
         <div className="cc-card cc-gaming-card">
