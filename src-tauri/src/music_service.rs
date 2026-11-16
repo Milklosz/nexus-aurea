@@ -91,7 +91,7 @@ pub async fn adjust_system_volume(action: String) -> Result<(), String> {
         .map_err(|_| "Wątek regulacji głośności został przerwany.".to_string())?
 }
 
-fn adjust_system_volume_blocking(action: String) -> Result<(), String> {
+pub(crate) fn adjust_system_volume_blocking(action: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     { windows::adjust_volume(&action) }
     #[cfg(not(target_os = "windows"))]

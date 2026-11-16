@@ -170,6 +170,91 @@ struct OwnedWindowTarget {
     process_created_at_100ns: u64,
 }
 
+/// Closed, native-only target used by the opt-in controller bridge. Never
+/// accepted from IPC: callers must resolve it from this adapter's registry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StreamingWindowTarget {
+    pub(crate) service_id: &'static str,
+    pub(crate) launch_id: String,
+    pub(crate) hwnd: u64,
+    pub(crate) process_id: u32,
+    pub(crate) process_created_at_100ns: u64,
+}
+
+fn streaming_identity_matches(
+    launch: &LaunchSession,
+    window: u64,
+    process_id: u32,
+    created_at: u64,
+    identities: &[crate::process_table::ProcessIdentity],
+) -> bool {
+    launch.phase.is_active()
+        && launch.kind == LaunchKind::Cinema
+        && service_for_launch(launch).is_some()
+        && launch.window_id == Some(window)
+        && window != 0
+        && process_id != 0
+        && created_at != 0
+        && launch.process_ids.contains(&process_id)
+        && identities.iter().any(|identity| {
+            identity.process_id == process_id && identity.created_at_100ns == created_at
+        })
+}
+
+/// No title matching, generic browser adoption, or process enumeration: only
+/// the exact HWND currently assigned to an active service-specific launch.
+pub(crate) fn foreground_owned_streaming_target(app: &AppHandle) -> Option<StreamingWindowTarget> {
+    let hwnd = window_broker_foreground_id()?;
+    let process_id = crate::window_broker::window_process_id(hwnd)?;
+    let identity = crate::process_table::identity(process_id)?;
+    for launch in launch_registry::active_cinema_launches(app) {
+        if launch.window_id != Some(hwnd) {
+            continue;
+        }
+        let service = service_for_launch(&launch)?;
+        let owners = launch_registry::owned_process_identities_for_launch(app, &launch.id);
+        if streaming_identity_matches(
+            &launch,
+            hwnd,
+            process_id,
+            identity.created_at_100ns,
+            &owners,
+        ) {
+            return Some(StreamingWindowTarget {
+                service_id: service.id,
+                launch_id: launch.id,
+                hwnd,
+                process_id,
+                process_created_at_100ns: identity.created_at_100ns,
+            });
+        }
+    }
+    None
+}
+
+pub(crate) fn streaming_target_is_current(app: &AppHandle, target: &StreamingWindowTarget) -> bool {
+    let Some(launch) = launch_registry::launch_by_id(app, &target.launch_id) else {
+        return false;
+    };
+    let owners = launch_registry::owned_process_identities_for_launch(app, &target.launch_id);
+    window_broker_foreground_id() == Some(target.hwnd)
+        && crate::window_broker::window_process_id(target.hwnd) == Some(target.process_id)
+        && crate::process_table::identity(target.process_id)
+            .is_some_and(|identity| identity.created_at_100ns == target.process_created_at_100ns)
+        && service_for_launch(&launch).is_some_and(|service| service.id == target.service_id)
+        && streaming_identity_matches(
+            &launch,
+            target.hwnd,
+            target.process_id,
+            target.process_created_at_100ns,
+            &owners,
+        )
+}
+
+fn window_broker_foreground_id() -> Option<u64> {
+    crate::window_broker::foreground_window_id()
+}
+
 fn require_edge_window_target(
     target: Option<OwnedWindowTarget>,
 ) -> Result<OwnedWindowTarget, String> {
@@ -1173,6 +1258,39 @@ mod tests {
     };
     use crate::launch_registry::{LaunchKind, LaunchPhase, LaunchSession};
     use crate::process_table::ProcessIdentity;
+
+    #[test]
+    fn streaming_input_requires_exact_service_window_and_captured_process_identity() {
+        let mut session = launch(LaunchPhase::SessionActive);
+        session.app_id = Some("edge-cinema:netflix".into());
+        session.window_id = Some(70);
+        session.process_ids = vec![42];
+        let owners = [ProcessIdentity {
+            process_id: 42,
+            created_at_100ns: 999,
+        }];
+        assert!(super::streaming_identity_matches(
+            &session, 70, 42, 999, &owners
+        ));
+        assert!(!super::streaming_identity_matches(
+            &session, 71, 42, 999, &owners
+        ));
+        assert!(!super::streaming_identity_matches(
+            &session, 70, 42, 1000, &owners
+        ));
+        assert!(!super::streaming_identity_matches(
+            &session, 70, 43, 999, &owners
+        ));
+        session.phase = LaunchPhase::Ended;
+        assert!(!super::streaming_identity_matches(
+            &session, 70, 42, 999, &owners
+        ));
+        session.phase = LaunchPhase::SessionActive;
+        session.app_id = Some("edge".into());
+        assert!(!super::streaming_identity_matches(
+            &session, 70, 42, 999, &owners
+        ));
+    }
 
     #[test]
     fn allowlist_accepts_exactly_the_five_official_urls() {

@@ -13,6 +13,12 @@ import { STATUS_READ_TIMEOUT_MS, withTimeout } from "../services/withTimeout";
 import { nativeControllerStore } from "../services/nativeControllerStore";
 import { useNativeControllerStatus } from "../hooks/useNativeController";
 import {
+  configureControllerFallback, configureStreamingControl,
+  disabledFallbackHomeStatus, disabledStreamingControlStatus,
+  getControllerFallbackStatus, getStreamingControlStatus,
+  type FallbackHomeConfig, type FallbackHomeStatus, type StreamingControlStatus,
+} from "../services/livingRoom";
+import {
   beginRemotePairing,
   disabledRemoteAccessStatus,
   getRemoteAccessStatus,
@@ -48,6 +54,7 @@ type ControlCenterProps = {
   mediaPlaying: boolean;
   onOpenDiagnostics: () => void;
   onReturnToNexus: () => void;
+  onSwitchApplications?: () => void;
   onClose: () => void;
   /** When present, the Szukaj tab is shown. Launching a result goes through onLaunch. */
   appSearch?: { entries: readonly SearchEntry[]; onLaunch: (entryId: string) => void };
@@ -78,6 +85,115 @@ function delayLabel(seconds: number): string {
   return Math.round(seconds / 60) + " min";
 }
 
+/** Native session settings stay local-only; the paired remote cannot opt into input synthesis. */
+export function SessionControllerControls({ homeEnabled, nativeRunning }: { homeEnabled: boolean; nativeRunning: boolean }) {
+  const [streaming, setStreaming] = useState<StreamingControlStatus>(disabledStreamingControlStatus);
+  const [fallback, setFallback] = useState<FallbackHomeStatus>(disabledFallbackHomeStatus);
+  const [ready, setReady] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const mounted = useRef(false);
+  const inFlight = useRef(false);
+
+  const refresh = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    // A timeout reports a failed read, but an unresolved IPC remains single-flight.
+    const pending = Promise.allSettled([getStreamingControlStatus(), getControllerFallbackStatus()]).then(results => {
+      const [streamingResult, fallbackResult] = results;
+      if (streamingResult.status === "rejected") throw streamingResult.reason;
+      if (fallbackResult.status === "rejected") throw fallbackResult.reason;
+      return [streamingResult.value, fallbackResult.value] as const;
+    });
+    void pending.finally(() => { inFlight.current = false; }).catch(() => {});
+    try {
+      const [nextStreaming, nextFallback] = await withTimeout(pending, STATUS_READ_TIMEOUT_MS, "Sterowanie z kanapy");
+      if (mounted.current) {
+        setStreaming(nextStreaming); setFallback(nextFallback); setReady(true); setNotice(""); setError("");
+      }
+    } catch {
+      if (mounted.current) { setReady(false); setNotice("Stan sterowania z kanapy jest niedostępny. Odśwież po odzyskaniu połączenia."); }
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    mounted.current = true;
+    void refresh();
+    const onFocus = () => { void refresh(); };
+    window.addEventListener("focus", onFocus);
+    return () => { mounted.current = false; window.removeEventListener("focus", onFocus); };
+  }, []);
+
+  const configure = async (operation: () => Promise<void>) => {
+    if (inFlight.current || !ready) return;
+    inFlight.current = true;
+    setBusy(true); setError(""); setNotice("");
+    // Mutations are never retried automatically: a late reply must not enable a second mutation.
+    try {
+      await operation();
+      if (mounted.current) setNotice("Ustawienie zapisane na tę sesję VELORA.");
+    } catch (cause) {
+      if (mounted.current) setError(cause instanceof Error ? cause.message : "Nie udało się zmienić sterowania.");
+    } finally {
+      inFlight.current = false;
+      if (mounted.current) setBusy(false);
+    }
+  };
+
+  const setFallbackConfig = (config: FallbackHomeConfig) => configure(async () => {
+    const next = await configureControllerFallback(config);
+    if (mounted.current) setFallback(next);
+  });
+  const setStreamingConfig = (enabled: boolean, pointerMode: boolean) => configure(async () => {
+    const next = await configureStreamingControl(enabled, pointerMode);
+    if (mounted.current) setStreaming(next);
+  });
+  const disabled = busy || !ready;
+  return <section className="cc-card cc-card-wide" aria-label="Sterowanie z kanapy" aria-busy={busy} data-remote-admin="">
+    <div className="cc-card-heading"><span className="cc-card-index">10</span><div><h3>Sterowanie z kanapy</h3><p>Ustawienia lokalne, tylko na bieżącą sesję.</p></div></div>
+    <p>Gest zastępczy Home: {!ready ? "stan nieznany" : fallback.enabled ? `L1 + R1 + Options, przytrzymaj ${fallback.holdMs / 1000} s` : "wyłączony"}. Po użyciu zwolnij wszystkie przyciski.</p>
+    {!fallback.physicalMappingValidated && <p>Ten gest wymaga jeszcze potwierdzenia na fizycznym padzie. {fallback.primaryChordSuppressed ? "PS + Options jest wyłączone podczas używania gestu zastępczego." : "PS + Options pozostaje podstawowym skrótem."}</p>}
+    <div className="cc-actions">
+      <button type="button" data-remote-admin="" disabled={disabled || ((!homeEnabled || !nativeRunning) && !fallback.enabled)} aria-pressed={fallback.enabled}
+        onClick={() => void setFallbackConfig({ enabled: !fallback.enabled, gesture: fallback.enabled ? "disabled" : "l1R1Options", holdMs: fallback.holdMs })}>
+        {fallback.enabled ? "Wyłącz gest zastępczy Home" : "Włącz gest zastępczy Home"}
+      </button>
+      <button type="button" data-remote-admin="" disabled={disabled || !fallback.enabled}
+        onClick={() => void setFallbackConfig({ enabled: fallback.enabled, gesture: fallback.gesture, holdMs: fallback.holdMs === 1500 ? 2000 : fallback.holdMs === 2000 ? 3000 : 1500 })}>
+        Przytrzymanie: {fallback.holdMs / 1000} s — zmień
+      </button>
+    </div>
+    <p role="status">Streaming: {!ready ? "stan nieznany" : !streaming.windows ? "niedostępny" : streaming.enabled ? "sterowanie włączone" : "sterowanie wyłączone"} · wskaźnik: {!ready ? "stan nieznany" : streaming.enabled && streaming.pointerMode ? "AKTYWNY" : "wyłączony"}{ready && streaming.activeService ? ` · serwis: ${streaming.activeService}` : ""}.</p>
+    <div className="cc-actions">
+      <button type="button" data-remote-admin="" disabled={disabled || !streaming.windows || ((!homeEnabled || !nativeRunning) && !streaming.enabled)} aria-pressed={streaming.enabled}
+        onClick={() => void setStreamingConfig(!streaming.enabled, streaming.pointerMode)}>
+        {streaming.enabled ? "Wyłącz sterowanie streamingiem" : "Włącz sterowanie streamingiem"}
+      </button>
+      <button type="button" data-remote-admin="" disabled={disabled || !streaming.enabled || ((!homeEnabled || !nativeRunning) && !streaming.pointerMode)} aria-pressed={streaming.pointerMode}
+        onClick={() => void setStreamingConfig(streaming.enabled, !streaming.pointerMode)}>
+        {streaming.pointerMode ? "Wyłącz tryb wskaźnika" : "Włącz tryb wskaźnika"}
+      </button>
+      <button type="button" data-remote-admin="" disabled={busy} onClick={() => void refresh()}>Odśwież stan sterowania</button>
+    </div>
+    {!homeEnabled && <p>Najpierw włącz powrót Home na tę sesję.</p>}
+    <p>D-pad: strzałki · Cross: Enter lub kliknięcie · Circle: wstecz · Square: Tab · touchpad: Shift+Tab · Triangle: tryb wskaźnika · prawy analog: wskaźnik · L2/R2: przewijanie.</p>
+    <p className="cc-card-note">Sterowanie obejmuje wyłącznie aktywne okno streamingowe uruchomione i rozpoznane przez VELORA. Obsługa stron wymaga testów; w trybie wskaźnika nad własnym oknem pojawia się oznaczenie.</p>
+    <button type="button" data-remote-admin="" aria-expanded={showDiagnostics} aria-controls="cc-couch-diagnostics"
+      onClick={() => setShowDiagnostics(!showDiagnostics)}>Wynik sterowania i gestu Home</button>
+    {showDiagnostics && <div id="cc-couch-diagnostics">
+      <p>Ostatni wynik: {streaming.lastResult ?? "brak"} · wysłane/odrzucone akcje: {streaming.acceptedActions}/{streaming.rejectedActions}.</p>
+      <p>Gest: {fallback.armed ? "uzbrojony" : "czeka na zwolnienie przycisków"} · ostatni Home: {fallback.lastTriggeredAtMs === null ? "brak" : "zarejestrowany"}.</p>
+    </div>}
+    {error && <p role="alert">{error}</p>}
+    {notice && <p role="status">{notice}</p>}
+  </section>;
+}
+
 export function ControlCenter(props: ControlCenterProps) {
   const dialog = useRef<HTMLDialogElement>(null);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -92,6 +208,7 @@ export function ControlCenter(props: ControlCenterProps) {
   const [homeBusy, setHomeBusy] = useState(false);
   const [homeNotice, setHomeNotice] = useState("");
   const [homeError, setHomeError] = useState("");
+  const [homeDiagnostics, setHomeDiagnostics] = useState(false);
   const controlStatusRequestId = useRef(0);
   const controlStatusRequestInFlight = useRef(false);
   const [busy, setBusy] = useState(false);
@@ -204,8 +321,8 @@ export function ControlCenter(props: ControlCenterProps) {
         setHomeError("Nie udało się ustawić powrotu na tę sesję.");
       } else {
         setHomeNotice(enabled
-          ? "Powrót PS + Options jest włączony do zamknięcia VELORA."
-          : "Powrót PS + Options jest wyłączony na tę sesję.");
+          ? "Powrót padem jest włączony do zamknięcia VELORA. Obowiązuje wybrany poniżej gest."
+          : "Powrót padem jest wyłączony na tę sesję.");
       }
     } catch (cause) {
       setHomeError(cause instanceof Error ? cause.message : "Nie udało się ustawić powrotu pada.");
@@ -438,16 +555,17 @@ export function ControlCenter(props: ControlCenterProps) {
             </button>}
           </section>
           <section className="cc-card cc-card-wide" aria-label="Powrót do VELORA padem" data-remote-admin="">
-            <div className="cc-card-heading"><span className="cc-card-index">09</span><div><h3>Powrót do VELORA</h3><p>PS + Options na lokalnym DualShock 4.</p></div></div>
+            <div className="cc-card-heading"><span className="cc-card-index">09</span><div><h3>Powrót do VELORA</h3><p>Sesyjny powrót na lokalnym DualShock 4.</p></div></div>
             <p role="status">Natywny odczyt: {!nativeController.supported ? "niedostępny" : nativeController.running ? `${nativeController.pads.length} pad(y) podłączone` : "zatrzymany"} · powrót: {nativeController.homeEnabled ? "włączony" : "wyłączony"}{nativeController.homeOverride === null ? " · podąża za Control Service" : " · ustawienie na tę sesję"}</p>
-            <p>To ustawienie działa tylko do zamknięcia VELORA. Naciśnij PS + Options niemal jednocześnie (w ciągu około 250 ms), a potem zwolnij oba. Nie zmienia mapowania Steam ani Windows.</p>
-            <details>
-              <summary>Diagnostyka raportu pada</summary>
+            <p>To ustawienie działa tylko do zamknięcia VELORA. Gdy gest zastępczy jest wyłączony, naciśnij PS + Options niemal jednocześnie (w ciągu około 250 ms), a potem zwolnij oba. Wybrany gest zastępczy zastępuje PS + Options. Nie zmienia mapowania Steam ani Windows.</p>
+            <button type="button" data-remote-admin="" aria-expanded={homeDiagnostics} aria-controls="cc-home-diagnostics"
+              onClick={() => setHomeDiagnostics(!homeDiagnostics)}>Diagnostyka raportu pada</button>
+            {homeDiagnostics && <div id="cc-home-diagnostics">
               <p>Ostatni raport: {nativeController.lastHomeButtons ? `PS ${nativeController.lastHomeButtons.ps ? "wciśnięty" : "zwolniony"} · Options ${nativeController.lastHomeButtons.options ? "wciśnięty" : "zwolniony"}` : "brak"}.</p>
               <p>Wykryte naciśnięcia PS/Options: {nativeController.psRisingCount}/{nativeController.optionsRisingCount} · raporty poprawne/tło: {nativeController.validReports}/{nativeController.backgroundReports}.</p>
               {nativeController.lastChord && <p>Ostatni chord: {nativeController.lastChord.outcome} · powrót uzbrojony: {nativeController.lastChord.homeEnabled ? "tak" : "nie"} · wysłano żądanie: {nativeController.lastChord.actionRequested ? "tak" : "nie"}.</p>}
               {nativeController.lastRestore && <p>Ostatnia próba fokusu: {nativeController.lastRestore.outcome} · HWND VELORA: {nativeController.lastRestore.ownWindow ?? "brak"} · HWND przed/po: {nativeController.lastRestore.foregroundBeforeHwnd ?? "brak"}/{nativeController.lastRestore.foregroundAfterHwnd ?? "brak"} · kod Win32: {nativeController.lastRestore.errorCode ?? "brak"}.</p>}
-            </details>
+            </div>}
             <button type="button" data-remote-admin="" aria-pressed={nativeController.homeEnabled}
               disabled={!nativeController.supported || !nativeController.running || homeBusy}
               aria-busy={homeBusy} onClick={() => void setSessionHome()}>
@@ -456,6 +574,7 @@ export function ControlCenter(props: ControlCenterProps) {
             {homeError && <p role="alert">{homeError}</p>}
             {homeNotice && <p role="status">{homeNotice}</p>}
           </section>
+          <SessionControllerControls homeEnabled={nativeController.homeEnabled} nativeRunning={nativeController.supported && nativeController.running} />
           <AutostartPanel />
         </div>
         {error && <p className="cc-feedback cc-error" role="alert">{error}</p>}
@@ -561,7 +680,7 @@ export function ControlCenter(props: ControlCenterProps) {
           )}>Odwołaj wszystkie urządzenia</button>}
           {remoteError && <p className="cc-feedback cc-error" role="alert">{remoteError}</p>}
           {remoteNotice && <p className="cc-feedback" role="status">{remoteNotice}</p>}
-          <p className="cc-card-note">Pilot obsługuje nawigację, wybór, Wstecz, Home, głośność i profile. Nie omijaj ostrzeżeń TLS w Safari.</p>
+          <p className="cc-card-note">Pilot obsługuje nawigację VELORA, wybór, Wstecz, Home, panel, wybór aplikacji, głośność i profile. Nie omijaj ostrzeżeń TLS w Safari.</p>
         </div>
       </section>
     </div>
@@ -571,6 +690,9 @@ export function ControlCenter(props: ControlCenterProps) {
         ? <>Zamknij · Esc / <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /></svg></>
         : "F3 otwiera panel · Esc wraca · ← → przełączają sekcję"}</span>
       <div className="cc-footer-actions">
+        {props.onSwitchApplications && <div className="cc-footer-group" role="group" aria-label="Aplikacje">
+          <button type="button" data-remote-allow="" onClick={props.onSwitchApplications}>Przełącz aplikację</button>
+        </div>}
         <div className="cc-footer-group" role="group" aria-label="Wyjście">
           <button type="button" data-remote-allow="" onClick={props.onShowDesktop}>{props.livingRoom ? "Pulpit Windows" : "Pokaż pulpit"}</button>
           <button type="button" data-remote-allow="" onClick={props.onReturnToNexus}>{props.livingRoom ? "Ekran główny" : "Wróć do VELORA"}</button>

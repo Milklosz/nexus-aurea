@@ -679,7 +679,16 @@ export default function App() {
         select: confirmControllerFocus,
         selectRemote: confirmRemoteFocus,
         back: backControllerFocus,
-        home: returnToNexus,
+        // The authenticated native endpoint already restored Home using its
+        // conservative Device policy. Never issue another local restore here.
+        home: () => {
+          cancelHomePreflight();
+          setControlCenterOpen(false);
+          setDiagnostics(false);
+          navigation.focusApp(returnHomeFocusTarget(activeServiceRef.current, streamingServices.length));
+        },
+        menu: () => openControlCenterAt(),
+        switchApplications: () => openControlCenterAt("search"),
         volume: (action) => {
           void handleSystemVolume(action).catch(() => showToast("Nie udało się zmienić głośności Windows."));
         },
@@ -693,7 +702,7 @@ export default function App() {
       active = false;
       unlisten?.();
     };
-  }, [backControllerFocus, changeCinemaProfile, confirmControllerFocus, confirmRemoteFocus, handleSystemVolume, keyboard.sinkRef, moveControllerFocus, moveVerticalFocus, returnToNexus, showToast]);
+  }, [backControllerFocus, cancelHomePreflight, changeCinemaProfile, confirmControllerFocus, confirmRemoteFocus, handleSystemVolume, keyboard.sinkRef, moveControllerFocus, moveVerticalFocus, navigation.focusApp, openControlCenterAt, showToast]);
 
   useReturnHomeListener(useCallback((event: ReturnHomeEvent) => {
     homePreflightOperationRef.current += 1;
@@ -824,6 +833,7 @@ export default function App() {
         mediaPlaying={mediaIsPlaying}
         onOpenDiagnostics={openDiagnosticsFromCenter}
         onReturnToNexus={returnToNexus}
+        onSwitchApplications={openSearch}
         onClose={closeControlCenter}
         appSearch={appSearch}
         initialPanel={controlCenterPanel}

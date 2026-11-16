@@ -29,6 +29,8 @@
     select: "Wybierz",
     back: "Wstecz",
     home: "Home",
+    menu: "Control Center",
+    "switch-apps": "Aplikacje",
     "volume-up": "Głośniej",
     "volume-down": "Ciszej",
     mute: "Wycisz",

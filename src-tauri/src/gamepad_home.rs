@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 #[cfg(target_os = "windows")]
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::OnceLock;
+#[cfg(target_os = "windows")]
+use std::time::Instant;
 #[cfg(target_os = "windows")]
 use tauri::{AppHandle, Emitter};
 
@@ -705,10 +707,12 @@ impl DeviceBookkeeping {
 
 #[cfg(target_os = "windows")]
 fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
-        .unwrap_or(0)
+    static START: OnceLock<Instant> = OnceLock::new();
+    START
+        .get_or_init(Instant::now)
+        .elapsed()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
 }
 
 #[cfg(target_os = "windows")]

@@ -221,14 +221,42 @@ pub struct Ds4Dpad {
 /// every other value is neutral. A corrupt nibble never produces a direction.
 pub(crate) fn decode_hat(nibble: u8) -> Ds4Dpad {
     match nibble {
-        0 => Ds4Dpad { up: true, ..Ds4Dpad::default() },
-        1 => Ds4Dpad { up: true, right: true, ..Ds4Dpad::default() },
-        2 => Ds4Dpad { right: true, ..Ds4Dpad::default() },
-        3 => Ds4Dpad { down: true, right: true, ..Ds4Dpad::default() },
-        4 => Ds4Dpad { down: true, ..Ds4Dpad::default() },
-        5 => Ds4Dpad { down: true, left: true, ..Ds4Dpad::default() },
-        6 => Ds4Dpad { left: true, ..Ds4Dpad::default() },
-        7 => Ds4Dpad { up: true, left: true, ..Ds4Dpad::default() },
+        0 => Ds4Dpad {
+            up: true,
+            ..Ds4Dpad::default()
+        },
+        1 => Ds4Dpad {
+            up: true,
+            right: true,
+            ..Ds4Dpad::default()
+        },
+        2 => Ds4Dpad {
+            right: true,
+            ..Ds4Dpad::default()
+        },
+        3 => Ds4Dpad {
+            down: true,
+            right: true,
+            ..Ds4Dpad::default()
+        },
+        4 => Ds4Dpad {
+            down: true,
+            ..Ds4Dpad::default()
+        },
+        5 => Ds4Dpad {
+            down: true,
+            left: true,
+            ..Ds4Dpad::default()
+        },
+        6 => Ds4Dpad {
+            left: true,
+            ..Ds4Dpad::default()
+        },
+        7 => Ds4Dpad {
+            up: true,
+            left: true,
+            ..Ds4Dpad::default()
+        },
         _ => Ds4Dpad::default(),
     }
 }
@@ -276,7 +304,12 @@ fn bt_full_crc_ok(report: &[u8]) -> bool {
         return false;
     }
     let end = report.len() - 4;
-    let expected = u32::from_le_bytes([report[end], report[end + 1], report[end + 2], report[end + 3]]);
+    let expected = u32::from_le_bytes([
+        report[end],
+        report[end + 1],
+        report[end + 2],
+        report[end + 3],
+    ]);
     let crc = !crc32_update(crc32_update(0xffff_ffff, &[0xa1]), &report[..end]);
     crc == expected
 }
@@ -358,6 +391,9 @@ pub(crate) struct Ingest {
     pub buttons: Option<Ds4Buttons>,
     /// Opaque device label the report belongs to.
     pub label: Option<String>,
+    /// Valid, fully parsed report for the optional streaming route. Only tracked
+    /// devices reach this field; raw report bytes and device paths do not escape.
+    pub report: Option<Ds4Report>,
 }
 
 /// A tracked pad as the status command reports it.
@@ -382,7 +418,11 @@ pub(crate) fn is_neutral(snapshot: &Ds4Snapshot) -> bool {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum PadEvent {
     /// First valid report from a pad that was not tracked.
-    Connected { label: String, revision: Ds4Revision, transport: Ds4Transport },
+    Connected {
+        label: String,
+        revision: Ds4Revision,
+        transport: Ds4Transport,
+    },
     /// The semantic state changed. Never emitted for an identical report.
     State(Ds4Snapshot),
     /// The pad was removed or went stale. The frontend must treat all inputs as released.
@@ -443,7 +483,10 @@ impl Ds4Tracker {
         // The Sony USB adapter keeps streaming when no pad is paired and flags it in byte 31
         // (bit 0x04, per the Linux hid-sony driver). [UNVERIFIED on hardware] Such a report is not
         // a pad: it must neither connect one nor keep a vanished one alive.
-        if revision == Ds4Revision::UsbAdapter && report.len() >= USB_REPORT_LEN && report[31] & 0x04 != 0 {
+        if revision == Ds4Revision::UsbAdapter
+            && report.len() >= USB_REPORT_LEN
+            && report[31] & 0x04 != 0
+        {
             return out;
         }
         let Some(parsed) = parse_report(report) else {
@@ -464,10 +507,20 @@ impl Ds4Tracker {
             }
             self.pads.insert(
                 label.clone(),
-                TrackedPad { revision, transport, last: None, last_seen_ms: at_ms,
-                    emitted: None, emitted_at_ms: at_ms },
+                TrackedPad {
+                    revision,
+                    transport,
+                    last: None,
+                    last_seen_ms: at_ms,
+                    emitted: None,
+                    emitted_at_ms: at_ms,
+                },
             );
-            out.events.push(PadEvent::Connected { label: label.clone(), revision, transport });
+            out.events.push(PadEvent::Connected {
+                label: label.clone(),
+                revision,
+                transport,
+            });
         }
         let mut snapshot = snapshot_of(&label, revision, &parsed);
         snapshot.transport = transport;
@@ -477,13 +530,20 @@ impl Ds4Tracker {
             // Schmitt deadzone before quantisation: enter at 0.18, release at 0.12.
             let filter = |value: f32, previous: f32| {
                 let threshold = if previous == 0.0 { 0.18 } else { 0.12 };
-                if value.abs() < threshold { 0.0 } else { (value * 16.0).round() / 16.0 }
+                if value.abs() < threshold {
+                    0.0
+                } else {
+                    (value * 16.0).round() / 16.0
+                }
             };
             snapshot.left_x = filter(parsed.left_x, pad.last.as_ref().map_or(0.0, |s| s.left_x));
             snapshot.left_y = filter(parsed.left_y, pad.last.as_ref().map_or(0.0, |s| s.left_y));
             pad.last = Some(snapshot.clone());
-            let discrete = pad.emitted.as_ref().map_or(true, |s|
-                s.buttons != snapshot.buttons || s.dpad != snapshot.dpad || s.transport != snapshot.transport);
+            let discrete = pad.emitted.as_ref().map_or(true, |s| {
+                s.buttons != snapshot.buttons
+                    || s.dpad != snapshot.dpad
+                    || s.transport != snapshot.transport
+            });
             let neutral = snapshot.left_x == 0.0 && snapshot.left_y == 0.0;
             if pad.emitted.as_ref() != Some(&snapshot)
                 && (discrete || neutral || at_ms.saturating_sub(pad.emitted_at_ms) >= 16)
@@ -495,6 +555,7 @@ impl Ds4Tracker {
         }
         out.label = Some(label);
         out.buttons = Some(parsed.buttons);
+        out.report = Some(parsed);
         out
     }
 
@@ -543,7 +604,10 @@ impl Ds4Tracker {
     /// Latest snapshot of every tracked pad, for resynchronising the frontend (window
     /// focus regained) and for the periodic heartbeat while an input is held.
     pub(crate) fn snapshots(&self) -> Vec<Ds4Snapshot> {
-        self.pads.values().filter_map(|pad| pad.last.clone()).collect()
+        self.pads
+            .values()
+            .filter_map(|pad| pad.last.clone())
+            .collect()
     }
 
     /// Connected pads without any state, for the status command.
@@ -561,7 +625,9 @@ impl Ds4Tracker {
     /// Removes the pad that owns `path`, if tracked.
     pub(crate) fn on_removed(&mut self, path: &str) -> Option<PadEvent> {
         let label = crate::gamepad_home::device_label(path);
-        self.pads.remove(&label).map(|_| PadEvent::Disconnected { label })
+        self.pads
+            .remove(&label)
+            .map(|_| PadEvent::Disconnected { label })
     }
 
     /// Drops pads that have been silent for [`PAD_STALE_MS`].
@@ -593,16 +659,19 @@ impl Ds4Tracker {
 mod tests {
     use super::*;
 
-    const USB_PATH: &str = r"\\?\HID#VID_054C&PID_09CC#7&2a3b4c5d&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}";
-    const BT_PATH: &str =
-        r"\\?\HID#{00001124-0000-1000-8000-00805f9b34fb}_VID&0002054C_PID&05C4#8&1&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}";
+    const USB_PATH: &str =
+        r"\\?\HID#VID_054C&PID_09CC#7&2a3b4c5d&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}";
+    const BT_PATH: &str = r"\\?\HID#{00001124-0000-1000-8000-00805f9b34fb}_VID&0002054C_PID&05C4#8&1&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}";
 
     #[test]
     fn analog_deadzone_hysteresis_rate_limit_and_neutral_release() {
         let mut tracker = Ds4Tracker::default();
         let mut report = usb_report();
         feed(&mut tracker, USB_PATH, &report, 0);
-        for t in 1..16 { report[1] = 128 + (t % 10) as u8; assert!(feed(&mut tracker, USB_PATH, &report, t).is_empty()); }
+        for t in 1..16 {
+            report[1] = 128 + (t % 10) as u8;
+            assert!(feed(&mut tracker, USB_PATH, &report, t).is_empty());
+        }
         report[1] = 160;
         assert_eq!(feed(&mut tracker, USB_PATH, &report, 16).len(), 1);
         report[1] = 180;
@@ -610,7 +679,10 @@ mod tests {
         report[1] = 200;
         assert!(feed(&mut tracker, USB_PATH, &report, 18).is_empty());
         assert!(tracker.flush_analog(31).is_empty());
-        assert_eq!(tracker.flush_analog(32)[0].left_x, (72.0_f32 / 127.0 * 16.0).round() / 16.0);
+        assert_eq!(
+            tracker.flush_analog(32)[0].left_x,
+            (72.0_f32 / 127.0 * 16.0).round() / 16.0
+        );
         report[5] |= 0x20; // Cross is never rate limited.
         assert_eq!(feed(&mut tracker, USB_PATH, &report, 33).len(), 1);
         report[1] = 148; // stays outside release threshold, inside entry threshold
@@ -658,7 +730,11 @@ mod tests {
     #[test]
     fn identifies_revisions_from_the_path_only() {
         assert_eq!(ds4_revision_from_path(USB_PATH), Some(Ds4Revision::V2));
-        assert_eq!(ds4_revision_from_path(BT_PATH), Some(Ds4Revision::V1), "bluetooth path form");
+        assert_eq!(
+            ds4_revision_from_path(BT_PATH),
+            Some(Ds4Revision::V1),
+            "bluetooth path form"
+        );
         assert_eq!(
             ds4_revision_from_path(r"\\?\HID#VID_054C&PID_05C4#x"),
             Some(Ds4Revision::V1)
@@ -676,14 +752,66 @@ mod tests {
 
     #[test]
     fn decodes_every_hat_value_and_rejects_garbage() {
-        assert_eq!(decode_hat(0), Ds4Dpad { up: true, ..Default::default() });
-        assert_eq!(decode_hat(1), Ds4Dpad { up: true, right: true, ..Default::default() });
-        assert_eq!(decode_hat(2), Ds4Dpad { right: true, ..Default::default() });
-        assert_eq!(decode_hat(3), Ds4Dpad { down: true, right: true, ..Default::default() });
-        assert_eq!(decode_hat(4), Ds4Dpad { down: true, ..Default::default() });
-        assert_eq!(decode_hat(5), Ds4Dpad { down: true, left: true, ..Default::default() });
-        assert_eq!(decode_hat(6), Ds4Dpad { left: true, ..Default::default() });
-        assert_eq!(decode_hat(7), Ds4Dpad { up: true, left: true, ..Default::default() });
+        assert_eq!(
+            decode_hat(0),
+            Ds4Dpad {
+                up: true,
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            decode_hat(1),
+            Ds4Dpad {
+                up: true,
+                right: true,
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            decode_hat(2),
+            Ds4Dpad {
+                right: true,
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            decode_hat(3),
+            Ds4Dpad {
+                down: true,
+                right: true,
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            decode_hat(4),
+            Ds4Dpad {
+                down: true,
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            decode_hat(5),
+            Ds4Dpad {
+                down: true,
+                left: true,
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            decode_hat(6),
+            Ds4Dpad {
+                left: true,
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            decode_hat(7),
+            Ds4Dpad {
+                up: true,
+                left: true,
+                ..Default::default()
+            }
+        );
         for neutral in [8u8, 9, 12, 15] {
             assert_eq!(decode_hat(neutral), Ds4Dpad::default());
         }
@@ -711,7 +839,11 @@ mod tests {
             let mut report = usb_report();
             report[index] |= mask;
             let parsed = parse_report(&report).expect("usb report");
-            assert_eq!(parsed.buttons.pressed_names(), vec![expected], "byte {index} mask {mask:#x}");
+            assert_eq!(
+                parsed.buttons.pressed_names(),
+                vec![expected],
+                "byte {index} mask {mask:#x}"
+            );
         }
     }
 
@@ -772,16 +904,25 @@ mod tests {
         assert!(parse_report(&[0x01]).is_none());
         let mut short = usb_report();
         short.truncate(BT_BASIC_REPORT_LEN - 1);
-        assert!(parse_report(&short).is_none(), "shorter than any known report");
+        assert!(
+            parse_report(&short).is_none(),
+            "shorter than any known report"
+        );
         let mut unknown = usb_report();
         unknown[0] = 0x05;
         assert!(parse_report(&unknown).is_none(), "output/feature report id");
         let mut bt = full_bt_report();
         bt[10] ^= 0x20; // flip Cross after sealing
-        assert!(parse_report(&bt).is_none(), "bad crc must not synthesise input");
+        assert!(
+            parse_report(&bt).is_none(),
+            "bad crc must not synthesise input"
+        );
         let mut wrong_len = full_bt_report();
         wrong_len.truncate(77);
-        assert!(parse_report(&wrong_len).is_none(), "0x11 shorter than its CRC");
+        assert!(
+            parse_report(&wrong_len).is_none(),
+            "0x11 shorter than its CRC"
+        );
         // Every possible one-byte report id with a 64-byte body is handled without panicking.
         for id in 0..=255u8 {
             let mut report = vec![0xffu8; USB_REPORT_LEN];
@@ -808,20 +949,29 @@ mod tests {
         let parsed = parse_report(&padded_full).expect("padded 0x11 with valid crc");
         assert!(parsed.buttons.is_pressed(Ds4Button::Cross));
         padded_full[10] ^= 0x40; // corrupt a covered byte
-        assert!(parse_report(&padded_full).is_none(), "crc is still enforced when padded");
+        assert!(
+            parse_report(&padded_full).is_none(),
+            "crc is still enforced when padded"
+        );
         let mut padded_usb = usb_report();
         padded_usb.resize(78, 0);
         assert_eq!(parse_report(&padded_usb).unwrap().kind, ReportKind::Usb);
         let mut padded_basic = basic_bt_report();
         padded_basic.resize(40, 0);
-        assert_eq!(parse_report(&padded_basic).unwrap().kind, ReportKind::BluetoothBasic);
+        assert_eq!(
+            parse_report(&padded_basic).unwrap().kind,
+            ReportKind::BluetoothBasic
+        );
     }
 
     #[test]
     fn identifies_by_vendor_and_product_ids() {
         assert_eq!(ds4_revision_from_ids(0x054c, 0x05c4), Some(Ds4Revision::V1));
         assert_eq!(ds4_revision_from_ids(0x054c, 0x09cc), Some(Ds4Revision::V2));
-        assert_eq!(ds4_revision_from_ids(0x054c, 0x0ba0), Some(Ds4Revision::UsbAdapter));
+        assert_eq!(
+            ds4_revision_from_ids(0x054c, 0x0ba0),
+            Some(Ds4Revision::UsbAdapter)
+        );
         assert_eq!(ds4_revision_from_ids(0x054c, 0x0ce6), None, "DualSense");
         assert_eq!(ds4_revision_from_ids(0x045e, 0x09cc), None, "wrong vendor");
     }
@@ -832,7 +982,9 @@ mod tests {
         let mut padded = basic_bt_report();
         padded.resize(78, 0); // looks like a USB-shaped report
         let out = tracker.on_report(BT_PATH, Ds4Revision::V1, &padded, 0);
-        let Some(PadEvent::Connected { transport, .. }) = out.events.first() else { panic!("connect") };
+        let Some(PadEvent::Connected { transport, .. }) = out.events.first() else {
+            panic!("connect")
+        };
         assert_eq!(*transport, Ds4Transport::Bluetooth);
         assert!(path_is_bluetooth(BT_PATH));
         assert!(!path_is_bluetooth(USB_PATH));
@@ -858,7 +1010,17 @@ mod tests {
     fn tracker_connects_once_and_emits_only_on_change() {
         let mut tracker = Ds4Tracker::default();
         let first = feed(&mut tracker, USB_PATH, &usb_report(), 10);
-        assert!(matches!(first.as_slice(), [PadEvent::Connected { revision: Ds4Revision::V2, transport: Ds4Transport::Usb, .. }, PadEvent::State(_)]));
+        assert!(matches!(
+            first.as_slice(),
+            [
+                PadEvent::Connected {
+                    revision: Ds4Revision::V2,
+                    transport: Ds4Transport::Usb,
+                    ..
+                },
+                PadEvent::State(_)
+            ]
+        ));
         assert_eq!(tracker.pad_count(), 1);
         // Identical report: nothing.
         assert!(feed(&mut tracker, USB_PATH, &usb_report(), 14).is_empty());
@@ -870,7 +1032,9 @@ mod tests {
         let mut cross = usb_report();
         cross[5] |= 0x20;
         let events = feed(&mut tracker, USB_PATH, &cross, 22);
-        let [PadEvent::State(snapshot)] = events.as_slice() else { panic!("expected one state") };
+        let [PadEvent::State(snapshot)] = events.as_slice() else {
+            panic!("expected one state")
+        };
         assert_eq!(snapshot.buttons, vec![Ds4Button::Cross]);
         // Release emits too.
         assert_eq!(feed(&mut tracker, USB_PATH, &usb_report(), 30).len(), 1);
@@ -879,12 +1043,26 @@ mod tests {
     #[test]
     fn tracker_ignores_other_devices_and_bad_reports() {
         let mut tracker = Ds4Tracker::default();
-        assert!(feed(&mut tracker, r"\\?\HID#VID_046D&PID_C21D#x", &usb_report(), 1).is_empty());
+        assert!(feed(
+            &mut tracker,
+            r"\\?\HID#VID_046D&PID_C21D#x",
+            &usb_report(),
+            1
+        )
+        .is_empty());
         assert_eq!(tracker.pad_count(), 0);
-        assert_eq!(tracker.ignored_reports(), 0, "foreign devices are not counted as bad reports");
+        assert_eq!(
+            tracker.ignored_reports(),
+            0,
+            "foreign devices are not counted as bad reports"
+        );
         assert!(feed(&mut tracker, USB_PATH, &[0x01, 0x02], 2).is_empty());
         assert_eq!(tracker.ignored_reports(), 1);
-        assert_eq!(tracker.pad_count(), 0, "a corrupt report never connects a pad");
+        assert_eq!(
+            tracker.pad_count(),
+            0,
+            "a corrupt report never connects a pad"
+        );
     }
 
     #[test]
@@ -894,7 +1072,10 @@ mod tests {
         let removed = tracker.on_removed(USB_PATH);
         assert!(matches!(removed, Some(PadEvent::Disconnected { .. })));
         assert_eq!(tracker.pad_count(), 0);
-        assert!(tracker.on_removed(USB_PATH).is_none(), "second removal is a no-op");
+        assert!(
+            tracker.on_removed(USB_PATH).is_none(),
+            "second removal is a no-op"
+        );
         // Reconnect is a fresh Connected event with a fresh State.
         let again = feed(&mut tracker, USB_PATH, &usb_report(), 100);
         assert!(matches!(again.first(), Some(PadEvent::Connected { .. })));
@@ -913,7 +1094,13 @@ mod tests {
             let path = format!(r"\\?\HID#VID_054C&PID_09CC#unit{index}");
             assert!(!feed(&mut tracker, &path, &usb_report(), 0).is_empty());
         }
-        assert!(feed(&mut tracker, r"\\?\HID#VID_054C&PID_09CC#overflow", &usb_report(), 1).is_empty());
+        assert!(feed(
+            &mut tracker,
+            r"\\?\HID#VID_054C&PID_09CC#overflow",
+            &usb_report(),
+            1
+        )
+        .is_empty());
         assert_eq!(tracker.pad_count(), MAX_TRACKED_PADS);
         assert_eq!(tracker.clear().len(), MAX_TRACKED_PADS);
     }

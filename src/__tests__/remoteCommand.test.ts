@@ -21,6 +21,15 @@ afterEach(() => {
 });
 
 describe("iPhone Remote command mapping", () => {
+  it("opens the panel and app picker through explicit handlers", () => {
+    const handlers = makeHandlers({ menu: vi.fn(), switchApplications: vi.fn() });
+    dispatchRemoteCommand("menu", handlers);
+    dispatchRemoteCommand("switch-apps", handlers);
+    expect(handlers.menu).toHaveBeenCalledOnce();
+    expect(handlers.switchApplications).toHaveBeenCalledOnce();
+    expect(handlers.select).not.toHaveBeenCalled();
+    expect(handlers.home).not.toHaveBeenCalled();
+  });
   it("prefers the remote-safe select handler over the shared controller select", () => {
     const handlers = makeHandlers({
       select: vi.fn(),
