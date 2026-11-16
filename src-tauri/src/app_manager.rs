@@ -9,11 +9,11 @@ use tauri::AppHandle;
 #[cfg(target_os = "windows")]
 use crate::launch_registry::{self, LaunchKind, LaunchWatch};
 #[cfg(target_os = "windows")]
-use crate::window_broker;
-#[cfg(target_os = "windows")]
 use crate::process_table;
 #[cfg(target_os = "windows")]
 use crate::session_orchestrator::SessionId;
+#[cfg(target_os = "windows")]
+use crate::window_broker;
 
 /// Runs filesystem and process inspection outside Tauri's main thread.
 async fn run_blocking_command<T, F>(task: F) -> Result<T, String>
@@ -96,6 +96,8 @@ pub struct LaunchReceipt {
     pub id: String,
     pub already_running: bool,
     pub focus_restore_supported: bool,
+    /// True only after an exact owned window actually accepted foreground.
+    pub resumed: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -107,12 +109,42 @@ struct AppSpec {
 }
 
 const APP_SPECS: &[AppSpec] = &[
-    AppSpec { id: "steamBigPicture", name: "Steam Big Picture", process_name: "steam.exe", focus_restore_supported: false },
-    AppSpec { id: "appleMusic", name: "Apple Music", process_name: "AppleMusic.exe", focus_restore_supported: false },
-    AppSpec { id: "playniteFullscreen", name: "Playnite Fullscreen", process_name: "Playnite.FullscreenApp.exe", focus_restore_supported: true },
-    AppSpec { id: "chrome", name: "Google Chrome", process_name: "chrome.exe", focus_restore_supported: false },
-    AppSpec { id: "edge", name: "Microsoft Edge", process_name: "msedge.exe", focus_restore_supported: false },
-    AppSpec { id: "firefox", name: "Mozilla Firefox", process_name: "firefox.exe", focus_restore_supported: false },
+    AppSpec {
+        id: "steamBigPicture",
+        name: "Steam Big Picture",
+        process_name: "steam.exe",
+        focus_restore_supported: false,
+    },
+    AppSpec {
+        id: "appleMusic",
+        name: "Apple Music",
+        process_name: "AppleMusic.exe",
+        focus_restore_supported: false,
+    },
+    AppSpec {
+        id: "playniteFullscreen",
+        name: "Playnite Fullscreen",
+        process_name: "Playnite.FullscreenApp.exe",
+        focus_restore_supported: true,
+    },
+    AppSpec {
+        id: "chrome",
+        name: "Google Chrome",
+        process_name: "chrome.exe",
+        focus_restore_supported: false,
+    },
+    AppSpec {
+        id: "edge",
+        name: "Microsoft Edge",
+        process_name: "msedge.exe",
+        focus_restore_supported: false,
+    },
+    AppSpec {
+        id: "firefox",
+        name: "Mozilla Firefox",
+        process_name: "firefox.exe",
+        focus_restore_supported: false,
+    },
 ];
 
 fn spec_for(id: &str) -> Option<&'static AppSpec> {
@@ -132,27 +164,30 @@ pub async fn get_app_manager_status() -> Result<AppManagerSnapshot, String> {
 fn app_manager_snapshot() -> AppManagerSnapshot {
     #[cfg(target_os = "windows")]
     {
-        let apps = APP_SPECS.iter().map(|spec| {
-            let path = app_path(spec.id);
-            let installed = path.is_some();
-            let (running_instances, last_error) = if installed {
-                match app_process_count(spec.id, spec.process_name) {
-                    Ok(count) => (count, None),
-                    Err(error) => (0, Some(error)),
+        let apps = APP_SPECS
+            .iter()
+            .map(|spec| {
+                let path = app_path(spec.id);
+                let installed = path.is_some();
+                let (running_instances, last_error) = if installed {
+                    match app_process_count(spec.id, spec.process_name) {
+                        Ok(count) => (count, None),
+                        Err(error) => (0, Some(error)),
+                    }
+                } else {
+                    (0, None)
+                };
+                ManagedAppStatus {
+                    id: spec.id.into(),
+                    name: spec.name.into(),
+                    process_name: spec.process_name.into(),
+                    installed,
+                    running_instances,
+                    focus_restore_supported: spec.focus_restore_supported,
+                    last_error,
                 }
-            } else {
-                (0, None)
-            };
-            ManagedAppStatus {
-                id: spec.id.into(),
-                name: spec.name.into(),
-                process_name: spec.process_name.into(),
-                installed,
-                running_instances,
-                focus_restore_supported: spec.focus_restore_supported,
-                last_error,
-            }
-        }).collect();
+            })
+            .collect();
         let (games, games_error) = if app_path("steamBigPicture").is_some() {
             match steam_games_cached() {
                 Ok(games) => (games, None),
@@ -177,15 +212,18 @@ fn app_manager_snapshot() -> AppManagerSnapshot {
             foreground_process: None,
             games: Vec::new(),
             games_error: None,
-            apps: APP_SPECS.iter().map(|spec| ManagedAppStatus {
-                id: spec.id.into(),
-                name: spec.name.into(),
-                process_name: spec.process_name.into(),
-                installed: false,
-                running_instances: 0,
-                focus_restore_supported: false,
-                last_error: None,
-            }).collect(),
+            apps: APP_SPECS
+                .iter()
+                .map(|spec| ManagedAppStatus {
+                    id: spec.id.into(),
+                    name: spec.name.into(),
+                    process_name: spec.process_name.into(),
+                    installed: false,
+                    running_instances: 0,
+                    focus_restore_supported: false,
+                    last_error: None,
+                })
+                .collect(),
         }
     }
 }
@@ -210,10 +248,11 @@ fn gaming_diagnostics_snapshot() -> GamingDiagnostics {
         };
         let gog_galaxy_detected = first_existing(gog_galaxy_paths()).is_some();
         let cyberpunk_install_detected = first_existing(cyberpunk_paths()).is_some();
-        let (gog_galaxy_running_instances, gog_galaxy_process_error) = match process_count("GalaxyClient.exe") {
-            Ok(count) => (Some(count), None),
-            Err(error) => (None, Some(error)),
-        };
+        let (gog_galaxy_running_instances, gog_galaxy_process_error) =
+            match process_count("GalaxyClient.exe") {
+                Ok(count) => (Some(count), None),
+                Err(error) => (None, Some(error)),
+            };
         GamingDiagnostics {
             windows: true,
             playnite_detected: playnite_path().is_some(),
@@ -236,7 +275,9 @@ fn gaming_diagnostics_snapshot() -> GamingDiagnostics {
             gog_galaxy_process_error: None,
             cyberpunk_install_detected: false,
             disk_space: Vec::new(),
-            disk_space_error: Some("Diagnostyka jest dostępna w natywnej aplikacji Windows.".into()),
+            disk_space_error: Some(
+                "Diagnostyka jest dostępna w natywnej aplikacji Windows.".into(),
+            ),
         }
     }
 }
@@ -246,21 +287,24 @@ pub async fn launch_managed_app(app: AppHandle, id: String) -> Result<LaunchRece
     run_blocking_command(move || launch_managed_app_blocking(app, id)).await
 }
 
-pub(crate) fn launch_managed_app_blocking(app: AppHandle, id: String) -> Result<LaunchReceipt, String> {
-    let spec = spec_for(&id).ok_or_else(|| "Aplikacja nie znajduje się na allowliście VELORA.".to_string())?;
+pub(crate) fn launch_managed_app_blocking(
+    app: AppHandle,
+    id: String,
+) -> Result<LaunchReceipt, String> {
+    let spec = spec_for(&id)
+        .ok_or_else(|| "Aplikacja nie znajduje się na allowliście VELORA.".to_string())?;
 
     #[cfg(target_os = "windows")]
     {
+        if let Some(receipt) = resume_owned_managed_launch(&app, spec)? {
+            return Ok(receipt);
+        }
         let executable = app_path(spec.id)
             .ok_or_else(|| format!("Nie wykryto zainstalowanej aplikacji: {}.", spec.name))?;
         let count = app_process_count_fresh(spec.id, spec.process_name)?;
         let already_running = count > 0;
         if already_running && !should_dispatch_when_running(spec.id) {
-            return Ok(LaunchReceipt {
-                id,
-                already_running: true,
-                focus_restore_supported: false,
-            });
+            return Err(format!("{} już działa poza potwierdzoną sesją VELORA. Nie można bezpiecznie przywrócić jej okna. Usługi wideo otwieraj przez ich kafelki.", spec.name));
         }
 
         let steam_pid_before = if spec.id == "steamBigPicture" {
@@ -277,26 +321,50 @@ pub(crate) fn launch_managed_app_blocking(app: AppHandle, id: String) -> Result<
             }
             _ => None,
         };
+        let existing_identity = existing_process_id.and_then(process_table::identity);
         let mut command = Command::new(executable);
         match spec.id {
-            "steamBigPicture" => { command.arg("steam://open/bigpicture"); }
-            "playniteFullscreen" => { command.arg("--startfullscreen"); }
+            "steamBigPicture" => {
+                command.arg("steam://open/bigpicture");
+            }
+            "playniteFullscreen" => {
+                command.arg("--startfullscreen");
+            }
             _ => {}
         }
-        let child = command.spawn().map_err(|error| format!("Windows nie uruchomił aplikacji {}: {error}", spec.name))?;
+        let child = command
+            .spawn()
+            .map_err(|error| format!("Windows nie uruchomił aplikacji {}: {error}", spec.name))?;
         let child_id = child.id();
+        let spawned_identity = process_table::identity(child_id);
         drop(child);
         // Hand the foreground to the spawned process and to an already-running
         // client it may forward the request to. Only the foreground process can
         // grant this, and VELORA is foreground because the user just launched it.
         window_broker::grant_foreground_handoff(&[child_id, existing_process_id.unwrap_or(0)]);
-        let watch = managed_app_watch(spec, child_id, steam_pid_before);
+        let mut watch = managed_app_watch(spec, child_id, steam_pid_before.or(existing_process_id));
+        // Capture the newly spawned instance before it can exit and a recycled
+        // PID becomes observable. A browser opener handing off elsewhere does
+        // not grant ownership of that unrelated final browser process.
+        let identity = existing_identity.or(spawned_identity).ok_or_else(|| {
+            untracked_launch_message(
+                spec.name,
+                "Nie przechwycono tożsamości uruchomionego procesu.",
+            )
+        })?;
+        if !watch.capture_root_identity(identity) {
+            return Err(untracked_launch_message(
+                spec.name,
+                "Proces docelowy zmienił tożsamość przed śledzeniem.",
+            ));
+        }
         launch_registry::track_launch(&app, watch)
             .map_err(|error| untracked_launch_message(spec.name, &error))?;
         Ok(LaunchReceipt {
             id,
             already_running,
             focus_restore_supported: spec.focus_restore_supported,
+            resumed: false,
         })
     }
 
@@ -305,6 +373,60 @@ pub(crate) fn launch_managed_app_blocking(app: AppHandle, id: String) -> Result<
         let _ = (app, spec);
         Err("App Manager jest dostępny tylko w natywnej aplikacji Windows.".into())
     }
+}
+
+fn managed_resume_owner(
+    launch: &crate::launch_registry::LaunchSession,
+    app_id: &str,
+    process_id: u32,
+    identities: &[crate::process_table::ProcessIdentity],
+) -> Option<crate::process_table::ProcessIdentity> {
+    if !launch.phase.is_active()
+        || launch.pid_reuse_detected
+        || launch.app_id.as_deref() != Some(app_id)
+        || launch.window_id.is_none()
+        || launch.window_id == Some(0)
+        || !launch.process_ids.contains(&process_id)
+    {
+        return None;
+    }
+    identities
+        .iter()
+        .copied()
+        .find(|identity| identity.process_id == process_id && identity.created_at_100ns != 0)
+}
+
+#[cfg(target_os = "windows")]
+fn resume_owned_managed_launch(
+    app: &AppHandle,
+    spec: &AppSpec,
+) -> Result<Option<LaunchReceipt>, String> {
+    let Some(launch) = launch_registry::active_launch_for_app(app, spec.id) else {
+        return Ok(None);
+    };
+    let Some(window) = launch.window_id else {
+        return Ok(None);
+    };
+    let Some(process_id) = window_broker::window_process_id(window) else {
+        return Ok(None);
+    };
+    let owners = launch_registry::owned_identities_for_active_launch(app, &launch.id);
+    let Some(owner) = managed_resume_owner(&launch, spec.id, process_id, &owners) else {
+        return Ok(None);
+    };
+    if !process_table::identity(owner.process_id).is_some_and(|live| live.matches(owner)) {
+        return Ok(None);
+    }
+    launch_registry::select_existing_launch(app, &launch.id)?;
+    if !window_broker::activate_owned_window(window, owner.process_id, owner.created_at_100ns)? {
+        return Err(format!("Windows nie przywrócił fokusu {}. Sesja pozostaje śledzona; ponów próbę z centrum sterowania.", spec.name));
+    }
+    Ok(Some(LaunchReceipt {
+        id: spec.id.into(),
+        already_running: true,
+        focus_restore_supported: spec.focus_restore_supported,
+        resumed: true,
+    }))
 }
 
 /// Error for a launch whose process started but could not be tracked. The app is
@@ -317,44 +439,50 @@ fn untracked_launch_message(name: &str, cause: &str) -> String {
 
 #[cfg(target_os = "windows")]
 fn managed_app_watch(spec: &AppSpec, child_id: u32, steam_pid_before: Option<u32>) -> LaunchWatch {
-    let (image_names, root_process_id, descendants_only, root_counts_as_running, ignore_baseline_windows, session_target) =
-        match spec.id {
-            "playniteFullscreen" => (
-                vec![
-                    "Playnite.FullscreenApp.exe".to_string(),
-                    "Playnite.DesktopApp.exe".to_string(),
-                ],
-                None,
-                false,
-                false,
-                true,
-                Some(SessionId::Playnite),
-            ),
-            "steamBigPicture" => (
-                Vec::new(),
-                steam_pid_before.or(Some(child_id)),
-                true,
-                true,
-                true,
-                Some(SessionId::Game),
-            ),
-            "chrome" | "edge" | "firefox" => (
-                vec![spec.process_name.to_string()],
-                None,
-                false,
-                false,
-                true,
-                Some(SessionId::Cinema),
-            ),
-            _ => (
-                vec![spec.process_name.to_string()],
-                None,
-                false,
-                false,
-                true,
-                None,
-            ),
-        };
+    let (
+        image_names,
+        root_process_id,
+        descendants_only,
+        root_counts_as_running,
+        ignore_baseline_windows,
+        session_target,
+    ) = match spec.id {
+        "playniteFullscreen" => (
+            vec![
+                "Playnite.FullscreenApp.exe".to_string(),
+                "Playnite.DesktopApp.exe".to_string(),
+            ],
+            steam_pid_before.or(Some(child_id)),
+            true,
+            true,
+            true,
+            Some(SessionId::Playnite),
+        ),
+        "steamBigPicture" => (
+            Vec::new(),
+            steam_pid_before.or(Some(child_id)),
+            true,
+            true,
+            true,
+            Some(SessionId::Game),
+        ),
+        "chrome" | "edge" | "firefox" => (
+            vec![spec.process_name.to_string()],
+            Some(child_id),
+            true,
+            true,
+            true,
+            Some(SessionId::Cinema),
+        ),
+        _ => (
+            vec![spec.process_name.to_string()],
+            Some(child_id),
+            true,
+            true,
+            true,
+            None,
+        ),
+    };
     LaunchWatch::new(
         match spec.id {
             "playniteFullscreen" => LaunchKind::Playnite,
@@ -371,24 +499,38 @@ fn managed_app_watch(spec: &AppSpec, child_id: u32, steam_pid_before: Option<u32
         ignore_baseline_windows,
         session_target,
     )
+    .include_root_window()
 }
 
 #[tauri::command]
-pub async fn launch_managed_game(app: AppHandle, id: String) -> Result<ManagedGameLaunchReceipt, String> {
+pub async fn launch_managed_game(
+    app: AppHandle,
+    id: String,
+) -> Result<ManagedGameLaunchReceipt, String> {
     run_blocking_command(move || launch_managed_game_blocking(app, id)).await
 }
 
-fn launch_managed_game_blocking(app: AppHandle, id: String) -> Result<ManagedGameLaunchReceipt, String> {
+fn launch_managed_game_blocking(
+    app: AppHandle,
+    id: String,
+) -> Result<ManagedGameLaunchReceipt, String> {
     if !is_valid_steam_app_id(&id) {
         return Err("Nieprawidłowy identyfikator gry Steam.".into());
     }
 
     #[cfg(target_os = "windows")]
     {
-        let game = steam_games()?.into_iter().find(|game| game.id == id)
-            .ok_or_else(|| format!("Gra Steam o ID {} nie znajduje się w dostępnej, zainstalowanej bibliotece.", id))?;
-        let executable = steam_path()
-            .ok_or_else(|| "Nie wykryto pliku wykonywalnego Steam.".to_string())?;
+        let game = steam_games()?
+            .into_iter()
+            .find(|game| game.id == id)
+            .ok_or_else(|| {
+                format!(
+                    "Gra Steam o ID {} nie znajduje się w dostępnej, zainstalowanej bibliotece.",
+                    id
+                )
+            })?;
+        let executable =
+            steam_path().ok_or_else(|| "Nie wykryto pliku wykonywalnego Steam.".to_string())?;
         // Resolve the existing Steam client and capture its current descendant
         // tree before spawning. This prevents a fast game start or a second
         // steam.exe stub from becoming the baseline/root by mistake.
@@ -427,7 +569,10 @@ fn launch_managed_game_blocking(app: AppHandle, id: String) -> Result<ManagedGam
         }
         launch_registry::track_launch(&app, watch)
             .map_err(|error| untracked_launch_message(&game.name, &error))?;
-        Ok(ManagedGameLaunchReceipt { id: game.id, launched: true })
+        Ok(ManagedGameLaunchReceipt {
+            id: game.id,
+            launched: true,
+        })
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -443,7 +588,11 @@ fn app_path(id: &str) -> Option<PathBuf> {
         "steamBigPicture" => steam_path(),
         "appleMusic" => std::env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
-            .map(|root| root.join("Microsoft").join("WindowsApps").join("AppleMusic.exe"))
+            .map(|root| {
+                root.join("Microsoft")
+                    .join("WindowsApps")
+                    .join("AppleMusic.exe")
+            })
             .filter(|path| path.is_file()),
         "playniteFullscreen" => playnite_path(),
         "chrome" => browser_paths("Google", "Chrome", "Application", "chrome.exe"),
@@ -454,7 +603,9 @@ fn app_path(id: &str) -> Option<PathBuf> {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn app_path(_id: &str) -> Option<PathBuf> { None }
+fn app_path(_id: &str) -> Option<PathBuf> {
+    None
+}
 
 #[cfg(target_os = "windows")]
 fn steam_path() -> Option<PathBuf> {
@@ -475,7 +626,11 @@ fn playnite_path() -> Option<PathBuf> {
     let mut paths = Vec::new();
     for root in standard_install_roots() {
         paths.push(root.join("Playnite").join("Playnite.FullscreenApp.exe"));
-        paths.push(root.join("Programs").join("Playnite").join("Playnite.FullscreenApp.exe"));
+        paths.push(
+            root.join("Programs")
+                .join("Playnite")
+                .join("Playnite.FullscreenApp.exe"),
+        );
     }
     first_existing(paths)
 }
@@ -485,7 +640,9 @@ fn standard_install_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     for key in ["LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"] {
         if let Some(root) = std::env::var_os(key).map(PathBuf::from) {
-            if !roots.contains(&root) { roots.push(root); }
+            if !roots.contains(&root) {
+                roots.push(root);
+            }
         }
     }
     if let Ok(drives) = fixed_drive_roots() {
@@ -495,7 +652,9 @@ fn standard_install_roots() -> Vec<PathBuf> {
                 drive.join("Program Files"),
                 drive.join("Program Files (x86)"),
             ] {
-                if !roots.contains(&root) { roots.push(root); }
+                if !roots.contains(&root) {
+                    roots.push(root);
+                }
             }
         }
     }
@@ -504,7 +663,8 @@ fn standard_install_roots() -> Vec<PathBuf> {
 
 #[cfg(target_os = "windows")]
 fn gog_galaxy_paths() -> Vec<PathBuf> {
-    standard_install_roots().into_iter()
+    standard_install_roots()
+        .into_iter()
         .map(|root| root.join("GOG Galaxy").join("GalaxyClient.exe"))
         .collect()
 }
@@ -513,16 +673,29 @@ fn gog_galaxy_paths() -> Vec<PathBuf> {
 fn cyberpunk_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
     for root in standard_install_roots() {
-        paths.push(root.join("GOG Games").join("Cyberpunk 2077").join("bin").join("x64").join("Cyberpunk2077.exe"));
-        paths.push(root.join("GOG Galaxy").join("Games").join("Cyberpunk 2077").join("bin").join("x64").join("Cyberpunk2077.exe"));
+        paths.push(
+            root.join("GOG Games")
+                .join("Cyberpunk 2077")
+                .join("bin")
+                .join("x64")
+                .join("Cyberpunk2077.exe"),
+        );
+        paths.push(
+            root.join("GOG Galaxy")
+                .join("Games")
+                .join("Cyberpunk 2077")
+                .join("bin")
+                .join("x64")
+                .join("Cyberpunk2077.exe"),
+        );
     }
     paths
 }
 
 #[cfg(target_os = "windows")]
 fn fixed_drive_roots() -> Result<Vec<PathBuf>, String> {
-    use windows::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives};
     use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives};
 
     let mask = unsafe { GetLogicalDrives() };
     if mask == 0 {
@@ -530,10 +703,15 @@ fn fixed_drive_roots() -> Result<Vec<PathBuf>, String> {
     }
     let mut roots = Vec::new();
     for index in 0..26 {
-        if mask & (1 << index) == 0 { continue; }
+        if mask & (1 << index) == 0 {
+            continue;
+        }
         let letter = char::from(b'A' + index as u8);
         let root = format!("{letter}:\\");
-        let wide = root.encode_utf16().chain(std::iter::once(0)).collect::<Vec<_>>();
+        let wide = root
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
         // DRIVE_FIXED = 3. Network and removable volumes are excluded to avoid
         // triggering remote lookups or waiting for disconnected media.
         if unsafe { GetDriveTypeW(PCWSTR(wide.as_ptr())) } == 3 {
@@ -545,11 +723,16 @@ fn fixed_drive_roots() -> Result<Vec<PathBuf>, String> {
 
 #[cfg(target_os = "windows")]
 fn disk_space_status(root: &Path) -> DiskSpaceStatus {
-    use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
     use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 
     let drive = root.to_string_lossy().trim_end_matches('\\').to_string();
-    let wide = root.as_os_str().to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect::<Vec<_>>();
+    let wide = root
+        .as_os_str()
+        .to_string_lossy()
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
     let mut available = 0u64;
     let mut total = 0u64;
     let result = unsafe {
@@ -561,8 +744,18 @@ fn disk_space_status(root: &Path) -> DiskSpaceStatus {
         )
     };
     match result {
-        Ok(()) => DiskSpaceStatus { drive, available_bytes: Some(available), total_bytes: Some(total), error: None },
-        Err(_) => DiskSpaceStatus { drive, available_bytes: None, total_bytes: None, error: Some("Nie udało się odczytać wolnego miejsca.".into()) },
+        Ok(()) => DiskSpaceStatus {
+            drive,
+            available_bytes: Some(available),
+            total_bytes: Some(total),
+            error: None,
+        },
+        Err(_) => DiskSpaceStatus {
+            drive,
+            available_bytes: None,
+            total_bytes: None,
+            error: Some("Nie udało się odczytać wolnego miejsca.".into()),
+        },
     }
 }
 
@@ -571,8 +764,18 @@ fn browser_paths(vendor: &str, product: &str, channel: &str, executable: &str) -
     let mut paths = Vec::new();
     for key in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
         if let Some(root) = std::env::var_os(key).map(PathBuf::from) {
-            let prefix = if key == "LOCALAPPDATA" { root.join("Programs") } else { root };
-            paths.push(prefix.join(vendor).join(product).join(channel).join(executable));
+            let prefix = if key == "LOCALAPPDATA" {
+                root.join("Programs")
+            } else {
+                root
+            };
+            paths.push(
+                prefix
+                    .join(vendor)
+                    .join(product)
+                    .join(channel)
+                    .join(executable),
+            );
         }
     }
     first_existing(paths)
@@ -597,7 +800,10 @@ fn is_valid_steam_app_id(id: &str) -> bool {
 }
 
 fn parse_vdf_quoted(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<String> {
-    while chars.peek().is_some_and(|character| character.is_whitespace()) {
+    while chars
+        .peek()
+        .is_some_and(|character| character.is_whitespace())
+    {
         chars.next();
     }
     if chars.next()? != '"' {
@@ -646,13 +852,21 @@ fn parse_steam_manifest(contents: &str) -> Option<ParsedSteamManifest> {
     let id = id?;
     let name = name?.trim().to_string();
     let install_dir = install_dir?;
-    if !is_valid_steam_app_id(&id) || name.is_empty() || install_dir.trim().is_empty()
-        || Path::new(&install_dir).components().any(|part| !matches!(part, Component::Normal(_)))
+    if !is_valid_steam_app_id(&id)
+        || name.is_empty()
+        || install_dir.trim().is_empty()
+        || Path::new(&install_dir)
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
     {
         return None;
     }
     Some(ParsedSteamManifest {
-        game: ManagedGame { id, name, launcher: "Steam".into() },
+        game: ManagedGame {
+            id,
+            name,
+            launcher: "Steam".into(),
+        },
         install_dir,
     })
 }
@@ -660,7 +874,9 @@ fn parse_steam_manifest(contents: &str) -> Option<ParsedSteamManifest> {
 #[cfg(target_os = "windows")]
 fn steam_games() -> Result<Vec<ManagedGame>, String> {
     let executable = steam_path().ok_or_else(|| "Nie wykryto Steam.".to_string())?;
-    let root = executable.parent().ok_or_else(|| "Nie można ustalić katalogu Steam.".to_string())?;
+    let root = executable
+        .parent()
+        .ok_or_else(|| "Nie można ustalić katalogu Steam.".to_string())?;
     let mut libraries = vec![root.to_path_buf()];
     if let Ok(contents) = fs::read_to_string(root.join("steamapps").join("libraryfolders.vdf")) {
         for line in contents.lines() {
@@ -680,7 +896,10 @@ fn steam_games() -> Result<Vec<ManagedGame>, String> {
     for library in libraries {
         let steamapps = library.join("steamapps");
         let entries = match fs::read_dir(&steamapps) {
-            Ok(entries) => { scanned += 1; entries }
+            Ok(entries) => {
+                scanned += 1;
+                entries
+            }
             Err(_) => continue,
         };
         for entry in entries.flatten() {
@@ -688,8 +907,12 @@ fn steam_games() -> Result<Vec<ManagedGame>, String> {
             if !file_name.starts_with("appmanifest_") || !file_name.ends_with(".acf") {
                 continue;
             }
-            let Ok(contents) = fs::read_to_string(entry.path()) else { continue; };
-            let Some(parsed) = parse_steam_manifest(&contents) else { continue; };
+            let Ok(contents) = fs::read_to_string(entry.path()) else {
+                continue;
+            };
+            let Some(parsed) = parse_steam_manifest(&contents) else {
+                continue;
+            };
             if !steamapps.join("common").join(&parsed.install_dir).is_dir() {
                 continue;
             }
@@ -791,6 +1014,59 @@ mod tests {
     };
 
     #[test]
+    fn managed_resume_rejects_foreign_app_missing_window_and_unknown_pid() {
+        let mut launch = crate::launch_registry::LaunchSession {
+            id: "owned-app".into(),
+            kind: crate::launch_registry::LaunchKind::Steam,
+            display_name: "Steam".into(),
+            app_id: Some("steamBigPicture".into()),
+            phase: crate::launch_registry::LaunchPhase::SessionActive,
+            process_ids: vec![11],
+            foreground: false,
+            window_id: Some(77),
+            started_at_ms: 1,
+            updated_at_ms: 1,
+            error: None,
+            restore: None,
+            session_revision: None,
+            pid_reuse_detected: false,
+            attention: None,
+        };
+        let owner = crate::process_table::ProcessIdentity {
+            process_id: 11,
+            created_at_100ns: 100,
+        };
+        assert_eq!(
+            super::managed_resume_owner(&launch, "steamBigPicture", 11, &[owner]),
+            Some(owner)
+        );
+        assert!(super::managed_resume_owner(&launch, "edge", 11, &[owner]).is_none());
+        assert!(super::managed_resume_owner(&launch, "steamBigPicture", 12, &[owner]).is_none());
+        assert!(super::managed_resume_owner(&launch, "steamBigPicture", 11, &[]).is_none());
+        launch.window_id = None;
+        assert!(super::managed_resume_owner(&launch, "steamBigPicture", 11, &[owner]).is_none());
+        launch.window_id = Some(77);
+        launch.pid_reuse_detected = true;
+        assert!(super::managed_resume_owner(&launch, "steamBigPicture", 11, &[owner]).is_none());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn managed_watch_scopes_root_and_captures_the_actual_spawn_instance() {
+        let browser = super::managed_app_watch(super::spec_for("edge").unwrap(), 10, None);
+        assert_eq!(browser.root_process_id, Some(10));
+        assert!(
+            browser.descendants_only
+                && browser.root_counts_as_running
+                && browser.include_root_window
+        );
+        let playnite =
+            super::managed_app_watch(super::spec_for("playniteFullscreen").unwrap(), 10, Some(20));
+        assert_eq!(playnite.root_process_id, Some(20));
+        assert!(playnite.descendants_only && playnite.include_root_window);
+    }
+
+    #[test]
     fn untracked_launch_reports_the_app_and_the_cause() {
         let message = untracked_launch_message("Steam", "Brak rejestru");
         assert!(message.starts_with("Steam uruchomiono"));
@@ -866,5 +1142,4 @@ mod tests {
             "installdir" "../escape""#;
         assert!(parse_steam_manifest(traversal).is_none());
     }
-
 }

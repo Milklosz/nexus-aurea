@@ -124,6 +124,22 @@ pub(crate) struct LaunchWatch {
 }
 
 impl LaunchWatch {
+    /// Seed the actual process instance captured at spawn/single-instance
+    /// handoff time; never let a later PID lookup establish another owner.
+    pub(crate) fn capture_root_identity(&mut self, identity: ProcessIdentity) -> bool {
+        if self.root_process_id != Some(identity.process_id)
+            || identity.process_id == 0
+            || identity.created_at_100ns == 0
+            || self
+                .root_identity
+                .is_some_and(|expected| !expected.matches(identity))
+        {
+            return false;
+        }
+        self.root_identity = Some(identity);
+        true
+    }
+
     pub(crate) fn new(
         kind: LaunchKind,
         display_name: impl Into<String>,
@@ -1164,27 +1180,56 @@ pub(crate) fn owned_process_identities_for_launch(
                     .as_deref()
                     .is_some_and(crate::edge_cinema::is_service_cinema_app_id)
         })
-        .map(|tracked| {
-            let mut identities = tracked
-                .known_identities
-                .iter()
-                .map(|(process_id, created_at_100ns)| ProcessIdentity {
-                    process_id: *process_id,
-                    created_at_100ns: *created_at_100ns,
-                })
-                .collect::<Vec<_>>();
-            if !tracked.watch.root_reused {
-                if let Some(identity) = tracked.watch.root_identity {
-                    if !identities
-                        .iter()
-                        .any(|known| known.process_id == identity.process_id)
-                    {
-                        identities.push(identity);
-                    }
-                }
-            }
-            identities
+        .map(captured_active_identities)
+        .unwrap_or_default()
+}
+
+fn captured_active_identities(tracked: &TrackedLaunch) -> Vec<ProcessIdentity> {
+    if !tracked.session.phase.is_active()
+        || tracked.session.pid_reuse_detected
+        || tracked.watch.root_reused
+    {
+        return Vec::new();
+    }
+    let mut identities = tracked
+        .known_identities
+        .iter()
+        .filter_map(|(process_id, created_at_100ns)| {
+            (*process_id != 0 && *created_at_100ns != 0).then_some(ProcessIdentity {
+                process_id: *process_id,
+                created_at_100ns: *created_at_100ns,
+            })
         })
+        .collect::<Vec<_>>();
+    if let Some(identity) = tracked.watch.root_identity {
+        if identity.process_id != 0
+            && identity.created_at_100ns != 0
+            && !identities
+                .iter()
+                .any(|known| known.process_id == identity.process_id)
+        {
+            identities.push(identity);
+        }
+    }
+    identities.sort_by_key(|identity| identity.process_id);
+    identities
+}
+
+/// Captured identities for any one active launch, never a fresh process-name
+/// match. Snapshots root and observed descendants while holding the registry
+/// lock; callers still have to revalidate the live HWND and process timestamp.
+pub(crate) fn owned_identities_for_active_launch(
+    app: &AppHandle,
+    launch_id: &str,
+) -> Vec<ProcessIdentity> {
+    app.state::<LaunchRegistry>()
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .launches
+        .iter()
+        .find(|tracked| tracked.session.id == launch_id)
+        .map(captured_active_identities)
         .unwrap_or_default()
 }
 
@@ -1192,6 +1237,25 @@ pub(crate) fn owned_process_identities_for_launch(
 /// updates the authoritative SessionContext to the chosen launch without
 /// creating a duplicate registry entry or superseding a sibling service.
 pub(crate) fn select_existing_cinema_launch(
+    app: &AppHandle,
+    launch_id: &str,
+) -> Result<LaunchSession, String> {
+    let launch =
+        launch_by_id(app, launch_id).ok_or_else(|| "Nie znaleziono sesji usługi.".to_string())?;
+    if launch.kind != LaunchKind::Cinema
+        || !launch
+            .app_id
+            .as_deref()
+            .is_some_and(crate::edge_cinema::is_service_cinema_app_id)
+    {
+        return Err("Sesja nie jest usługą Edge Cinema.".into());
+    }
+    select_existing_launch(app, launch_id)
+}
+
+/// Re-select an existing managed session after Home without superseding another
+/// registry entry. This native-only helper receives an already allowlisted app.
+pub(crate) fn select_existing_launch(
     app: &AppHandle,
     launch_id: &str,
 ) -> Result<LaunchSession, String> {
@@ -1211,20 +1275,21 @@ pub(crate) fn select_existing_cinema_launch(
         .iter()
         .position(|tracked| {
             tracked.session.id == launch_id
-                && tracked.session.kind == LaunchKind::Cinema
                 && tracked.session.phase.is_active()
-                && tracked
-                    .session
-                    .app_id
-                    .as_deref()
-                    .is_some_and(crate::edge_cinema::is_service_cinema_app_id)
+                && !tracked.session.pid_reuse_detected
         })
         .ok_or_else(|| "Nie znaleziono aktywnej sesji tej usługi Edge Cinema.".to_string())?;
     let mut session = state.launches[tracked_index].session.clone();
+    let Some(target) = session_target_for(
+        session.kind,
+        state.launches[tracked_index].watch.session_target,
+    ) else {
+        return Ok(session);
+    };
 
     let context = SessionContext::for_launch(&session.id, session.app_id.as_deref(), None);
     let current = session_orchestrator::current_snapshot(app);
-    let steps = session_orchestrator::transition_steps(current.current, SessionId::Cinema)?;
+    let steps = session_orchestrator::transition_steps(current.current, target)?;
     let last_index = steps.len().saturating_sub(1);
     let mut applied = current;
     for (index, step) in steps.iter().enumerate() {
@@ -1236,7 +1301,7 @@ pub(crate) fn select_existing_cinema_launch(
         )
         .map_err(|error| error.message)?;
     }
-    if applied.current != SessionId::Cinema
+    if applied.current != target
         || applied
             .context
             .as_ref()
@@ -1383,6 +1448,43 @@ mod tests {
             window_absent_since_ms: None,
             known_identities: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn captured_resume_owners_require_an_active_unrecycled_process_instance() {
+        let mut launch = tracked();
+        launch.watch.root_process_id = Some(10);
+        assert!(launch.watch.capture_root_identity(ProcessIdentity {
+            process_id: 10,
+            created_at_100ns: 100
+        }));
+        assert!(!launch.watch.capture_root_identity(ProcessIdentity {
+            process_id: 10,
+            created_at_100ns: 101
+        }));
+        assert!(!launch.watch.capture_root_identity(ProcessIdentity {
+            process_id: 11,
+            created_at_100ns: 100
+        }));
+        launch.known_identities.insert(20, 200);
+        assert_eq!(
+            super::captured_active_identities(&launch),
+            vec![
+                ProcessIdentity {
+                    process_id: 10,
+                    created_at_100ns: 100
+                },
+                ProcessIdentity {
+                    process_id: 20,
+                    created_at_100ns: 200
+                }
+            ]
+        );
+        launch.session.pid_reuse_detected = true;
+        assert!(super::captured_active_identities(&launch).is_empty());
+        launch.session.pid_reuse_detected = false;
+        launch.session.phase = LaunchPhase::Ended;
+        assert!(super::captured_active_identities(&launch).is_empty());
     }
 
     fn observation(

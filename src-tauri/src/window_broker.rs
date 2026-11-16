@@ -999,6 +999,19 @@ pub(crate) fn window_process_id(window: u64) -> Option<u32> {
     }
 }
 
+/// Lightweight live HWND query for the bounded streaming input worker. It
+/// deliberately avoids the broker's process-name/whole-table diagnostics.
+pub(crate) fn foreground_window_id() -> Option<u64> {
+    #[cfg(target_os = "windows")]
+    {
+        native::foreground_window_id()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        None
+    }
+}
+
 pub(crate) fn foreground(app: &AppHandle) -> ForegroundWindow {
     app.state::<WindowBroker>().foreground()
 }
@@ -1408,6 +1421,11 @@ mod native {
         let mut process_id = 0u32;
         unsafe { GetWindowThreadProcessId(window, &mut process_id) };
         (process_id != 0).then_some(process_id)
+    }
+
+    pub(super) fn foreground_window_id() -> Option<u64> {
+        let window = unsafe { GetForegroundWindow() };
+        (!window.is_null()).then_some(window_id(window))
     }
 
     pub(super) fn allow_foreground_process(process_id: u32) -> bool {
