@@ -6,7 +6,7 @@ Date: 2026-11-16
 
 - Candidate: VELORA 0.10.0-rc.1 debug executable, built from source commit `f232ea698adf3e15003a167f032543a61f26324e`.
 - Candidate manifest: source tree clean; executable SHA-256 `0979e3f5e0c7ecc2bbce8340898f73cbce777673afc2de3264179be90614b71a`.
-- Launched and operated the local candidate through the repaired `@oai/sky` Computer Use runtime. The installed application was not installed, replaced, or modified.
+- Launched and operated the local candidate through the working `@oai/sky` Computer Use runtime. No helper repair was performed in this follow-up. The installed application was not replaced or modified.
 - Tests used screenshot-backed UI coordinates and refreshed state after actions. An accessibility-index click once opened Prime Video instead of reordering a favorite; subsequent actions used screenshot coordinates. No browser sign-in, cookie, or security prompt was completed.
 
 ## Scenario results
@@ -50,3 +50,24 @@ Managed Netflix Close completed; after refresh the session showed “Zakończona
 The rc.1 restart failure is tracked separately from later candidate validation. Do not promote these results to physical hardware acceptance.
 
 Detailed local observations are retained only in ignored `outputs/`, not uploaded. This public matrix excludes actual device labels, user volume preferences, local topology and game metadata. The final rc.2 build must identify its own source and restart result; the rc.1 failure remains part of the evidence.
+
+## Final rc.2 verification by the integration owner
+
+Exact artifact: `VELORA-0.10.0-rc.2-a7c53b3-debug.exe`, source `a7c53b3034fe00b6fa0c76ff6d4fe5f332c0c5ea`, SHA-256 `236bbb6dce61180fe8ddf0ac9b39d42521c19bd67a45e18712478f36c7e51e05`. The integration owner performed these checks after Luna's rc.1 round; they are not attributed to an agent that did not perform them.
+
+| Final-artifact check | Result | Observed evidence |
+| --- | --- | --- |
+| CU-01 /19: startup and Home | PASS | Selected the exact returned executable window; Cinema Minimal Home, dock and Settings worked. |
+| CU-02 /03: persisted collections | PASS readback | After restart, Home showed the restored initial favorite order and the VELORA-managed recent identities. No further favorite mutations were made in this round. |
+| CU-06 /08 /12: native CC readback | PASS readback | Current native audio endpoint/volume/mute and display refresh/transport/placement were shown. Actual device labels and topology are omitted here. TV controls now have readable 48px minimum targets and wrap inside the panel. |
+| CU-07: write/restore on final file | NOT TESTED | The rc.1 write/restore remains its own PASS. Final round read current state only. |
+| CU-15: actual in-app restart | PASS | Clicked the local restart control; the old window/process was replaced, exactly one new window/process of the same verified final executable appeared, and Home remained responsive. Exact identities stay in local evidence. The preceding restart-fix build 84e7e69 also passed this check. |
+| CU-16 /17: widgets | PASS observed state | Claude Usage showed its stale state, clock used 24-hour format, and Zabrze weather was present. This does not establish every valid/stale/unavailable transition. |
+| CU-18: source and sanitized export | PASS | UI showed version 0.10.0-rc.2 and the exact final source SHA. Export produced report JSON and its SHA-256; the returned UI text contained neither the local username nor a private Windows profile/program path pattern. This bounded observation does not prove universal secret detection. |
+| Final live remote/game/unrelated-window/HDMI acceptance | NOT TESTED / BLOCKED as above | No blanket promotion of rc.1 results, physical device or installer execution is claimed. Final session-close warning has automated coverage; it was not forced by creating more streaming windows in this round. |
+
+One approximately 16-second idle Home sample included the exact candidate and its stable descendant process tree, with creation-time checks. Detailed CPU/memory values stay in ignored `outputs/performance-a7c53b3-local.json`. Working-set sums can double-count shared pages; private bytes are committed allocation. This debug sample is not a release benchmark or a startup/command latency measurement.
+
+## End-of-test cleanup
+
+The final VELORA candidate was closed normally. Only the exact two browser windows created by this test round were then selected, explicitly activated, visually checked as logged-out welcome pages, and closed with their own Alt+F4 UI action. The final window inventory showed neither test browser window nor the candidate remaining. No cookie choice, account sign-in, security prompt, process termination or unrelated-window close was performed. This cleanup is not a PASS for VELORA's earlier unconfirmed WM_CLOSE requests. One occluded browser capture initially showed background pixels; activating the exact returned target corrected capture before any browser input was issued.

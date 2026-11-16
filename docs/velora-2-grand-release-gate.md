@@ -2,15 +2,19 @@
 
 Current follow-up candidate version: `0.10.0-rc.2`, based on preserved rc.1 `f232ea6`. Engineering candidate only. Never stable while hardware acceptance is open. Artifact and live evidence must distinguish these two builds.
 
+Frozen final source: **`a7c53b3034fe00b6fa0c76ff6d4fe5f332c0c5ea`**. Post-build evidence is on a separate documentation branch.
+
 | Gate | Evidence and scope | Status |
 | --- | --- | --- |
 | A Architecture | Single existing launch/window/input authorities, bounded projection and shared IDs | PASS source review |
 | B Implementation | Vitest 946/105 files; full Windows Rust 429 PASS /2 ignored /0 filtered; adapter/provenance 37 PASS; TypeScript PASS; final build/Clippy recorded at delivery | PASS declared automated scope |
-| C Integration | Home/CC/session/remote automated integration; actual Windows UI unverified | Automated checks only |
-| D Computer Use | Follow-up host can operate exact rc.1 candidate; per-scenario evidence and rc.2 smoke are recorded separately | In progress, no blanket PASS |
-| E Security | Independent source review; admin-denial and stale SW delivery issues fixed | SOURCE REVIEW PASS |
-| F Installer | rc.1 NSIS artifact downloaded/hash verified; rc.2 requires own exact-source build; identity unchanged; no installation authorized | rc.2 packaging pending |
+| C Integration | Home/CC/session/remote automated integration; final native Home/source/export/restart/readback smoke observed | PASS declared scope |
+| D Computer Use | rc.1 matrix plus separate exact-source final smoke; live remote/game/unrelated-browser and full device cases remain open | PARTIAL / open cases documented |
+| E Security | Independent reviews; administrative boundary, stale events, pairing CAS and restart ordering reviewed/fixed | SOURCE REVIEW PASS |
+| F Installer | Final run 43953442661 Windows NSIS/provenance and downloaded ZIP/EXE hashes pass; metadata0.10.0-rc.2; no installation | PASS artifact gate; execution NOT TESTED |
 | G Hardware | DS4, iPhone, Panasonic HDMI/audio | BLOCKED |
+
+Final CI: Windows 429 Rust /2 ignored, macOS 378 /1 ignored, Vitest 946 /105 files, provenance 31 and Claude adapter 6; Windows/macOS/Playnite build jobs PASS; stable-release publication SKIPPED. Local Clippy PASS with inherited warnings. The installer SHA-256 is `37605cd38e1cdf6b1fcacc03fda44c4228f3b1f641ce512fb9b6a5c8119732c0`. The CI runner verified its source/checkout/tool context and installer payload relation; local consistency is independently checked, while signature authenticity is not proven. Build commands and tool metadata are recorded; bit-for-bit reproducibility across arbitrary machines is not asserted.
 
 ## Test environment and inherited failures
 
@@ -28,4 +32,4 @@ Rollback without installation: exit the candidate normally and reopen installed 
 
 ## Residual limitations
 
-Resume means application window, not video time. Close is supported only for exact-owned Cinema sessions. Steam collections and the existing supported Playnite manifest/library remain separate. Playnite 10/SDK6 integration does not assert Playnite 11 support. No unsupported default-audio policy API, TV HDMI-CEC, new iOS app, persistent watchdog or account-data scraping is introduced. Two PWA tabs using the same credential can conflict on sequence; the server rejects replay and the user may need to re-pair. Monitor topology/resolution changes can invalidate an opaque display selection and require reselection.
+Resume means application window, not video time. Close is supported only for exact-owned Cinema sessions. Steam collections and the existing supported Playnite manifest/library remain separate. Playnite 10/SDK 6 integration does not assert Playnite 11 support. No unsupported default-audio policy API, TV HDMI-CEC, new iOS app, persistent watchdog or account-data scraping is introduced. Two PWA tabs using the same credential can conflict on sequence; the server rejects replay and the user may need to re-pair. Monitor topology/resolution changes can invalidate an opaque display selection and require reselection.
