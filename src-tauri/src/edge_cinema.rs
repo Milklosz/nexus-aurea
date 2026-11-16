@@ -83,7 +83,6 @@ const ALLOWED_STREAMING_URLS: &[&str] = &[
     "https://www.youtube.com/",
 ];
 
-#[cfg(target_os = "windows")]
 const UNTRUSTED_URL_ERROR: &str = "Adres usługi nie znajduje się na liście zaufanych stron.";
 #[cfg(not(target_os = "windows"))]
 const NON_WINDOWS_ERROR: &str = "Edge Cinema jest dostępne tylko w natywnej aplikacji Windows.";
