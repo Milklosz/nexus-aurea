@@ -23,6 +23,7 @@ use crate::ds4::{
 };
 use crate::gamepad_home::{ChordOutcome, ComboTracker, DualSenseButtons};
 use serde::Serialize;
+use std::collections::HashMap;
 
 pub(crate) const CONTROLLER_EVENT: &str = "velora-controller";
 
@@ -35,18 +36,32 @@ pub(crate) const HEARTBEAT_MS: u64 = 250;
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ControllerEvent {
-    Connected { device: String, revision: Ds4Revision, transport: Ds4Transport },
+    Connected {
+        device: String,
+        revision: Ds4Revision,
+        transport: Ds4Transport,
+    },
     State(Ds4Snapshot),
-    Disconnected { device: String },
-    Unavailable { reason: String },
+    Disconnected {
+        device: String,
+    },
+    Unavailable {
+        reason: String,
+    },
 }
 
 impl From<PadEvent> for ControllerEvent {
     fn from(event: PadEvent) -> Self {
         match event {
-            PadEvent::Connected { label, revision, transport } => {
-                Self::Connected { device: label, revision, transport }
-            }
+            PadEvent::Connected {
+                label,
+                revision,
+                transport,
+            } => Self::Connected {
+                device: label,
+                revision,
+                transport,
+            },
             PadEvent::State(snapshot) => Self::State(snapshot),
             PadEvent::Disconnected { label } => Self::Disconnected { device: label },
         }
@@ -63,6 +78,89 @@ pub struct NativeControllerStatus {
     pub pads: Vec<PadInfo>,
     pub ignored_reports: u64,
     pub dropped_raw_reports: u64,
+    /// Effective Home chord state. A session override wins over Control Service.
+    pub home_enabled: bool,
+    /// `None` follows Control Service; `Some(false/true)` is this-session user intent.
+    pub home_override: Option<bool>,
+    pub received_reports: u64,
+    pub valid_reports: u64,
+    pub background_reports: u64,
+    pub last_report_at_ms: Option<u64>,
+    pub last_home_buttons: Option<NativeHomeButtons>,
+    pub ps_rising_count: u64,
+    pub last_ps_rising_at_ms: Option<u64>,
+    pub options_rising_count: u64,
+    pub last_options_rising_at_ms: Option<u64>,
+    pub last_chord: Option<NativeChordDiagnostic>,
+    pub last_restore: Option<NativeRestoreDiagnostic>,
+    pub queue_rejected: u64,
+    pub last_trace: Option<NativeHomeTrace>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NativeHomeStage {
+    Report,
+    Recognition,
+    Dispatch,
+    Restore,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NativeHomeOutcome {
+    ReportReceived,
+    ValidControllerReport,
+    HomeButtonsChanged,
+    HomeDisabled,
+    ChordTriggered,
+    ReturnQueued,
+    QueueRejected,
+    Restored,
+    AlreadyFocused,
+    BlockedUnsafeForeground,
+    BlockedByWindows,
+    WindowUnavailable,
+    UnsupportedPlatform,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeHomeTrace {
+    pub stage: NativeHomeStage,
+    pub outcome: NativeHomeOutcome,
+    pub at_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeHomeButtons {
+    pub ps: bool,
+    pub options: bool,
+    pub at_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeChordDiagnostic {
+    pub outcome: ChordOutcome,
+    pub at_ms: u64,
+    pub home_enabled: bool,
+    pub action_requested: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeRestoreDiagnostic {
+    pub outcome: NativeHomeOutcome,
+    pub at_ms: u64,
+    pub own_window: Option<u64>,
+    pub foreground_before_hwnd: Option<u64>,
+    pub foreground_after_hwnd: Option<u64>,
+    pub foreground_before_process_id: Option<u32>,
+    pub foreground_after_process_id: Option<u32>,
+    pub error_code: Option<u32>,
 }
 
 /// Output of feeding the core: events to emit and whether the Home chord fired.
@@ -79,14 +177,40 @@ pub(crate) struct CoreOutput {
 pub(crate) struct HubCore {
     tracker: Ds4Tracker,
     chord: ComboTracker,
+    home_override: Option<bool>,
+    legacy_chord_enabled: bool,
     chord_enabled: bool,
     foreground: bool,
     last_heartbeat_ms: u64,
+    received_reports: u64,
+    valid_reports: u64,
+    background_reports: u64,
+    last_report_at_ms: Option<u64>,
+    home_buttons: HashMap<String, DualSenseButtons>,
+    last_home_buttons: Option<NativeHomeButtons>,
+    ps_rising_count: u64,
+    last_ps_rising_at_ms: Option<u64>,
+    options_rising_count: u64,
+    last_options_rising_at_ms: Option<u64>,
+    last_home_buttons_label: Option<String>,
+    last_chord: Option<NativeChordDiagnostic>,
+    last_trace: Option<NativeHomeTrace>,
 }
 
 impl HubCore {
-    pub(crate) fn set_chord_enabled(&mut self, enabled: bool) {
+    pub(crate) fn set_chord_sources(&mut self, home_override: Option<bool>, legacy_enabled: bool) {
+        let enabled = home_override.unwrap_or(legacy_enabled);
+        if enabled && !self.chord_enabled {
+            self.chord.require_neutral_rearm();
+        }
+        self.home_override = home_override;
+        self.legacy_chord_enabled = legacy_enabled;
         self.chord_enabled = enabled;
+    }
+
+    #[cfg(test)]
+    fn set_chord_enabled(&mut self, enabled: bool) {
+        self.set_chord_sources(None, enabled);
     }
 
     #[cfg(test)]
@@ -112,19 +236,91 @@ impl HubCore {
         report: &[u8],
         at_ms: u64,
     ) -> CoreOutput {
+        self.on_report_with_foreground(path, revision, report, at_ms, self.foreground)
+    }
+
+    pub(crate) fn on_report_with_foreground(
+        &mut self,
+        path: &str,
+        revision: Ds4Revision,
+        report: &[u8],
+        at_ms: u64,
+        foreground: bool,
+    ) -> CoreOutput {
+        self.received_reports = self.received_reports.saturating_add(1);
+        if self.last_trace.is_none() {
+            self.last_trace = Some(NativeHomeTrace {
+                stage: NativeHomeStage::Report,
+                outcome: NativeHomeOutcome::ReportReceived,
+                at_ms,
+            });
+        }
+        if !foreground {
+            self.background_reports = self.background_reports.saturating_add(1);
+        }
         let ingest = self.tracker.on_report(path, revision, report, at_ms);
         let mut out = CoreOutput::default();
         out.events = ingest
             .events
             .into_iter()
-            .filter(|event| self.foreground || !matches!(event, PadEvent::State(_)))
+            .filter(|event| foreground || !matches!(event, PadEvent::State(_)))
             .map(ControllerEvent::from)
             .collect();
         if let (Some(label), Some(buttons)) = (ingest.label, ingest.buttons) {
-            let (triggered, outcome) = self.chord.observe_diagnostic(&label, chord_buttons(buttons), at_ms);
+            self.valid_reports = self.valid_reports.saturating_add(1);
+            self.last_report_at_ms = Some(at_ms);
+            let current_buttons = chord_buttons(buttons);
+            let previous_buttons = self.home_buttons.insert(label.clone(), current_buttons);
+            self.last_home_buttons_label = Some(label.clone());
+            self.last_home_buttons = Some(NativeHomeButtons {
+                ps: current_buttons.ps,
+                options: current_buttons.options,
+                at_ms,
+            });
+            if let Some(previous) = previous_buttons {
+                if current_buttons.ps && !previous.ps {
+                    self.ps_rising_count = self.ps_rising_count.saturating_add(1);
+                    self.last_ps_rising_at_ms = Some(at_ms);
+                }
+                if current_buttons.options && !previous.options {
+                    self.options_rising_count = self.options_rising_count.saturating_add(1);
+                    self.last_options_rising_at_ms = Some(at_ms);
+                }
+            }
+            let (triggered, outcome) =
+                self.chord
+                    .observe_diagnostic(&label, current_buttons, at_ms);
             out.chord_outcome = Some(outcome);
-            // The chord is a global Home gesture: it is armed only while the Control
-            // Service has enabled it, exactly like the DualSense chord.
+            if outcome != ChordOutcome::Ignored {
+                let action_requested = triggered && self.chord_enabled;
+                self.last_chord = Some(NativeChordDiagnostic {
+                    outcome,
+                    at_ms,
+                    home_enabled: self.chord_enabled,
+                    action_requested,
+                });
+            }
+            if previous_buttons.is_none() && self.last_trace.is_none() {
+                self.last_trace = Some(NativeHomeTrace {
+                    stage: NativeHomeStage::Report,
+                    outcome: NativeHomeOutcome::ValidControllerReport,
+                    at_ms,
+                });
+            } else if previous_buttons.is_some_and(|previous| previous != current_buttons) {
+                self.last_trace = Some(NativeHomeTrace {
+                    stage: NativeHomeStage::Recognition,
+                    outcome: if outcome == ChordOutcome::Triggered && !self.chord_enabled {
+                        NativeHomeOutcome::HomeDisabled
+                    } else if triggered {
+                        NativeHomeOutcome::ChordTriggered
+                    } else {
+                        NativeHomeOutcome::HomeButtonsChanged
+                    },
+                    at_ms,
+                });
+            }
+            // The chord is a global Home gesture. The session override controls
+            // it independently from the keyboard Control Service setting.
             out.chord = triggered && self.chord_enabled;
         }
         out
@@ -133,7 +329,16 @@ impl HubCore {
     pub(crate) fn on_removed(&mut self, path: &str) -> Vec<ControllerEvent> {
         let label = crate::gamepad_home::device_label(path);
         self.chord.remove_device(&label);
-        self.tracker.on_removed(path).into_iter().map(ControllerEvent::from).collect()
+        self.home_buttons.remove(&label);
+        if self.last_home_buttons_label.as_deref() == Some(label.as_str()) {
+            self.last_home_buttons = None;
+            self.last_home_buttons_label = None;
+        }
+        self.tracker
+            .on_removed(path)
+            .into_iter()
+            .map(ControllerEvent::from)
+            .collect()
     }
 
     /// Periodic housekeeping: drops silent pads, resynchronises the frontend when VELORA
@@ -143,21 +348,38 @@ impl HubCore {
         for event in self.tracker.prune(at_ms) {
             if let PadEvent::Disconnected { label } = &event {
                 self.chord.remove_device(label);
+                self.home_buttons.remove(label);
+                if self.last_home_buttons_label.as_deref() == Some(label.as_str()) {
+                    self.last_home_buttons = None;
+                    self.last_home_buttons_label = None;
+                }
             }
             events.push(event.into());
         }
         self.chord.prune(at_ms);
         // A silent pad that was holding an input is released, never heartbeated.
-        let released = self.tracker.release_silent(at_ms, crate::ds4::SILENCE_RELEASE_MS);
+        let released = self
+            .tracker
+            .release_silent(at_ms, crate::ds4::SILENCE_RELEASE_MS);
         if foreground {
             events.extend(released.into_iter().map(ControllerEvent::State));
-            events.extend(self.tracker.flush_analog(at_ms).into_iter().map(ControllerEvent::State));
+            events.extend(
+                self.tracker
+                    .flush_analog(at_ms)
+                    .into_iter()
+                    .map(ControllerEvent::State),
+            );
         }
         let gained = foreground && !self.foreground;
         self.foreground = foreground;
         if gained {
             // Anything pressed while the window was in the background is reported now.
-            events.extend(self.tracker.snapshots().into_iter().map(ControllerEvent::State));
+            events.extend(
+                self.tracker
+                    .snapshots()
+                    .into_iter()
+                    .map(ControllerEvent::State),
+            );
             self.last_heartbeat_ms = at_ms;
         } else if foreground && at_ms.saturating_sub(self.last_heartbeat_ms) >= HEARTBEAT_MS {
             self.last_heartbeat_ms = at_ms;
@@ -174,7 +396,11 @@ impl HubCore {
 
     /// Everything is released and every pad forgotten, e.g. when the hub stops.
     pub(crate) fn shutdown(&mut self) -> Vec<ControllerEvent> {
-        self.tracker.clear().into_iter().map(ControllerEvent::from).collect()
+        self.tracker
+            .clear()
+            .into_iter()
+            .map(ControllerEvent::from)
+            .collect()
     }
 }
 
@@ -197,6 +423,13 @@ impl PadHub {
     pub(crate) fn start(&self, _app: tauri::AppHandle) {}
     pub(crate) fn stop(&self) {}
     pub(crate) fn set_chord_enabled(&self, _enabled: bool) {}
+    pub(crate) fn set_home_enabled(&self, enabled: bool) -> Result<(), String> {
+        if enabled {
+            Err("Natywny powrót pada jest dostępny tylko w aplikacji Windows.".into())
+        } else {
+            Ok(())
+        }
+    }
     pub(crate) fn ds4_pad_count(&self) -> usize {
         0
     }
@@ -212,11 +445,20 @@ pub fn get_native_controller_status(hub: tauri::State<'_, PadHub>) -> NativeCont
     hub.status()
 }
 
+#[tauri::command]
+pub fn set_controller_home_enabled(
+    hub: tauri::State<'_, PadHub>,
+    enabled: bool,
+) -> Result<NativeControllerStatus, String> {
+    hub.set_home_enabled(enabled)?;
+    Ok(hub.status())
+}
+
 #[cfg(target_os = "windows")]
 mod runtime {
     use super::*;
     use crate::gamepad_home::native;
-    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
     use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
     use std::sync::{Arc, Mutex, PoisonError, RwLock};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -239,7 +481,10 @@ mod runtime {
         running: AtomicBool,
         /// Set by `stop()`; checked every loop turn so a stop that races thread start-up still ends it.
         quit: AtomicBool,
-        chord_enabled: AtomicBool,
+        home_override: AtomicU8,
+        legacy_chord_enabled: AtomicBool,
+        /// Serializes explicit Home policy changes with the dispatch decision.
+        home_policy_gate: Mutex<()>,
         thread_id: AtomicU32,
         status: RwLock<NativeControllerStatus>,
         /// (subscription id, sender). The id lets a dropped old subscription leave a newer one alone.
@@ -263,7 +508,11 @@ mod runtime {
 
     impl Drop for RawSubscription {
         fn drop(&mut self) {
-            let mut guard = self.shared.subscriber.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut guard = self
+                .shared
+                .subscriber
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
             if guard.as_ref().is_some_and(|(id, _)| *id == self.id) {
                 *guard = None;
             }
@@ -281,6 +530,19 @@ mod runtime {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
             .unwrap_or(0)
+    }
+
+    fn session_home_override(shared: &Shared) -> Option<bool> {
+        match shared.home_override.load(Ordering::Acquire) {
+            1 => Some(false),
+            2 => Some(true),
+            _ => None,
+        }
+    }
+
+    fn effective_home_enabled(shared: &Shared) -> bool {
+        session_home_override(shared)
+            .unwrap_or_else(|| shared.legacy_chord_enabled.load(Ordering::Acquire))
     }
 
     impl PadHub {
@@ -303,12 +565,18 @@ mod runtime {
                     // already recorded in the status and announced to the frontend.
                     let _ = started_rx.recv_timeout(std::time::Duration::from_secs(3));
                 }
-                Err(error) => self.record_failure(format!("Nie udało się uruchomić wątku pada: {error}")),
+                Err(error) => {
+                    self.record_failure(format!("Nie udało się uruchomić wątku pada: {error}"))
+                }
             }
         }
 
         fn record_failure(&self, error: String) {
-            let mut status = self.shared.status.write().unwrap_or_else(PoisonError::into_inner);
+            let mut status = self
+                .shared
+                .status
+                .write()
+                .unwrap_or_else(PoisonError::into_inner);
             status.supported = true;
             status.running = false;
             status.last_error = Some(error);
@@ -320,22 +588,83 @@ mod runtime {
             if thread_id != 0 {
                 native::post_quit(thread_id);
             }
-            if let Some(handle) = self.join.lock().unwrap_or_else(PoisonError::into_inner).take() {
+            if let Some(handle) = self
+                .join
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take()
+            {
                 let _ = handle.join();
             }
         }
 
+        fn home_override(&self) -> Option<bool> {
+            match self.shared.home_override.load(Ordering::Acquire) {
+                1 => Some(false),
+                2 => Some(true),
+                _ => None,
+            }
+        }
+
+        fn effective_home_enabled(&self) -> bool {
+            effective_home_enabled(&self.shared)
+        }
+
+        fn publish_home_policy(&self) {
+            let mut status = self
+                .shared
+                .status
+                .write()
+                .unwrap_or_else(PoisonError::into_inner);
+            status.home_override = self.home_override();
+            status.home_enabled = self.effective_home_enabled();
+        }
+
         pub(crate) fn set_chord_enabled(&self, enabled: bool) {
-            self.shared.chord_enabled.store(enabled, Ordering::Release);
+            let _policy = self
+                .shared
+                .home_policy_gate
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            self.shared
+                .legacy_chord_enabled
+                .store(enabled, Ordering::Release);
+            self.publish_home_policy();
+        }
+
+        pub(crate) fn set_home_enabled(&self, enabled: bool) -> Result<(), String> {
+            if !self.shared.running.load(Ordering::Acquire) {
+                return Err("Natywny odczyt kontrolera jest niedostępny.".into());
+            }
+            let _policy = self
+                .shared
+                .home_policy_gate
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            self.shared
+                .home_override
+                .store(if enabled { 2 } else { 1 }, Ordering::Release);
+            self.publish_home_policy();
+            Ok(())
         }
 
         /// Number of DualShock 4 pads currently delivering reports.
         pub(crate) fn ds4_pad_count(&self) -> usize {
-            self.shared.status.read().unwrap_or_else(PoisonError::into_inner).pads.len()
+            self.shared
+                .status
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .pads
+                .len()
         }
 
         pub(crate) fn status(&self) -> NativeControllerStatus {
-            let mut status = self.shared.status.read().unwrap_or_else(PoisonError::into_inner).clone();
+            let mut status = self
+                .shared
+                .status
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
             status.supported = true;
             status
         }
@@ -354,13 +683,28 @@ mod runtime {
                     .unwrap_or_else(|| "Odbiór Raw Input nie jest uruchomiony.".to_string()));
             }
             let (tx, rx) = sync_channel(RAW_QUEUE_CAPACITY);
-            let id = self.shared.next_subscription.fetch_add(1, Ordering::Relaxed);
-            *self.shared.subscriber.lock().unwrap_or_else(PoisonError::into_inner) = Some((id, tx));
-            Ok(RawSubscription { receiver: rx, id, shared: Arc::clone(&self.shared) })
+            let id = self
+                .shared
+                .next_subscription
+                .fetch_add(1, Ordering::Relaxed);
+            *self
+                .shared
+                .subscriber
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some((id, tx));
+            Ok(RawSubscription {
+                receiver: rx,
+                id,
+                shared: Arc::clone(&self.shared),
+            })
         }
     }
 
-    fn run(app: AppHandle, shared: Arc<Shared>, started: std::sync::mpsc::SyncSender<Result<(), String>>) {
+    fn run(
+        app: AppHandle,
+        shared: Arc<Shared>,
+        started: std::sync::mpsc::SyncSender<Result<(), String>>,
+    ) {
         let window = match native::create_message_window() {
             Ok(window) => window,
             Err(error) => {
@@ -373,35 +717,58 @@ mod runtime {
             fail(&app, &shared, &started, error);
             return;
         }
-        shared.thread_id.store(native::current_thread_id(), Ordering::Release);
+        shared
+            .thread_id
+            .store(native::current_thread_id(), Ordering::Release);
         shared.running.store(true, Ordering::Release);
         // If the pump ever unwinds, the status must not keep claiming the sink is alive.
-        let mut guard = RunGuard { app: app.clone(), shared: Arc::clone(&shared), clean: false };
+        let mut guard = RunGuard {
+            app: app.clone(),
+            shared: Arc::clone(&shared),
+            clean: false,
+        };
         {
-            let mut status = shared.status.write().unwrap_or_else(PoisonError::into_inner);
-            *status = NativeControllerStatus { supported: true, running: true, ..Default::default() };
+            let mut status = shared
+                .status
+                .write()
+                .unwrap_or_else(PoisonError::into_inner);
+            *status = NativeControllerStatus {
+                supported: true,
+                running: true,
+                ..Default::default()
+            };
         }
         let _ = started.send(Ok(()));
 
         let mut core = HubCore::default();
         // device handle -> (path, revision). A handle is only resolved once per arrival.
-        let mut devices: std::collections::HashMap<usize, DeviceEntry> = std::collections::HashMap::new();
+        let mut devices: std::collections::HashMap<usize, DeviceEntry> =
+            std::collections::HashMap::new();
         'pump: loop {
             native::wait_for_messages(16);
             if shared.quit.load(Ordering::Acquire) {
                 break 'pump;
             }
             for _ in 0..256 {
-                let Some(message) = native::next_message() else { break; };
+                let Some(message) = native::next_message() else {
+                    break;
+                };
                 match message.message {
                     native::WM_QUIT => break 'pump,
                     native::WM_INPUT => {
                         handle_input(&app, &shared, &mut core, &mut devices, message.l_param);
-                        native::def_window_proc(message.window, message.message, message.w_param, message.l_param);
+                        native::def_window_proc(
+                            message.window,
+                            message.message,
+                            message.w_param,
+                            message.l_param,
+                        );
                     }
                     native::WM_INPUT_DEVICE_CHANGE => {
                         let device = message.l_param as usize;
-                        if message.w_param == native::GIDC_REMOVAL || message.w_param == native::GIDC_ARRIVAL {
+                        if message.w_param == native::GIDC_REMOVAL
+                            || message.w_param == native::GIDC_ARRIVAL
+                        {
                             let mut dualsense = false;
                             if let Some(entry) = devices.remove(&device) {
                                 dualsense = entry.dualsense;
@@ -410,7 +777,13 @@ mod runtime {
                                 }
                             }
                             if dualsense {
-                                forward(&shared, RawMessage::DeviceChange { w_param: message.w_param, device });
+                                forward(
+                                    &shared,
+                                    RawMessage::DeviceChange {
+                                        w_param: message.w_param,
+                                        device,
+                                    },
+                                );
                             }
                             publish_status(&shared, &core);
                         }
@@ -418,7 +791,16 @@ mod runtime {
                     _ => {}
                 }
             }
-            core.set_chord_enabled(shared.chord_enabled.load(Ordering::Acquire));
+            {
+                let _policy = shared
+                    .home_policy_gate
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                core.set_chord_sources(
+                    session_home_override(&shared),
+                    shared.legacy_chord_enabled.load(Ordering::Acquire),
+                );
+            }
             let events = core.tick(now_ms(), native::foreground_is_own_process());
             if !events.is_empty() {
                 emit_all(&app, events);
@@ -427,13 +809,19 @@ mod runtime {
         }
 
         shared.running.store(false, Ordering::Release);
-        *shared.subscriber.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        *shared
+            .subscriber
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = None;
         shared.thread_id.store(0, Ordering::Release);
         emit_all(&app, core.shutdown());
         native::unregister_raw_input();
         native::destroy_message_window(window);
         {
-            let mut status = shared.status.write().unwrap_or_else(PoisonError::into_inner);
+            let mut status = shared
+                .status
+                .write()
+                .unwrap_or_else(PoisonError::into_inner);
             status.running = false;
             status.pads.clear();
         }
@@ -452,16 +840,26 @@ mod runtime {
                 return;
             }
             self.shared.running.store(false, Ordering::Release);
-            *self.shared.subscriber.lock().unwrap_or_else(PoisonError::into_inner) = None;
+            *self
+                .shared
+                .subscriber
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = None;
             self.shared.thread_id.store(0, Ordering::Release);
             let reason = "Odbiór pada zatrzymał się nieoczekiwanie.".to_string();
             {
-                let mut status = self.shared.status.write().unwrap_or_else(PoisonError::into_inner);
+                let mut status = self
+                    .shared
+                    .status
+                    .write()
+                    .unwrap_or_else(PoisonError::into_inner);
                 status.running = false;
                 status.pads.clear();
                 status.last_error = Some(reason.clone());
             }
-            let _ = self.app.emit(CONTROLLER_EVENT, ControllerEvent::Unavailable { reason });
+            let _ = self
+                .app
+                .emit(CONTROLLER_EVENT, ControllerEvent::Unavailable { reason });
         }
     }
 
@@ -471,9 +869,17 @@ mod runtime {
         dualsense: bool,
     }
 
-    fn fail(app: &AppHandle, shared: &Shared, started: &std::sync::mpsc::SyncSender<Result<(), String>>, error: String) {
+    fn fail(
+        app: &AppHandle,
+        shared: &Shared,
+        started: &std::sync::mpsc::SyncSender<Result<(), String>>,
+        error: String,
+    ) {
         {
-            let mut status = shared.status.write().unwrap_or_else(PoisonError::into_inner);
+            let mut status = shared
+                .status
+                .write()
+                .unwrap_or_else(PoisonError::into_inner);
             *status = NativeControllerStatus {
                 supported: true,
                 running: false,
@@ -481,17 +887,32 @@ mod runtime {
                 ..Default::default()
             };
         }
-        let _ = app.emit(CONTROLLER_EVENT, ControllerEvent::Unavailable { reason: error.clone() });
+        let _ = app.emit(
+            CONTROLLER_EVENT,
+            ControllerEvent::Unavailable {
+                reason: error.clone(),
+            },
+        );
         let _ = started.send(Err(error));
     }
 
     fn handle_input(
         app: &AppHandle,
-        shared: &Shared,
+        shared: &Arc<Shared>,
         core: &mut HubCore,
         devices: &mut std::collections::HashMap<usize, DeviceEntry>,
         l_param: isize,
     ) {
+        {
+            let _policy = shared
+                .home_policy_gate
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            core.set_chord_sources(
+                session_home_override(shared),
+                shared.legacy_chord_enabled.load(Ordering::Acquire),
+            );
+        }
         let Some(reports) = native::read_raw_input(l_param) else {
             return;
         };
@@ -515,27 +936,72 @@ mod runtime {
                     None => crate::ds4::ds4_revision_from_path(&path),
                 };
                 let dualsense = crate::gamepad_home::dualsense_identity(ids, &path).is_some();
-                devices.insert(handle, DeviceEntry { path, ds4, dualsense });
+                devices.insert(
+                    handle,
+                    DeviceEntry {
+                        path,
+                        ds4,
+                        dualsense,
+                    },
+                );
             }
             let Some(entry) = devices.get(&handle) else {
                 continue;
             };
             match entry.ds4 {
                 Some(revision) => {
-                    let out = core.on_report(&entry.path, revision, &report.data, at_ms);
-                    let changed = !out.events.is_empty();
+                    let trace_before_report = core.last_trace;
+                    let out = core.on_report_with_foreground(
+                        &entry.path,
+                        revision,
+                        &report.data,
+                        at_ms,
+                        native::foreground_is_own_process(),
+                    );
+                    {
+                        let mut status = shared
+                            .status
+                            .write()
+                            .unwrap_or_else(PoisonError::into_inner);
+                        if core.last_trace != trace_before_report {
+                            status.last_trace = core.last_trace;
+                        }
+                    }
                     emit_all(app, out.events);
                     if out.chord {
-                        trigger_home(app);
+                        let _policy = shared
+                            .home_policy_gate
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner);
+                        if effective_home_enabled(shared) {
+                            trigger_home(app, shared, core, at_ms);
+                        } else {
+                            if let Some(mut chord) = core.last_chord {
+                                chord.home_enabled = false;
+                                chord.action_requested = false;
+                                core.last_chord = Some(chord);
+                            }
+                            let trace = NativeHomeTrace {
+                                stage: NativeHomeStage::Recognition,
+                                outcome: NativeHomeOutcome::HomeDisabled,
+                                at_ms,
+                            };
+                            core.last_trace = Some(trace);
+                            let mut status = shared
+                                .status
+                                .write()
+                                .unwrap_or_else(PoisonError::into_inner);
+                            status.last_trace = Some(trace);
+                        }
                     }
-                    if changed {
-                        publish_status(shared, core);
-                    }
+                    // Status advances for every native report, including when
+                    // background navigation events are intentionally filtered.
+                    publish_status(shared, core);
                 }
                 // A bounded queue also needs a bounded payload. Valid DualSense
                 // reports fit in 78 bytes; allow padding up to 128 bytes.
                 None if entry.dualsense && report.data.len() <= 128 => forwarded.push(report),
-                None => {},
+                None => {}
             }
         }
         if !forwarded.is_empty() {
@@ -543,30 +1009,132 @@ mod runtime {
         }
     }
 
-    fn trigger_home(app: &AppHandle) {
-        use crate::session_orchestrator::{request_return_home, HomeRequestSource, TransitionCause};
-        // Same pipeline and the same policy as the DualSense chord: one explicit attempt, no focus
-        // tricks. The orchestrator reports the outcome through the existing return-home event; a
-        // busy queue (false) simply drops this press, and a second press can retry.
-        let _queued = request_return_home(
+    fn trigger_home(app: &AppHandle, shared: &Arc<Shared>, core: &mut HubCore, at_ms: u64) {
+        use crate::session_orchestrator::{
+            request_return_home, HomeRequestSource, TransitionCause,
+        };
+        // The native DS4 path is local physical intent. It uses the existing Home
+        // transaction and one Windows foreground attempt, without input synthesis.
+        let status_for_complete = Arc::clone(shared);
+        let trace = NativeHomeTrace {
+            stage: NativeHomeStage::Dispatch,
+            outcome: NativeHomeOutcome::ReturnQueued,
+            at_ms,
+        };
+        core.last_trace = Some(trace);
+        {
+            let mut status = shared
+                .status
+                .write()
+                .unwrap_or_else(PoisonError::into_inner);
+            status.last_trace = Some(trace);
+        }
+        let queued = request_return_home(
             app.clone(),
             TransitionCause::GamepadHome,
-            HomeRequestSource::Device,
-            |_result| {},
+            HomeRequestSource::LocalController,
+            move |result| {
+                let at_ms = now_ms();
+                let diagnostic = match result {
+                    Ok(result) => {
+                        let restore = result.restore;
+                        let outcome = match restore.outcome {
+                            crate::window_broker::RestoreOutcome::Restored => {
+                                NativeHomeOutcome::Restored
+                            }
+                            crate::window_broker::RestoreOutcome::AlreadyFocused => {
+                                NativeHomeOutcome::AlreadyFocused
+                            }
+                            crate::window_broker::RestoreOutcome::BlockedUnsafeForeground => {
+                                NativeHomeOutcome::BlockedUnsafeForeground
+                            }
+                            crate::window_broker::RestoreOutcome::BlockedByWindows => {
+                                NativeHomeOutcome::BlockedByWindows
+                            }
+                            crate::window_broker::RestoreOutcome::WindowUnavailable => {
+                                NativeHomeOutcome::WindowUnavailable
+                            }
+                            crate::window_broker::RestoreOutcome::UnsupportedPlatform => {
+                                NativeHomeOutcome::UnsupportedPlatform
+                            }
+                        };
+                        NativeRestoreDiagnostic {
+                            outcome,
+                            at_ms,
+                            own_window: restore.own_window,
+                            foreground_before_hwnd: restore.foreground_before.hwnd,
+                            foreground_after_hwnd: restore.foreground_after.hwnd,
+                            foreground_before_process_id: restore.foreground_before.process_id,
+                            foreground_after_process_id: restore.foreground_after.process_id,
+                            error_code: restore.error_code,
+                        }
+                    }
+                    Err(_) => NativeRestoreDiagnostic {
+                        outcome: NativeHomeOutcome::Failed,
+                        at_ms,
+                        own_window: None,
+                        foreground_before_hwnd: None,
+                        foreground_after_hwnd: None,
+                        foreground_before_process_id: None,
+                        foreground_after_process_id: None,
+                        error_code: None,
+                    },
+                };
+                let mut status = status_for_complete
+                    .status
+                    .write()
+                    .unwrap_or_else(PoisonError::into_inner);
+                status.last_restore = Some(diagnostic);
+                status.last_trace = Some(NativeHomeTrace {
+                    stage: NativeHomeStage::Restore,
+                    outcome: diagnostic.outcome,
+                    at_ms,
+                });
+            },
         );
+        if !queued {
+            let trace = NativeHomeTrace {
+                stage: NativeHomeStage::Dispatch,
+                outcome: NativeHomeOutcome::QueueRejected,
+                at_ms,
+            };
+            core.last_trace = Some(trace);
+            let mut status = shared
+                .status
+                .write()
+                .unwrap_or_else(PoisonError::into_inner);
+            status.queue_rejected = status.queue_rejected.saturating_add(1);
+            status.last_restore = Some(NativeRestoreDiagnostic {
+                outcome: NativeHomeOutcome::QueueRejected,
+                at_ms,
+                own_window: None,
+                foreground_before_hwnd: None,
+                foreground_after_hwnd: None,
+                foreground_before_process_id: None,
+                foreground_after_process_id: None,
+                error_code: None,
+            });
+            status.last_trace = Some(trace);
+        }
     }
 
     fn forward(shared: &Shared, message: RawMessage) {
-        let mut guard = shared.subscriber.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut guard = shared
+            .subscriber
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         if let Some((_, sender)) = guard.as_ref() {
             let epoch = shared.overflow_epoch.load(Ordering::Acquire);
             match sender.try_send(RawEnvelope { epoch, message }) {
-                Ok(()) => {},
+                Ok(()) => {}
                 Err(TrySendError::Disconnected(_)) => *guard = None,
                 Err(TrySendError::Full(_)) => {
                     // Invalidate every queued chord fragment after a lost edge.
                     shared.overflow_epoch.fetch_add(1, Ordering::AcqRel);
-                    let mut status = shared.status.write().unwrap_or_else(PoisonError::into_inner);
+                    let mut status = shared
+                        .status
+                        .write()
+                        .unwrap_or_else(PoisonError::into_inner);
                     status.dropped_raw_reports = status.dropped_raw_reports.saturating_add(1);
                 }
             }
@@ -580,10 +1148,19 @@ mod runtime {
         fn queue_is_bounded_nonblocking_invalidates_on_overload_and_disconnects() {
             let shared = Arc::new(Shared::default());
             shared.running.store(true, Ordering::Release);
-            let hub = PadHub { shared: Arc::clone(&shared), join: Mutex::new(None) };
+            let hub = PadHub {
+                shared: Arc::clone(&shared),
+                join: Mutex::new(None),
+            };
             let subscription = hub.subscribe_raw().unwrap();
             for _ in 0..RAW_QUEUE_CAPACITY + 1 {
-                forward(&shared, RawMessage::DeviceChange { w_param: 0, device: 1 });
+                forward(
+                    &shared,
+                    RawMessage::DeviceChange {
+                        w_param: 0,
+                        device: 1,
+                    },
+                );
             }
             assert_eq!(subscription.epoch(), 1);
             assert_eq!(hub.status().dropped_raw_reports, 1);
@@ -595,11 +1172,20 @@ mod runtime {
         fn replacing_subscription_does_not_let_old_drop_remove_new_one() {
             let shared = Arc::new(Shared::default());
             shared.running.store(true, Ordering::Release);
-            let hub = PadHub { shared: Arc::clone(&shared), join: Mutex::new(None) };
+            let hub = PadHub {
+                shared: Arc::clone(&shared),
+                join: Mutex::new(None),
+            };
             let old = hub.subscribe_raw().unwrap();
             let new = hub.subscribe_raw().unwrap();
             drop(old);
-            forward(&shared, RawMessage::DeviceChange { w_param: 0, device: 1 });
+            forward(
+                &shared,
+                RawMessage::DeviceChange {
+                    w_param: 0,
+                    device: 1,
+                },
+            );
             assert!(new.receiver.try_recv().is_ok());
         }
     }
@@ -611,9 +1197,24 @@ mod runtime {
     }
 
     fn publish_status(shared: &Shared, core: &HubCore) {
-        let mut status = shared.status.write().unwrap_or_else(PoisonError::into_inner);
+        let mut status = shared
+            .status
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
         status.pads = core.pads();
         status.ignored_reports = core.ignored_reports();
+        status.home_override = session_home_override(shared);
+        status.home_enabled = effective_home_enabled(shared);
+        status.received_reports = core.received_reports;
+        status.valid_reports = core.valid_reports;
+        status.background_reports = core.background_reports;
+        status.last_report_at_ms = core.last_report_at_ms;
+        status.last_home_buttons = core.last_home_buttons;
+        status.ps_rising_count = core.ps_rising_count;
+        status.last_ps_rising_at_ms = core.last_ps_rising_at_ms;
+        status.options_rising_count = core.options_rising_count;
+        status.last_options_rising_at_ms = core.last_options_rising_at_ms;
+        status.last_chord = core.last_chord;
     }
 }
 
@@ -623,6 +1224,7 @@ mod tests {
     use crate::ds4::Ds4Button;
 
     const USB_PATH: &str = r"\\?\HID#VID_054C&PID_09CC#7&2a3b4c5d&0&0000#{4d1e55b2}";
+    const USB_PATH_B: &str = r"\\?\HID#VID_054C&PID_09CC#7&2a3b4c5e&0&0000#{4d1e55b2}";
 
     fn usb(face: u8, shoulder: u8, special: u8) -> Vec<u8> {
         let mut report = vec![0u8; 64];
@@ -635,7 +1237,10 @@ mod tests {
     }
 
     fn states(events: &[ControllerEvent]) -> usize {
-        events.iter().filter(|e| matches!(e, ControllerEvent::State(_))).count()
+        events
+            .iter()
+            .filter(|e| matches!(e, ControllerEvent::State(_)))
+            .count()
     }
 
     #[test]
@@ -643,21 +1248,39 @@ mod tests {
         let mut core = HubCore::default();
         core.tick(0, true);
         let out = core.on_report(USB_PATH, Ds4Revision::V2, &usb(0x20, 0, 0), 1);
-        let json: Vec<String> = out.events.iter().map(|e| serde_json::to_string(e).unwrap()).collect();
+        let json: Vec<String> = out
+            .events
+            .iter()
+            .map(|e| serde_json::to_string(e).unwrap())
+            .collect();
         assert_eq!(json.len(), 2);
-        assert!(json[0].starts_with(r#"{"kind":"connected","device":""#), "{}", json[0]);
+        assert!(
+            json[0].starts_with(r#"{"kind":"connected","device":""#),
+            "{}",
+            json[0]
+        );
         assert!(json[0].contains(r#""revision":"v2""#) && json[0].contains(r#""transport":"usb""#));
-        assert!(json[1].starts_with(r#"{"kind":"state","device":""#), "{}", json[1]);
+        assert!(
+            json[1].starts_with(r#"{"kind":"state","device":""#),
+            "{}",
+            json[1]
+        );
         assert!(json[1].contains(r#""buttons":["cross"]"#));
         assert!(json[1].contains(r#""dpad":{"up":false,"down":false,"left":false,"right":false}"#));
         assert!(json[1].contains(r#""leftX":0"#));
         for line in &json {
             let lower = line.to_ascii_lowercase();
-            assert!(!lower.contains("hid#") && !lower.contains("vid_054c") && !lower.contains("2a3b4c5d"));
+            assert!(
+                !lower.contains("hid#")
+                    && !lower.contains("vid_054c")
+                    && !lower.contains("2a3b4c5d")
+            );
         }
-        let unavailable = serde_json::to_string(&ControllerEvent::Unavailable { reason: "x".into() }).unwrap();
+        let unavailable =
+            serde_json::to_string(&ControllerEvent::Unavailable { reason: "x".into() }).unwrap();
         assert_eq!(unavailable, r#"{"kind":"unavailable","reason":"x"}"#);
-        let gone = serde_json::to_string(&ControllerEvent::Disconnected { device: "d".into() }).unwrap();
+        let gone =
+            serde_json::to_string(&ControllerEvent::Disconnected { device: "d".into() }).unwrap();
         assert_eq!(gone, r#"{"kind":"disconnected","device":"d"}"#);
     }
 
@@ -672,7 +1295,9 @@ mod tests {
         let resync = core.tick(10, true);
         assert_eq!(states(&resync), 1);
         match &resync[0] {
-            ControllerEvent::State(snapshot) => assert_eq!(snapshot.buttons, vec![Ds4Button::Cross]),
+            ControllerEvent::State(snapshot) => {
+                assert_eq!(snapshot.buttons, vec![Ds4Button::Cross])
+            }
             other => panic!("unexpected {other:?}"),
         }
         // From now on changes flow.
@@ -680,7 +1305,14 @@ mod tests {
         assert_eq!(states(&out.events), 1);
         // And losing the foreground stops them again.
         core.tick(30, false);
-        assert_eq!(states(&core.on_report(USB_PATH, Ds4Revision::V2, &usb(0x20, 0, 0), 40).events), 0);
+        assert_eq!(
+            states(
+                &core
+                    .on_report(USB_PATH, Ds4Revision::V2, &usb(0x20, 0, 0), 40)
+                    .events
+            ),
+            0
+        );
     }
 
     #[test]
@@ -691,7 +1323,10 @@ mod tests {
         assert!(core.tick(100, true).is_empty(), "too early");
         assert_eq!(states(&core.tick(HEARTBEAT_MS + 1, true)), 1);
         core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 300);
-        assert!(core.tick(HEARTBEAT_MS * 3, true).is_empty(), "neutral pads stay quiet");
+        assert!(
+            core.tick(HEARTBEAT_MS * 3, true).is_empty(),
+            "neutral pads stay quiet"
+        );
     }
 
     #[test]
@@ -700,7 +1335,9 @@ mod tests {
         core.tick(0, true);
         core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 0);
         let events = core.tick(crate::ds4::PAD_STALE_MS + 1, true);
-        assert!(events.iter().any(|e| matches!(e, ControllerEvent::Disconnected { .. })));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, ControllerEvent::Disconnected { .. })));
         assert_eq!(core.pad_count(), 0);
     }
 
@@ -717,34 +1354,61 @@ mod tests {
         let mut core = HubCore::default();
         core.set_chord_enabled(false);
         let out = core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 100);
-        assert!(!out.chord, "disabled: the chord is detected but never acted on");
+        assert!(
+            !out.chord,
+            "disabled: the chord is detected but never acted on"
+        );
         core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 150);
         core.set_chord_enabled(true);
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 1_900);
         // Options then PS within the 250 ms window, either order.
         let first = core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0), 2_000);
         assert!(!first.chord);
         let second = core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 2_100);
         assert!(second.chord);
         // Held: latched, no repeat.
-        assert!(!core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 2_200).chord);
-        assert!(!core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 2_300).chord);
+        assert!(
+            !core
+                .on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 2_200)
+                .chord
+        );
+        assert!(
+            !core
+                .on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 2_300)
+                .chord
+        );
     }
 
     #[test]
     fn ps_alone_or_options_alone_never_fires_the_chord() {
         let mut core = HubCore::default();
         core.set_chord_enabled(true);
-        assert!(!core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0x01), 100).chord);
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 0);
+        assert!(
+            !core
+                .on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0x01), 100)
+                .chord
+        );
         core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 150);
-        assert!(!core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0), 5_000).chord);
+        assert!(
+            !core
+                .on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0), 5_000)
+                .chord
+        );
     }
 
     #[test]
     fn chord_buttons_far_apart_are_rejected() {
         let mut core = HubCore::default();
         core.set_chord_enabled(true);
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 0);
         core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0), 1_000);
-        let late = core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 1_000 + crate::gamepad_home::CHORD_WINDOW_MS + 1);
+        let late = core.on_report(
+            USB_PATH,
+            Ds4Revision::V2,
+            &usb(0, 0x20, 0x01),
+            1_000 + crate::gamepad_home::CHORD_WINDOW_MS + 1,
+        );
         assert!(!late.chord);
     }
 
@@ -756,6 +1420,176 @@ mod tests {
         assert!(out.events.is_empty() && !out.chord);
         assert_eq!(core.pad_count(), 0);
         assert_eq!(core.ignored_reports(), 1);
+    }
+
+    #[test]
+    fn explicit_session_enable_is_independent_and_survives_legacy_stop() {
+        let mut core = HubCore::default();
+        core.set_chord_sources(Some(true), true);
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 0);
+        core.set_chord_sources(Some(true), false);
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0), 100);
+        assert!(
+            core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 150)
+                .chord
+        );
+        assert_eq!(core.home_override, Some(true));
+        assert!(!core.legacy_chord_enabled);
+        assert!(core.chord_enabled);
+    }
+
+    #[test]
+    fn explicit_session_disable_wins_while_legacy_control_service_is_on() {
+        let mut core = HubCore::default();
+        core.set_chord_sources(Some(false), true);
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 0);
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0), 100);
+        let chord = core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 150);
+        assert!(!chord.chord);
+        assert_eq!(core.home_override, Some(false));
+        assert!(core.legacy_chord_enabled);
+        assert!(!core.chord_enabled);
+        let diagnostic = core.last_chord.unwrap();
+        assert!(!diagnostic.home_enabled && !diagnostic.action_requested);
+    }
+
+    #[test]
+    fn startup_does_not_enable_home_and_reenable_requires_neutral() {
+        let mut core = HubCore::default();
+        core.set_chord_sources(None, false);
+        assert!(!core.chord_enabled);
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 0);
+        assert!(
+            !core
+                .on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0), 10)
+                .chord
+        );
+        assert!(
+            !core
+                .on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 20)
+                .chord
+        );
+
+        core.set_chord_sources(Some(true), false);
+        assert!(
+            !core
+                .on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 30)
+                .chord
+        );
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 40);
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0), 50);
+        assert!(
+            core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 60)
+                .chord
+        );
+    }
+
+    #[test]
+    fn enabled_home_chord_is_observed_in_background_without_frontend_state_events() {
+        let mut core = HubCore::default();
+        core.set_chord_sources(Some(true), false);
+        core.on_report_with_foreground(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 0, true);
+        core.tick(1, false);
+        core.on_report_with_foreground(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0), 10, false);
+        let chord = core.on_report_with_foreground(
+            USB_PATH,
+            Ds4Revision::V2,
+            &usb(0, 0x20, 0x01),
+            20,
+            false,
+        );
+        assert!(chord.chord);
+        assert_eq!(states(&chord.events), 0);
+        assert_eq!(core.background_reports, 2);
+        assert_eq!(core.last_home_buttons.unwrap().ps, true);
+        assert_eq!(core.last_home_buttons.unwrap().options, true);
+    }
+
+    #[test]
+    fn reconnect_with_buttons_held_waits_for_a_neutral_sample() {
+        let mut core = HubCore::default();
+        core.set_chord_sources(Some(true), false);
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 0);
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0), 1_000);
+        assert!(
+            core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 1_050)
+                .chord
+        );
+        core.on_removed(USB_PATH);
+        assert!(
+            !core
+                .on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 2_000)
+                .chord
+        );
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 2_010);
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0), 2_020);
+        assert!(
+            core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 2_030)
+                .chord
+        );
+    }
+
+    #[test]
+    fn removing_one_pad_does_not_invalidate_another_pads_pending_chord() {
+        let mut core = HubCore::default();
+        core.set_chord_sources(Some(true), false);
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 0);
+        core.on_report(USB_PATH_B, Ds4Revision::V2, &usb(0, 0, 0), 0);
+        assert!(
+            core.on_report(USB_PATH_B, Ds4Revision::V2, &usb(0, 0x20, 0x01), 10)
+                .chord
+        );
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0x01), 1_000);
+
+        core.on_removed(USB_PATH_B);
+
+        assert!(
+            core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 1_050)
+                .chord
+        );
+    }
+
+    #[test]
+    fn pruning_one_stale_pad_does_not_invalidate_another_pads_pending_chord() {
+        let mut core = HubCore::default();
+        core.set_chord_sources(Some(true), false);
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 0);
+        core.on_report(USB_PATH_B, Ds4Revision::V2, &usb(0, 0, 0), 0);
+        assert!(
+            core.on_report(USB_PATH_B, Ds4Revision::V2, &usb(0, 0x20, 0x01), 10)
+                .chord
+        );
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0x01), 5_000);
+
+        core.tick(5_201, true);
+
+        assert!(
+            core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 5_202)
+                .chord
+        );
+    }
+
+    #[test]
+    fn diagnostics_distinguish_invalid_reports_from_valid_background_buttons() {
+        let mut core = HubCore::default();
+        core.on_report_with_foreground(USB_PATH, Ds4Revision::V2, &[0x01, 0xff], 10, false);
+        assert_eq!(core.received_reports, 1);
+        assert_eq!(core.valid_reports, 0);
+        assert_eq!(core.background_reports, 1);
+        assert_eq!(core.last_home_buttons, None);
+
+        core.on_report_with_foreground(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 15, false);
+        core.on_report_with_foreground(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 20, false);
+        assert_eq!(core.received_reports, 3);
+        assert_eq!(core.valid_reports, 2);
+        assert_eq!(core.background_reports, 3);
+        assert_eq!(core.ps_rising_count, 1);
+        assert_eq!(core.options_rising_count, 1);
+        assert_eq!(core.last_ps_rising_at_ms, Some(20));
+        assert_eq!(core.last_options_rising_at_ms, Some(20));
+        let buttons = core.last_home_buttons.unwrap();
+        assert!(buttons.ps && buttons.options);
+        assert_eq!(buttons.at_ms, 20);
     }
 
     #[test]
@@ -783,10 +1617,21 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
         for at in [2_000, 2_500, 2_900] {
-            assert_eq!(states(&core.tick(at, true)), 0, "no heartbeat for a silent pad at {at}");
+            assert_eq!(
+                states(&core.tick(at, true)),
+                0,
+                "no heartbeat for a silent pad at {at}"
+            );
         }
         // The pad returns and presses again: the change is reported normally.
-        assert_eq!(states(&core.on_report(USB_PATH, Ds4Revision::V2, &right, 2_950).events), 1);
+        assert_eq!(
+            states(
+                &core
+                    .on_report(USB_PATH, Ds4Revision::V2, &right, 2_950)
+                    .events
+            ),
+            1
+        );
     }
 
     #[test]
@@ -800,7 +1645,10 @@ mod tests {
         assert_eq!(core.pad_count(), 0);
         // With a paired pad the flag is clear and it connects.
         let live = usb(0, 0, 0);
-        assert!(!core.on_report(adapter, Ds4Revision::UsbAdapter, &live, 10).events.is_empty());
+        assert!(!core
+            .on_report(adapter, Ds4Revision::UsbAdapter, &live, 10)
+            .events
+            .is_empty());
         assert_eq!(core.pad_count(), 1);
     }
 }

@@ -10,6 +10,8 @@ import { PlayniteLibrary } from "./PlayniteLibrary";
 import { AppSearchPanel } from "./AppSearchPanel";
 import type { SearchEntry } from "../services/appSearch";
 import { STATUS_READ_TIMEOUT_MS, withTimeout } from "../services/withTimeout";
+import { nativeControllerStore } from "../services/nativeControllerStore";
+import { useNativeControllerStatus } from "../hooks/useNativeController";
 import {
   beginRemotePairing,
   disabledRemoteAccessStatus,
@@ -86,6 +88,10 @@ export function ControlCenter(props: ControlCenterProps) {
   const [status, setStatus] = useState<ControlServiceStatus>(disabledControlServiceStatus);
   const [loading, setLoading] = useState(true);
   const [statusReadFailed, setStatusReadFailed] = useState(false);
+  const nativeController = useNativeControllerStatus();
+  const [homeBusy, setHomeBusy] = useState(false);
+  const [homeNotice, setHomeNotice] = useState("");
+  const [homeError, setHomeError] = useState("");
   const controlStatusRequestId = useRef(0);
   const controlStatusRequestInFlight = useRef(false);
   const [busy, setBusy] = useState(false);
@@ -162,7 +168,7 @@ export function ControlCenter(props: ControlCenterProps) {
     // showModal focuses the first control (the close button). In the Living Room the open section tab is the natural start.
     const focusFrame = props.livingRoom
       ? window.requestAnimationFrame(() => element?.querySelector<HTMLElement>('.cc-tabs [aria-selected="true"]')?.focus({ preventScroll: true }))
-      : 0;
+      : window.requestAnimationFrame(() => element?.querySelector<HTMLElement>(".cc-close")?.focus({ preventScroll: true }));
     let active = true;
     void readControlStatus(() => active);
     return () => {
@@ -173,6 +179,40 @@ export function ControlCenter(props: ControlCenterProps) {
       if (element?.open) element.close();
     };
   }, []);
+
+  useEffect(() => {
+    const release = nativeControllerStore.acquire();
+    const reconcile = () => {
+      if (nativeControllerStore.getStatusReadInFlight()) return;
+      void withTimeout(nativeControllerStore.reconcile(), STATUS_READ_TIMEOUT_MS, "Odczyt kontrolera")
+        .catch(() => nativeControllerStore.invalidateStatusRead());
+    };
+    reconcile();
+    const timer = window.setInterval(reconcile, 1_000);
+    return () => { window.clearInterval(timer); release(); };
+  }, []);
+
+  const setSessionHome = async () => {
+    if (!nativeController.supported || !nativeController.running || homeBusy) return;
+    setHomeBusy(true);
+    setHomeError("");
+    setHomeNotice("");
+    try {
+      const enabled = !nativeController.homeEnabled;
+      const next = await nativeControllerStore.setHomeEnabled(enabled);
+      if (!next.running || next.homeEnabled !== enabled) {
+        setHomeError("Nie udało się ustawić powrotu na tę sesję.");
+      } else {
+        setHomeNotice(enabled
+          ? "Powrót PS + Options jest włączony do zamknięcia VELORA."
+          : "Powrót PS + Options jest wyłączony na tę sesję.");
+      }
+    } catch (cause) {
+      setHomeError(cause instanceof Error ? cause.message : "Nie udało się ustawić powrotu pada.");
+    } finally {
+      setHomeBusy(false);
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -396,6 +436,25 @@ export function ControlCenter(props: ControlCenterProps) {
             {statusReadFailed && <button type="button" data-remote-allow="" aria-busy={loading} disabled={loading} onClick={() => void readControlStatus()}>
               {loading ? "Odczytuję…" : "Ponów odczyt statusu Windows"}
             </button>}
+          </section>
+          <section className="cc-card cc-card-wide" aria-label="Powrót do VELORA padem" data-remote-admin="">
+            <div className="cc-card-heading"><span className="cc-card-index">09</span><div><h3>Powrót do VELORA</h3><p>PS + Options na lokalnym DualShock 4.</p></div></div>
+            <p role="status">Natywny odczyt: {!nativeController.supported ? "niedostępny" : nativeController.running ? `${nativeController.pads.length} pad(y) podłączone` : "zatrzymany"} · powrót: {nativeController.homeEnabled ? "włączony" : "wyłączony"}{nativeController.homeOverride === null ? " · podąża za Control Service" : " · ustawienie na tę sesję"}</p>
+            <p>To ustawienie działa tylko do zamknięcia VELORA. Naciśnij PS + Options niemal jednocześnie (w ciągu około 250 ms), a potem zwolnij oba. Nie zmienia mapowania Steam ani Windows.</p>
+            <details>
+              <summary>Diagnostyka raportu pada</summary>
+              <p>Ostatni raport: {nativeController.lastHomeButtons ? `PS ${nativeController.lastHomeButtons.ps ? "wciśnięty" : "zwolniony"} · Options ${nativeController.lastHomeButtons.options ? "wciśnięty" : "zwolniony"}` : "brak"}.</p>
+              <p>Wykryte naciśnięcia PS/Options: {nativeController.psRisingCount}/{nativeController.optionsRisingCount} · raporty poprawne/tło: {nativeController.validReports}/{nativeController.backgroundReports}.</p>
+              {nativeController.lastChord && <p>Ostatni chord: {nativeController.lastChord.outcome} · powrót uzbrojony: {nativeController.lastChord.homeEnabled ? "tak" : "nie"} · wysłano żądanie: {nativeController.lastChord.actionRequested ? "tak" : "nie"}.</p>}
+              {nativeController.lastRestore && <p>Ostatnia próba fokusu: {nativeController.lastRestore.outcome} · HWND VELORA: {nativeController.lastRestore.ownWindow ?? "brak"} · HWND przed/po: {nativeController.lastRestore.foregroundBeforeHwnd ?? "brak"}/{nativeController.lastRestore.foregroundAfterHwnd ?? "brak"} · kod Win32: {nativeController.lastRestore.errorCode ?? "brak"}.</p>}
+            </details>
+            <button type="button" data-remote-admin="" aria-pressed={nativeController.homeEnabled}
+              disabled={!nativeController.supported || !nativeController.running || homeBusy}
+              aria-busy={homeBusy} onClick={() => void setSessionHome()}>
+              {homeBusy ? "Aktualizuję…" : nativeController.homeEnabled ? "Wyłącz powrót na tę sesję" : "Włącz powrót na tę sesję"}
+            </button>
+            {homeError && <p role="alert">{homeError}</p>}
+            {homeNotice && <p role="status">{homeNotice}</p>}
           </section>
           <AutostartPanel />
         </div>

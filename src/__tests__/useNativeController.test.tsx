@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useGamepad, type ControllerActions } from "../hooks/useGamepad";
 import { NATIVE_STALE_MS, useNativeController } from "../hooks/useNativeController";
 import { crossSourceGate } from "../services/crossSourceGate";
-import { isDualShock4GamepadId, type Ds4ButtonName, type NativeControllerEvent } from "../services/nativeController";
+import { disabledNativeControllerStatus, nativeControllerOwnsGamepadApi, type Ds4ButtonName, type NativeControllerEvent } from "../services/nativeController";
 import { nativeControllerStore } from "../services/nativeControllerStore";
 
 const mocks = vi.hoisted(() => ({
@@ -68,7 +68,7 @@ beforeEach(() => {
     return () => { mocks.emit = null; mocks.stop(); };
   });
   mocks.status.mockReset();
-  mocks.status.mockResolvedValue({ supported: true, running: true, lastError: null, pads: [], ignoredReports: 0 });
+  mocks.status.mockResolvedValue({ ...disabledNativeControllerStatus, supported: true, running: true });
   crossSourceGate.reset();
 });
 
@@ -338,7 +338,7 @@ describe("single source of truth between native and the Gamepad API", () => {
   it("while native owns the DualShock 4 the browser path ignores it: one press, one action", async () => {
     const actions = makeActions();
     pads = [makePad(DS4_ID, 0, [])];
-    const ownsNative = (pad: Gamepad) => isDualShock4GamepadId(pad.id);
+    const ownsNative = (_pad: Gamepad) => nativeControllerOwnsGamepadApi(nativeControllerStore.getModel());
     renderHook(() => {
       useNativeController(actions, true);
       useGamepad(actions, true, "auto", undefined, ownsNative);
@@ -355,30 +355,30 @@ describe("single source of truth between native and the Gamepad API", () => {
     expect(actions.confirm).toHaveBeenCalledTimes(1);
   });
 
-  it("another pad (Xbox) still works through the browser path while native owns a DualShock 4", async () => {
+  it("uses the native source exclusively while a native DualShock 4 is connected", async () => {
     const actions = makeActions();
     pads = [makePad(DS4_ID, 0, []), makePad(XBOX_ID, 1, [])];
     renderHook(() => {
       useNativeController(actions, true);
-      useGamepad(actions, true, "auto", undefined, (pad) => isDualShock4GamepadId(pad.id));
+      useGamepad(actions, true, "auto", undefined, (_pad) => nativeControllerOwnsGamepadApi(nativeControllerStore.getModel()));
     });
     await flush();
     await emit(connected());
     pump(); advance(50);
     pads = [makePad(DS4_ID, 0, []), makePad(XBOX_ID, 1, [0])];
     pump(); pump(60);
-    expect(actions.confirm).toHaveBeenCalledTimes(1);
+    expect(actions.confirm).not.toHaveBeenCalled();
   });
 
   it("without a native layer the DualShock 4 falls back to the browser path", async () => {
     const actions = makeActions();
     pads = [makePad(DS4_ID, 0, [])];
-    mocks.status.mockResolvedValue({ supported: false, running: false, lastError: null, pads: [], ignoredReports: 0 });
+    mocks.status.mockResolvedValue({ ...disabledNativeControllerStatus, supported: false, running: false });
     renderHook(() => {
       useNativeController(actions, true);
       useGamepad(actions, true, "auto", undefined, () => {
         const model = nativeControllerStore.getModel();
-        return !model.unavailableReason && model.pads.length > 0;
+        return nativeControllerOwnsGamepadApi(model);
       });
     });
     await flush();
@@ -388,20 +388,67 @@ describe("single source of truth between native and the Gamepad API", () => {
     expect(actions.confirm).toHaveBeenCalledTimes(1);
   });
 
+  it("browser fallback primes a held Xbox pad during native disconnect handoff", async () => {
+    const actions = makeActions();
+    pads = [makePad(XBOX_ID, 1, [])];
+    renderHook(() => {
+      useNativeController(actions, true);
+      useGamepad(actions, true, "auto", undefined, (_pad) => nativeControllerOwnsGamepadApi(nativeControllerStore.getModel()));
+    });
+    await flush();
+    await emit(connected());
+    pump();
+    pads = [makePad(XBOX_ID, 1, [0])];
+    pump(); pump(60); // Native ownership is active, so browser Cross is ignored.
+    expect(actions.confirm).not.toHaveBeenCalled();
+
+    await emit({ kind: "disconnected", device: "pad-a" });
+    pump(); pump(60); // First resumed sample is held; it must only prime the browser engine.
+    expect(actions.confirm).not.toHaveBeenCalled();
+    pads = [makePad(XBOX_ID, 1, [])];
+    pump(); pump(60);
+    pads = [makePad(XBOX_ID, 1, [0])];
+    pump(); pump(60);
+    expect(actions.confirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("native Options release fires once while a virtual browser echo is excluded", async () => {
+    const actions = makeActions();
+    pads = [makePad("Xbox 360 Controller (XInput STANDARD GAMEPAD)", 0, [])];
+    renderHook(() => {
+      useNativeController(actions, true);
+      useGamepad(actions, true, "auto", undefined, (_pad) => nativeControllerOwnsGamepadApi(nativeControllerStore.getModel()));
+    });
+    await flush();
+    await emit(connected());
+    pump(); advance(50); // Prime the native engine after device selection.
+    await emit(state(["options"]));
+    advance(60);
+    expect(actions.options).not.toHaveBeenCalled();
+    await emit(state([]));
+    advance(60);
+    expect(actions.options).toHaveBeenCalledTimes(1);
+    advance(450);
+    // A delayed Steam/XInput echo is polled after the old 400 ms heuristic too.
+    pads = [makePad("Xbox 360 Controller (XInput STANDARD GAMEPAD)", 0, [9])];
+    pump(); pump(60);
+    expect(actions.options).toHaveBeenCalledTimes(1);
+  });
+
   it("a virtual XInput pad made from the same DualShock 4 is dropped while native is in use", async () => {
     const actions = makeActions();
     const virtualPad = makePad("Xbox 360 Controller (XInput STANDARD GAMEPAD)", 0, []);
     pads = [virtualPad];
     renderHook(() => {
       useNativeController(actions, true);
-      useGamepad(actions, true, "auto", undefined, (pad) => isDualShock4GamepadId(pad.id)); // does not match
+      useGamepad(actions, true, "auto", undefined, (_pad) => nativeControllerOwnsGamepadApi(nativeControllerStore.getModel()));
     });
     await flush();
     await emit(connected());
     pump(); advance(50);
-    // The virtual pad echoes Cross 200 ms late, beyond the 90 ms cross-source window.
+    // A virtual Xbox echo 450 ms late is beyond the old 400 ms heuristic too.
     await emit(state(["cross"]));
-    advance(200);
+    advance(450);
     pads = [makePad("Xbox 360 Controller (XInput STANDARD GAMEPAD)", 0, [0])];
     pump(); pump(60);
     expect(actions.confirm).toHaveBeenCalledTimes(1);

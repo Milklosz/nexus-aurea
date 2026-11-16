@@ -5,6 +5,7 @@ import { ControlCenter } from "../components/ControlCenter";
 import type { AmbientSettings } from "../services/ambient";
 import type { CinemaProfile } from "../services/cinemaMode";
 import type { RemoteAccessStatus } from "../services/remoteAccess";
+import { canRemoteSelect } from "../services/remotePermissions";
 
 const mocks = vi.hoisted(() => ({
   status: { windows: false, running: false, gameMode: false, controllerCount: 0, playstationControllerCount: 0, foregroundProcess: null, returnHotkeyRegistered: false, lastError: null },
@@ -93,6 +94,16 @@ it.each([false, true])("keeps the TLS warning in remote recovery (livingRoom=%s)
   expect(screen.getByText(/Nie omijaj ostrzeżeń TLS w Safari/)).toBeTruthy();
 });
 describe("Control Center", () => {
+  it("keeps the session Home toggle local-only and unavailable without a native sink", async () => {
+    setupDialog();
+    renderCenter();
+    const toggle = screen.getByRole("button", { name: "Włącz powrót na tę sesję" }) as HTMLButtonElement;
+    await waitFor(() => expect(toggle.disabled).toBe(true));
+    expect(toggle.hasAttribute("data-remote-admin")).toBe(true);
+    expect(toggle.hasAttribute("data-remote-allow")).toBe(false);
+    expect(canRemoteSelect(toggle)).toBe(false);
+  });
+
   it("switches Cinema, Gaming, and Desktop through the existing profile handler", async () => {
     setupDialog();
     const changeProfile = vi.fn(async () => true);

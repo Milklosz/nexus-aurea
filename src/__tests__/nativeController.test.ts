@@ -7,6 +7,7 @@ import {
   initialNativeControllerModel,
   isDualShock4GamepadId,
   nativeLinkState,
+  nativeControllerOwnsGamepadApi,
   parseNativeControllerEvent,
   reduceNativeController,
   sampleFromNative,
@@ -135,6 +136,21 @@ describe("reduceNativeController", () => {
   it("an empty unavailable reason is still unavailable", () => {
     const model = run([[{ kind: "unavailable", reason: "" }, 1]]);
     expect(model.unavailableReason).toBeTruthy();
+  });
+});
+
+describe("nativeControllerOwnsGamepadApi", () => {
+  it("keeps the browser source suppressed across two native ids and releases it after the last disconnect", () => {
+    let model = run([[connected("pad-a"), 1], [connected("pad-b"), 2]]);
+    expect(model.pads).toHaveLength(2);
+    expect(nativeControllerOwnsGamepadApi(model)).toBe(true);
+    model = reduceNativeController(model, { kind: "disconnected", device: "pad-a" }, 3);
+    expect(model.activeDevice).toBe("pad-b");
+    expect(nativeControllerOwnsGamepadApi(model)).toBe(true);
+    model = reduceNativeController(model, { kind: "disconnected", device: "pad-b" }, 4);
+    expect(nativeControllerOwnsGamepadApi(model)).toBe(false);
+    model = reduceNativeController(model, { kind: "unavailable", reason: "native failed" }, 5);
+    expect(nativeControllerOwnsGamepadApi(model)).toBe(false);
   });
 });
 

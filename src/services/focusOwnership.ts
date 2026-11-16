@@ -17,6 +17,7 @@ export type FocusOwner =
   | "external"
   | "ambient"
   | "keyboard"
+  | "controller-preflight"
   | "diagnostics"
   | "search"
   | "control-center"
@@ -27,6 +28,7 @@ export interface FocusOwnerInput {
   veloraFocused: boolean;
   ambientActive: boolean;
   keyboardOpen: boolean;
+  controllerPreflightOpen: boolean;
   diagnosticsOpen: boolean;
   controlCenterOpen: boolean;
   controlCenterPanel?: string;
@@ -37,6 +39,7 @@ export function resolveFocusOwner(input: FocusOwnerInput): FocusOwner {
   if (!input.veloraFocused) return "external";
   if (input.ambientActive) return "ambient";
   if (input.keyboardOpen) return "keyboard";
+  if (input.controllerPreflightOpen) return "controller-preflight";
   if (input.diagnosticsOpen) return "diagnostics";
   if (input.controlCenterOpen) return input.controlCenterPanel === "search" ? "search" : "control-center";
   return homeZoneOfElement(input.activeElement) === "controlCenter" ? "home-actions" : "home-dock";

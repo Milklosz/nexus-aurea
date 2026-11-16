@@ -170,6 +170,13 @@
   animation: cc-arrive .24s cubic-bezier(.18,.72,.25,1) both;
 }
 .control-center::backdrop { background: rgba(2, 3, 5, .68); backdrop-filter: blur(9px) saturate(75%); }
+.control-center.controller-home-preflight { width: min(660px, 90vw); height: auto; min-height: 0; max-height: 90dvh; grid-template-rows: auto; gap: .9rem; padding: clamp(1.25rem, 2.4vw, 2rem); overflow: auto; }
+.controller-home-preflight h2 { margin: 0; color: #f6eedf; font: 500 clamp(1.45rem, 2.4vw, 2rem)/1.12 Georgia, "Times New Roman", serif; }
+.controller-home-preflight p { margin: 0; color: #c7c0b3; line-height: 1.55; }
+.controller-home-preflight .cc-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: .65rem; margin-top: .25rem; }
+.controller-home-preflight button { min-height: 48px; padding: .65rem 1rem; border: 1px solid rgba(229, 208, 172, .38); border-radius: 12px; color: #f2eadb; background: rgba(255,255,255,.06); cursor: pointer; }
+.controller-home-preflight button:focus-visible { outline: 3px solid #f3d59f; outline-offset: 3px; box-shadow: 0 0 0 5px rgba(219, 181, 119, .2); }
+.controller-home-preflight button:disabled { opacity: .55; cursor: not-allowed; }
 @keyframes cc-arrive { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
 .control-center-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-bottom: .3rem; }
 .control-center-eyebrow { color: #dbbd8b; font-size: clamp(.62rem, .8vw, .76rem); letter-spacing: .26em; }

@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { SessionOperation, SessionSnapshot } from "./sessionOrchestrator";
 import type { ControlServiceStatus } from "./controlService";
 import type { DisplayAudioSnapshot } from "./displayAudio";
+import { disabledNativeControllerStatus, type NativeControllerStatus } from "./nativeController";
 
 export type BuildInfo = {
   version: string;
@@ -77,6 +78,7 @@ export type DiagnosticsSnapshot = {
   launchRegistry: LaunchRegistryDiagnostics;
   windowBroker: WindowBrokerDiagnostics;
   controlService: ControlServiceStatus;
+  nativeController: NativeControllerStatus;
   displayAudio: DisplayAudioSnapshot;
   errors: DiagnosticsError[];
   limitations: string[];
@@ -149,6 +151,7 @@ export function previewDiagnosticsSnapshot(message: string): DiagnosticsSnapshot
       gamepadHomeWarning: null,
       lastError: null,
     },
+    nativeController: disabledNativeControllerStatus,
     displayAudio: {
       windows: false,
       supported: false,

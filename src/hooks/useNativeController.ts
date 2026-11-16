@@ -9,6 +9,7 @@ import {
   sampleFromNative,
   type ControllerBindings,
   type NativeControllerModel,
+  type NativeControllerStatus,
 } from "../services/nativeController";
 import { nativeControllerStore } from "../services/nativeControllerStore";
 import type { ControllerActions } from "./useGamepad";
@@ -21,6 +22,15 @@ export const NATIVE_STALE_MS = 700;
 /** Live native model for UI such as diagnostics. Re-renders on each native change. */
 export function useNativeControllerModel(): NativeControllerModel {
   return useSyncExternalStore(nativeControllerStore.subscribe, nativeControllerStore.getModel, nativeControllerStore.getModel);
+}
+
+/** Full native snapshot for the local Control Center and diagnostics. */
+export function useNativeControllerStatus(): NativeControllerStatus {
+  return useSyncExternalStore(
+    nativeControllerStore.subscribe,
+    nativeControllerStore.getStatusSnapshot,
+    nativeControllerStore.getStatusSnapshot,
+  );
 }
 
 /**
@@ -58,6 +68,7 @@ export function useNativeController(
     // Options fires on release and never together with PS, so the Home chord cannot also open a panel.
     const engine = new ControllerEngine({ optionsOnRelease: true });
     const bumpers = new BumperEdges();
+    let selectedDevice: string | null = null;
     const dispatch = (action: ControllerAction) => {
       if (!crossSourceGate.accept("native", action, performance.now())) return;
       const handlers = actionsRef.current;
@@ -73,7 +84,14 @@ export function useNativeController(
       if (!focused || suspendRef.current?.() || model.unavailableReason || !model.activeDevice) {
         engine.reset();
         bumpers.reset();
+        selectedDevice = model.activeDevice;
         return;
+      }
+      if (model.activeDevice !== selectedDevice) {
+        // A source/device handoff primes its current held state before dispatch.
+        engine.reset();
+        bumpers.reset();
+        selectedDevice = model.activeDevice;
       }
       // Native state is change-only plus a heartbeat while held. Silence while something is
       // pressed means a release was lost, so the snapshot is treated as released, never held forever.

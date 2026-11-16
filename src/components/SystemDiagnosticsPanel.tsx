@@ -83,7 +83,7 @@ export function SystemDiagnosticsPanel() {
         <li>Operacje sesji: {snapshot.sessionOperations.filter((operation) => operation.status === "pending").length} oczekujących</li>
         <li>Uruchomienia: {snapshot.launchRegistry.activeSessions} aktywne · {snapshot.launchRegistry.sessions.length} zapisanych</li>
         <li>Okna: {snapshot.windowBroker.trackedWindows.length} śledzonych · pierwszy plan: {snapshot.windowBroker.foreground.processName ?? "brak"}</li>
-        <li>Control Service: {snapshot.controlService.running ? "aktywny" : "wyłączony"} · skrót {snapshot.controlService.fallbackHotkey ?? "Ctrl+Alt+N"}</li>
+        <li>Control Service: {snapshot.controlService.running ? "aktywny" : "wyłączony"}{snapshot.controlService.running ? ` · skrót ${snapshot.controlService.fallbackHotkey ?? "Ctrl+Alt+N"}` : " · skrót dostępny po włączeniu usługi"}</li>
         <li>DualSense Home: {snapshot.controlService.gamepadHomeRunning
           ? `${snapshot.controlService.gamepadHomeDeviceCount ?? 0} urządzeń Raw Input`
           : "niedostępny"} · kontrolery Sony: {snapshot.controlService.playstationControllerCount}</li>
@@ -100,6 +100,11 @@ export function SystemDiagnosticsPanel() {
             ? ` · ostatnia kombinacja: ${snapshot.controlService.gamepadHomeLastChord.outcome}`
             : ""}
         </li>
+        <li>Natywny powrót lokalnym padem: {snapshot.nativeController.homeEnabled ? "włączony" : "wyłączony"} · {snapshot.nativeController.homeOverride === null ? "podąża za Control Service" : "ustawiony na tę sesję"} · pady: {snapshot.nativeController.pads.length}</li>
+        <li>Raw Input DS4: raporty {snapshot.nativeController.receivedReports} · poprawne {snapshot.nativeController.validReports} · tło {snapshot.nativeController.backgroundReports} · kolejka odrzucona {snapshot.nativeController.queueRejected}</li>
+        <li>PS {snapshot.nativeController.lastHomeButtons?.ps ? "wciśnięty" : "zwolniony"} · Options {snapshot.nativeController.lastHomeButtons?.options ? "wciśnięty" : "zwolniony"} · zbocza PS/Options {snapshot.nativeController.psRisingCount}/{snapshot.nativeController.optionsRisingCount}</li>
+        <li>Ostatni chord: {snapshot.nativeController.lastChord ? `${snapshot.nativeController.lastChord.outcome} · armed=${snapshot.nativeController.lastChord.homeEnabled} · action=${snapshot.nativeController.lastChord.actionRequested}` : "brak"} · ślad: {snapshot.nativeController.lastTrace ? `${snapshot.nativeController.lastTrace.stage}/${snapshot.nativeController.lastTrace.outcome}` : "brak"}</li>
+        <li>Ostatni restore: {snapshot.nativeController.lastRestore ? `${snapshot.nativeController.lastRestore.outcome} · own HWND=${snapshot.nativeController.lastRestore.ownWindow ?? "brak"} · foreground ${snapshot.nativeController.lastRestore.foregroundBeforeHwnd ?? "brak"}→${snapshot.nativeController.lastRestore.foregroundAfterHwnd ?? "brak"} · Win32 ${snapshot.nativeController.lastRestore.errorCode ?? "brak"}` : "brak"}</li>
         <li>Wyświetlacze: {snapshot.displayAudio.displays.length} · urządzenia audio: {snapshot.displayAudio.audio.length}</li>
         <li>Tryb tylko do odczytu: {snapshot.displayAudio.policy.readOnly ? "tak" : "nie"} · automatyczne zmiany: {snapshot.displayAudio.policy.automaticModeChanges ? "tak" : "nie"}</li>
       </ul>

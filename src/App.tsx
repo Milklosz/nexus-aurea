@@ -1,5 +1,6 @@
 import { GamepadDiagnostics } from "./components/GamepadDiagnostics";
 import { ControlCenter, type ControlPanelId } from "./components/ControlCenter";
+import { ControllerHomePreflight } from "./components/ControllerHomePreflight";
 import { LivingRoomHome } from "./components/living-room/LivingRoomHome";
 import { readHomeTheme } from "./services/homeTheme";
 import { activateHomeAction, closeHomeDisclosure, moveWithinHomeActions } from "./services/homeActions";
@@ -20,8 +21,9 @@ import { useGamepad, type ControllerActions } from "./hooks/useGamepad";
 import { useNativeController } from "./hooks/useNativeController";
 import { useFocusOwner } from "./hooks/useFocusOwner";
 import { canRestoreFocusTo, focusOpenerFrom } from "./services/focusOwnership";
-import { isDualShock4GamepadId } from "./services/nativeController";
+import { nativeControllerOwnsGamepadApi } from "./services/nativeController";
 import { nativeControllerStore } from "./services/nativeControllerStore";
+import { shouldBlockControllerLaunchWithoutNativeHome, shouldPreflightControllerHome } from "./services/controllerHomePreflight";
 import { dispatchControllerAction, intentFromKeyboard, intentFromRemote, isIgnoredShortcutEvent, type NavIntentHandlers } from "./services/navIntent";
 import { shouldRestoreDockFocus } from "./services/windowFocusRestore";
 import { offerIntentToKeyboard, textEntryTargetFromFocus, withKeyboardFirst } from "./services/virtualKeyboardRouting";
@@ -35,6 +37,7 @@ import { useFocusRestoreOnClose } from "./hooks/useFocusRestoreOnClose";
 import { useLaunchGuard } from "./hooks/useLaunchGuard";
 import { getDialogNavigationControls, shouldUseNativeDialogArrowKey } from "./services/dialogNavigation";
 import { useToast } from "./hooks/useToast";
+import { withTimeout } from "./services/withTimeout";
 import { useWeather } from "./hooks/useWeather";
 import { openStreamingService, streamingServiceErrorMessage } from "./services/openStreamingService";
 import { getControlServiceStatus, setControlGameMode } from "./services/controlService";
@@ -78,6 +81,8 @@ const focusReturnLabels: Record<string, string> = {
   diagnostics: "przycisk diagnostyki",
 };
 
+type LaunchOrigin = "controller" | "remote" | "keyboard" | "pointer";
+
 /** Names the Home zone focus returns to when an overlay closes, for the diagnostics panel. */
 function focusReturnLabel(opener: HTMLElement | null): string {
   const zone = opener?.isConnected ? homeZoneOfElement(opener) : null;
@@ -88,6 +93,11 @@ export default function App() {
   const version = useAppVersion();
   const [diagnostics, setDiagnostics] = useState(false);
   const [controlCenterOpen, setControlCenterOpen] = useState(false);
+  const [homePreflightIndex, setHomePreflightIndex] = useState<number | null>(null);
+  const [homePreflightBusy, setHomePreflightBusy] = useState(false);
+  const homePreflightIndexRef = useRef<number | null>(null);
+  const homePreflightOperationRef = useRef(0);
+  const homePreflightOpenerRef = useRef<HTMLElement | null>(null);
   // Which Home look is shown; "grand-cinema" is the previous design, kept as a fallback (see services/homeTheme.ts).
   const [homeTheme] = useState(readHomeTheme);
   const livingRoom = homeTheme === "living-room";
@@ -143,8 +153,13 @@ export default function App() {
     ambientSessionActive.current = ambient.active;
     recordSession(ambient.active ? "ambient" : "veloraHome", "system");
   }, [ambient.active, recordSession]);
-  const showMenu = useCallback(() => { captureOpener(); setControlCenterOpen(false); setDiagnostics(true); }, [captureOpener]);
-  const openService = useCallback(
+  const showMenu = useCallback(() => {
+    if (homePreflightIndexRef.current !== null) return;
+    captureOpener();
+    setControlCenterOpen(false);
+    setDiagnostics(true);
+  }, [captureOpener]);
+  const launchServiceNow = useCallback(
     async (index: number) => {
       const service = streamingServices[index];
       if (!service) return;
@@ -167,7 +182,33 @@ export default function App() {
     },
     [runServiceLaunch, showToast],
   );
-  const activateSelected = useCallback(() => void openService(activeServiceRef.current), [openService]);
+  const openService = useCallback(async (index: number, origin: LaunchOrigin = "pointer") => {
+    const service = streamingServices[index];
+    if (!service) return;
+    try {
+      await withTimeout(nativeControllerStore.reconcile(), 2_000, "Odczyt kontrolera");
+    } catch {
+      nativeControllerStore.invalidateStatusRead();
+    }
+    const status = nativeControllerStore.getStatusSnapshot();
+    if (origin === "controller" && shouldBlockControllerLaunchWithoutNativeHome(
+      service,
+      status,
+      nativeControllerStore.getStatusKnown(),
+    )) {
+      showToast("Nie wykryto pewnego powrotu lokalnym padem. Pozostań w VELORA lub użyj myszy albo klawiatury.");
+      return;
+    }
+    if (shouldPreflightControllerHome(service, status)) {
+      homePreflightIndexRef.current = index;
+      homePreflightOperationRef.current += 1;
+      homePreflightOpenerRef.current = focusOpenerFrom(document.activeElement);
+      setHomePreflightIndex(index);
+      return;
+    }
+    await launchServiceNow(index);
+  }, [launchServiceNow, showToast]);
+  const activateSelected = useCallback((origin: LaunchOrigin) => void openService(activeServiceRef.current, origin), [openService]);
   // Rejestruje dock jako siatkę AUREA dla 2D poleceń iPhone Remote; bez `columns`
   // klawiatura zachowuje dotychczasowe skróty (ArrowUp -> Control Center).
   // Up/down on the home screen go through the zone handler. It is set below, once
@@ -184,6 +225,54 @@ export default function App() {
     onVerticalZone: handleVerticalZone,
     onHorizontalZone: handleHorizontalZone,
   });
+  const cancelHomePreflight = useCallback(() => {
+    if (homePreflightIndexRef.current === null) return;
+    const wasBusy = homePreflightBusy;
+    homePreflightOperationRef.current += 1;
+    homePreflightIndexRef.current = null;
+    setHomePreflightIndex(null);
+    setHomePreflightBusy(false);
+    if (wasBusy) {
+      showToast("Otwarcie anulowano. Powrót na tę sesję może już być włączony do zamknięcia VELORA.");
+    }
+    const opener = homePreflightOpenerRef.current;
+    homePreflightOpenerRef.current = null;
+    window.requestAnimationFrame(() => {
+      if (canRestoreFocusTo(opener)) {
+        opener.focus({ preventScroll: true });
+        if (document.activeElement === opener) return;
+      }
+      navigation.focusApp(activeServiceRef.current);
+    });
+  }, [homePreflightBusy, navigation.focusApp, showToast]);
+  const confirmHomePreflight = useCallback(async () => {
+    const index = homePreflightIndexRef.current;
+    if (index === null || homePreflightBusy) return;
+    const operation = ++homePreflightOperationRef.current;
+    setHomePreflightBusy(true);
+    try {
+      const status = await withTimeout(
+        nativeControllerStore.setHomeEnabled(true),
+        8_000,
+        "Powrót lokalnym padem",
+      );
+      if (operation !== homePreflightOperationRef.current || homePreflightIndexRef.current !== index) return;
+      if (!status.supported || !status.running || !status.homeEnabled) {
+        showToast("Nie udało się włączyć powrotu pada. Aplikacja pozostała w VELORA.");
+        return;
+      }
+      homePreflightIndexRef.current = null;
+      homePreflightOpenerRef.current = null;
+      setHomePreflightIndex(null);
+      await launchServiceNow(index);
+    } catch {
+      if (operation === homePreflightOperationRef.current && homePreflightIndexRef.current === index) {
+        showToast("Nie udało się potwierdzić powrotu pada. Aplikacja pozostała w VELORA.");
+      }
+    } finally {
+      if (operation === homePreflightOperationRef.current) setHomePreflightBusy(false);
+    }
+  }, [homePreflightBusy, launchServiceNow, showToast]);
   const closeControlCenter = useCallback(() => setControlCenterOpen(false), []);
   // Native search over the home tiles. Games (Steam, Playnite) will join as more providers.
   const searchEntriesList = useMemo(() => collectSearchEntries([() => tileSearchEntries(streamingServices)]), []);
@@ -197,6 +286,10 @@ export default function App() {
     },
   }), [closeControlCenter, openService, searchEntriesList]);
   const toggleControlCenter = useCallback(() => {
+    if (homePreflightIndexRef.current !== null) {
+      cancelHomePreflight();
+      return;
+    }
     if (controlCenterOpen) {
       closeControlCenter();
       return;
@@ -205,18 +298,26 @@ export default function App() {
     setDiagnostics(false);
     setControlCenterPanel(undefined);
     setControlCenterOpen(true);
-  }, [captureOpener, closeControlCenter, controlCenterOpen]);
+  }, [cancelHomePreflight, captureOpener, closeControlCenter, controlCenterOpen]);
   // Home entries (Szukaj, Pilot, Ustawienia) open Control Center directly on their tab.
   const openControlCenterAt = useCallback((panel?: ControlPanelId) => {
+    if (homePreflightIndexRef.current !== null) {
+      cancelHomePreflight();
+      return;
+    }
     captureOpener();
     setDiagnostics(false);
     setControlCenterPanel(panel);
     setControlCenterOpen(true);
-  }, [captureOpener]);
+  }, [cancelHomePreflight, captureOpener]);
   const openSearch = useCallback(() => openControlCenterAt("search"), [openControlCenterAt]);
   const openRemote = useCallback(() => openControlCenterAt("remote"), [openControlCenterAt]);
   const openSettings = useCallback(() => openControlCenterAt(undefined), [openControlCenterAt]);
   const returnToNexus = useCallback(() => {
+    if (homePreflightIndex !== null) {
+      cancelHomePreflight();
+      return;
+    }
     setControlCenterOpen(false);
     setDiagnostics(false);
     navigation.focusApp(0);
@@ -236,7 +337,7 @@ export default function App() {
       // native restore result in velora-return-home.
       showToast("VELORA nie mogła wrócić do ekranu głównego. Użyj skrótu powrotu albo Alt+Tab.");
     });
-  }, [navigation.focusApp, showToast]);
+  }, [cancelHomePreflight, homePreflightIndex, navigation.focusApp, showToast]);
   const openDiagnosticsFromCenter = useCallback(() => {
     setControlCenterOpen(false);
     setDiagnostics(true);
@@ -295,23 +396,34 @@ export default function App() {
   const confirmControllerFocus = useCallback(() => {
     const dialog = document.querySelector("dialog[open]");
     const active = document.activeElement;
+    if (dialog && (!(active instanceof HTMLElement) || !dialog.contains(active))) return;
     const textField = textEntryTargetFromFocus(active);
     if (textField) {
       openKeyboardFor(textField);
       return;
     }
     if (dialog && active instanceof HTMLElement && dialog.contains(active)) {
+      const entryId = active.dataset.appLaunchEntry;
+      if (entryId) {
+        const index = streamingServices.findIndex((service) => `tile:${service.id}` === entryId);
+        if (index >= 0) {
+          closeControlCenter();
+          void openService(index, "controller");
+        }
+        return;
+      }
       active.click();
       return;
     }
     if (!dialog && activateHomeAction(active)) return;
-    activateSelected();
-  }, [activateSelected, openKeyboardFor]);
+    activateSelected("controller");
+  }, [activateSelected, closeControlCenter, openKeyboardFor, openService]);
   // The paired remote must not reach administrative dialog controls through a
   // generic active.click(). Dialog actions require an explicit allow marker.
   const confirmRemoteFocus = useCallback(() => {
     const dialog = document.querySelector("dialog[open]");
     const active = document.activeElement;
+    if (dialog && (!(active instanceof HTMLElement) || !dialog.contains(active))) return;
     const textField = textEntryTargetFromFocus(active);
     if (textField) {
       if (dialog && !canRemoteSelect(textField)) {
@@ -326,14 +438,26 @@ export default function App() {
         showToast("Pilot nie ma uprawnień do tej operacji administracyjnej.");
         return;
       }
+      const entryId = active.dataset.appLaunchEntry;
+      if (entryId) {
+        const index = streamingServices.findIndex((service) => `tile:${service.id}` === entryId);
+        if (index >= 0) {
+          closeControlCenter();
+          void openService(index, "remote");
+        }
+        return;
+      }
       active.click();
       return;
     }
     if (!dialog && activateHomeAction(active)) return;
-    activateSelected();
-  }, [activateSelected, openKeyboardFor, showToast]);
+    activateSelected("remote");
+  }, [activateSelected, closeControlCenter, openKeyboardFor, openService, showToast]);
   const backControllerFocus = useCallback(() => {
-    if (closeHomeDisclosure(document.activeElement)) return;
+    if (homePreflightIndex !== null) {
+      cancelHomePreflight();
+      return;
+    }
     if (controlCenterOpen) {
       closeControlCenter();
       return;
@@ -342,8 +466,9 @@ export default function App() {
       closeDiagnostics();
       return;
     }
+    if (closeHomeDisclosure(document.activeElement)) return;
     navigation.focusApp(0);
-  }, [closeControlCenter, closeDiagnostics, controlCenterOpen, diagnostics, navigation.focusApp]);
+  }, [cancelHomePreflight, closeControlCenter, closeDiagnostics, controlCenterOpen, diagnostics, homePreflightIndex, navigation.focusApp]);
   const updateControllerProfile = useCallback((profile: ControllerProfile) => {
     setControllerProfile(profile);
     try {
@@ -441,6 +566,7 @@ export default function App() {
   const focusOwner = useFocusOwner({
     ambientActive: ambient.active,
     keyboardOpen: keyboard.field !== null,
+    controllerPreflightOpen: homePreflightIndex !== null,
     diagnosticsOpen: diagnostics,
     controlCenterOpen,
     controlCenterPanel,
@@ -470,11 +596,13 @@ export default function App() {
     };
   }, [allowControllerAction, controllerIntentHandlers, keyboard.sinkRef]);
   const inputEnabled = !ambient.active && !ambient.controllerSuppressed;
-  // While the native layer owns a DualShock 4, the browser path skips it so one press is never two actions.
-  // Other pads (Xbox, DualSense) and a DualShock 4 without a working native layer stay on the browser path.
+  // A connected native DS4 owns controller input exclusively. Browser XInput can
+  // be a delayed virtual echo of this pad, so accepting any browser pad here is
+  // ambiguous; the browser source resumes as soon as native ownership ends.
   const nativeOwnsPad = useCallback((pad: Gamepad) => {
     const model = nativeControllerStore.getModel();
-    return !model.unavailableReason && model.pads.length > 0 && isDualShock4GamepadId(pad.id);
+    void pad;
+    return nativeControllerOwnsGamepadApi(model);
   }, []);
   useNativeController(controllerActions, inputEnabled, shouldSuspendControllerInput);
   useGamepad(controllerActions, inputEnabled, controllerProfile, shouldSuspendControllerInput, nativeOwnsPad);
@@ -486,7 +614,8 @@ export default function App() {
       const openDialog = document.querySelector("dialog[open]");
       if (event.key === "Escape" && openDialog) {
         event.preventDefault();
-        if (controlCenterOpen) closeControlCenter();
+        if (homePreflightIndex !== null) cancelHomePreflight();
+        else if (controlCenterOpen) closeControlCenter();
         else closeDiagnostics();
         return;
       }
@@ -512,7 +641,7 @@ export default function App() {
           .catch(() => showToast("Nie udało się zmienić trybu okna. Uruchom z --windowed."));
       }
       if (event.key === "F2") showMenu();
-      if (event.key === "F3") { captureOpener(); setDiagnostics(false); setControlCenterOpen(true); }
+      if (event.key === "F3") openControlCenterAt();
     };
     const restore = () => {
       // Window focus returns while an overlay may be open; the dock must not take the highlight under it.
@@ -524,7 +653,7 @@ export default function App() {
     window.addEventListener("keydown", recover);
     window.addEventListener("focus", restore);
     return () => { window.removeEventListener("keydown", recover); window.removeEventListener("focus", restore); };
-  }, [captureOpener, closeControlCenter, closeDiagnostics, controlCenterOpen, controllerIntentHandlers, diagnostics, moveControllerFocus, navigation.focusApp, showMenu, showToast]);
+  }, [cancelHomePreflight, closeControlCenter, closeDiagnostics, controlCenterOpen, controllerIntentHandlers, diagnostics, homePreflightIndex, moveControllerFocus, navigation.focusApp, openControlCenterAt, showMenu, showToast]);
 
   useEffect(() => {
     let active = true;
@@ -567,6 +696,11 @@ export default function App() {
   }, [backControllerFocus, changeCinemaProfile, confirmControllerFocus, confirmRemoteFocus, handleSystemVolume, keyboard.sinkRef, moveControllerFocus, moveVerticalFocus, returnToNexus, showToast]);
 
   useReturnHomeListener(useCallback((event: ReturnHomeEvent) => {
+    homePreflightOperationRef.current += 1;
+    homePreflightIndexRef.current = null;
+    homePreflightOpenerRef.current = null;
+    setHomePreflightIndex(null);
+    setHomePreflightBusy(false);
     setControlCenterOpen(false);
     setDiagnostics(false);
     // Restore the tile the user launched from, not always the first one.
@@ -694,6 +828,12 @@ export default function App() {
         appSearch={appSearch}
         initialPanel={controlCenterPanel}
         livingRoom={livingRoom}
+      />}
+      {homePreflightIndex !== null && <ControllerHomePreflight
+        serviceName={streamingServices[homePreflightIndex]?.name ?? "ten serwis"}
+        busy={homePreflightBusy}
+        onConfirm={() => void confirmHomePreflight()}
+        onCancel={cancelHomePreflight}
       />}
       {ambient.active && <AmbientScreen />}
       {diagnostics && <GamepadDiagnostics

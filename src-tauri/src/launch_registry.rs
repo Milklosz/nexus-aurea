@@ -224,14 +224,12 @@ fn matching_pids(table: &ProcessTable, watch: &LaunchWatch) -> HashSet<u32> {
         .collect()
 }
 
-fn process_is_running(
-    table: &ProcessTable,
-    watch: &LaunchWatch,
-    matching: &HashSet<u32>,
-) -> bool {
+fn process_is_running(table: &ProcessTable, watch: &LaunchWatch, matching: &HashSet<u32>) -> bool {
     (watch.root_counts_as_running
         && !watch.root_reused
-        && watch.root_process_id.is_some_and(|root| table.contains(root)))
+        && watch
+            .root_process_id
+            .is_some_and(|root| table.contains(root)))
         || !matching.is_empty()
 }
 
@@ -349,10 +347,14 @@ fn same_launch_group(
         LaunchKind::Steam | LaunchKind::Game => {
             matches!(existing_kind, LaunchKind::Steam | LaunchKind::Game)
         }
-        LaunchKind::Cinema => existing_kind == LaunchKind::Cinema,
-        LaunchKind::ManagedApp => {
-            new_app_id.is_some() && existing_app_id == new_app_id
+        // Each Edge Cinema service is an independent launch group. Reopening
+        // Netflix must not supersede a still-running Disney+ profile.
+        LaunchKind::Cinema => {
+            existing_kind == LaunchKind::Cinema
+                && new_app_id.is_some()
+                && existing_app_id == new_app_id
         }
+        LaunchKind::ManagedApp => new_app_id.is_some() && existing_app_id == new_app_id,
     }
 }
 
@@ -365,11 +367,7 @@ fn session_target_for(kind: LaunchKind, explicit: Option<SessionId>) -> Option<S
     })
 }
 
-fn apply_baseline(
-    watch: &mut LaunchWatch,
-    table: &ProcessTable,
-    windows: &[TrackedWindow],
-) {
+fn apply_baseline(watch: &mut LaunchWatch, table: &ProcessTable, windows: &[TrackedWindow]) {
     if watch.descendants_only && !watch.ignore_baseline_windows {
         watch.baseline_process_ids = matching_pids(table, watch);
     }
@@ -383,10 +381,7 @@ fn apply_baseline(
     watch.baseline_captured = true;
 }
 
-pub(crate) fn capture_baseline(
-    app: &AppHandle,
-    watch: &mut LaunchWatch,
-) -> Result<(), String> {
+pub(crate) fn capture_baseline(app: &AppHandle, watch: &mut LaunchWatch) -> Result<(), String> {
     let table = process_table::snapshot(true)?;
     let process_ids = if watch.descendants_only && !watch.ignore_baseline_windows {
         matching_pids(&table, watch)
@@ -437,10 +432,8 @@ fn window_close_is_terminal(
     no_window && !foreground_matches && !last_window_alive
 }
 
-fn advance(
-    tracked: &mut TrackedLaunch,
-    observation: &Observation,
-) -> Option<LaunchEvent> {    if tracked.session.phase.is_terminal() {
+fn advance(tracked: &mut TrackedLaunch, observation: &Observation) -> Option<LaunchEvent> {
+    if tracked.session.phase.is_terminal() {
         return None;
     }
     // A recycled PID is a different process. Detect it before matching
@@ -486,9 +479,7 @@ fn advance(
                 observation.identities.get(&window.process_id),
                 window.process_created_at_100ns,
             ) {
-                (Some(identity), Some(created_at)) => {
-                    identity.created_at_100ns == created_at
-                }
+                (Some(identity), Some(created_at)) => identity.created_at_100ns == created_at,
                 _ => true,
             }
         })
@@ -555,16 +546,14 @@ fn advance(
             .session
             .window_id
             .is_some_and(crate::window_broker::is_window_alive);
-        if window_close_is_terminal(
-            windows.is_empty(),
-            foreground_matches,
-            last_window_alive,
-        ) && matches!(
-            tracked.session.phase,
-            LaunchPhase::ProcessStarted
-                | LaunchPhase::WindowAppeared
-                | LaunchPhase::SessionActive
-        ) {
+        if window_close_is_terminal(windows.is_empty(), foreground_matches, last_window_alive)
+            && matches!(
+                tracked.session.phase,
+                LaunchPhase::ProcessStarted
+                    | LaunchPhase::WindowAppeared
+                    | LaunchPhase::SessionActive
+            )
+        {
             let absent_since = *tracked
                 .window_absent_since_ms
                 .get_or_insert(observation.at_ms);
@@ -574,9 +563,8 @@ fn advance(
                 EXIT_GRACE_MS
             };
             if observation.at_ms.saturating_sub(absent_since) >= timeout {
-                tracked.session.attention = Some(
-                    "Okno aplikacji zniknęło; sesja zakończona bezpiecznie.".into(),
-                );
+                tracked.session.attention =
+                    Some("Okno aplikacji zniknęło; sesja zakończona bezpiecznie.".into());
                 return set_phase(tracked, LaunchPhase::Ended, observation.at_ms, None);
             }
         } else {
@@ -590,7 +578,9 @@ fn advance(
         LaunchPhase::Requested => {
             if process_running {
                 Some(LaunchPhase::ProcessStarted)
-            } else if observation.at_ms.saturating_sub(tracked.session.started_at_ms)
+            } else if observation
+                .at_ms
+                .saturating_sub(tracked.session.started_at_ms)
                 >= tracked.watch.start_timeout_ms
             {
                 return set_phase(
@@ -669,11 +659,7 @@ impl LaunchRegistry {
             .snapshot()
     }
 
-    fn register(
-        &self,
-        app: &AppHandle,
-        mut watch: LaunchWatch,
-    ) -> Result<LaunchSession, String> {
+    fn register(&self, app: &AppHandle, mut watch: LaunchWatch) -> Result<LaunchSession, String> {
         let _registration = self
             .registration
             .lock()
@@ -905,7 +891,9 @@ impl LaunchRegistry {
         for (session, owners) in finished {
             let owns_session = session_orchestrator::launch_owns_session(app, &session.id);
             let restore = if owns_session {
-                Some(window_broker::restore_velora_after_session_end(app, &owners))
+                Some(window_broker::restore_velora_after_session_end(
+                    app, &owners,
+                ))
             } else {
                 None
             };
@@ -1093,20 +1081,6 @@ pub(crate) fn is_launch_active(app: &AppHandle, launch_id: &str) -> bool {
         .any(|tracked| tracked.session.id == launch_id && tracked.session.phase.is_active())
 }
 
-/// Latest tracked launch for an application id, active or terminal. The Edge
-/// adapter uses this as a read-only view; it never owns the session.
-pub(crate) fn latest_launch_for_app(app: &AppHandle, app_id: &str) -> Option<LaunchSession> {
-    app.state::<LaunchRegistry>()
-        .state
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .launches
-        .iter()
-        .filter(|tracked| tracked.session.app_id.as_deref() == Some(app_id))
-        .max_by_key(|tracked| tracked.session.started_at_ms)
-        .map(|tracked| tracked.session.clone())
-}
-
 /// Only an active launch may own a session. Used before starting a duplicate.
 pub(crate) fn active_launch_for_app(app: &AppHandle, app_id: &str) -> Option<LaunchSession> {
     app.state::<LaunchRegistry>()
@@ -1116,11 +1090,165 @@ pub(crate) fn active_launch_for_app(app: &AppHandle, app_id: &str) -> Option<Lau
         .launches
         .iter()
         .filter(|tracked| {
-            tracked.session.app_id.as_deref() == Some(app_id)
-                && tracked.session.phase.is_active()
+            tracked.session.app_id.as_deref() == Some(app_id) && tracked.session.phase.is_active()
         })
         .max_by_key(|tracked| tracked.session.started_at_ms)
         .map(|tracked| tracked.session.clone())
+}
+
+/// All active, service-scoped Edge Cinema launches. The LaunchRegistry remains
+/// the sole lifecycle store; this is a read-only projection for the adapter's
+/// per-service markers and status selection.
+pub(crate) fn active_cinema_launches(app: &AppHandle) -> Vec<LaunchSession> {
+    let mut launches = app
+        .state::<LaunchRegistry>()
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .launches
+        .iter()
+        .filter(|tracked| {
+            tracked.session.kind == LaunchKind::Cinema
+                && tracked
+                    .session
+                    .app_id
+                    .as_deref()
+                    .is_some_and(crate::edge_cinema::is_service_cinema_app_id)
+                && tracked.session.phase.is_active()
+        })
+        .map(|tracked| tracked.session.clone())
+        .collect::<Vec<_>>();
+    launches.sort_by_key(|launch| launch.started_at_ms);
+    launches
+}
+
+pub(crate) fn latest_cinema_launch(app: &AppHandle, active_only: bool) -> Option<LaunchSession> {
+    app.state::<LaunchRegistry>()
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .launches
+        .iter()
+        .filter(|tracked| {
+            tracked.session.kind == LaunchKind::Cinema
+                && tracked
+                    .session
+                    .app_id
+                    .as_deref()
+                    .is_some_and(crate::edge_cinema::is_service_cinema_app_id)
+                && (!active_only || tracked.session.phase.is_active())
+        })
+        .max_by_key(|tracked| tracked.session.started_at_ms)
+        .map(|tracked| tracked.session.clone())
+}
+
+/// Process identities captured by this exact active launch. Callers can use
+/// them to validate an observed HWND without trusting a PID alone.
+pub(crate) fn owned_process_identities_for_launch(
+    app: &AppHandle,
+    launch_id: &str,
+) -> Vec<ProcessIdentity> {
+    app.state::<LaunchRegistry>()
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .launches
+        .iter()
+        .find(|tracked| {
+            tracked.session.id == launch_id
+                && tracked.session.kind == LaunchKind::Cinema
+                && tracked.session.phase.is_active()
+                && tracked
+                    .session
+                    .app_id
+                    .as_deref()
+                    .is_some_and(crate::edge_cinema::is_service_cinema_app_id)
+        })
+        .map(|tracked| {
+            let mut identities = tracked
+                .known_identities
+                .iter()
+                .map(|(process_id, created_at_100ns)| ProcessIdentity {
+                    process_id: *process_id,
+                    created_at_100ns: *created_at_100ns,
+                })
+                .collect::<Vec<_>>();
+            if !tracked.watch.root_reused {
+                if let Some(identity) = tracked.watch.root_identity {
+                    if !identities
+                        .iter()
+                        .any(|known| known.process_id == identity.process_id)
+                    {
+                        identities.push(identity);
+                    }
+                }
+            }
+            identities
+        })
+        .unwrap_or_default()
+}
+
+/// Re-select a still-active service launch after Home or another launch. This
+/// updates the authoritative SessionContext to the chosen launch without
+/// creating a duplicate registry entry or superseding a sibling service.
+pub(crate) fn select_existing_cinema_launch(
+    app: &AppHandle,
+    launch_id: &str,
+) -> Result<LaunchSession, String> {
+    let registry = app.state::<LaunchRegistry>();
+    let _registration = registry
+        .registration
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let orchestrator = app.state::<session_orchestrator::SessionOrchestrator>();
+    let _transaction = orchestrator.lock_transaction();
+    let mut state = registry
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let tracked_index = state
+        .launches
+        .iter()
+        .position(|tracked| {
+            tracked.session.id == launch_id
+                && tracked.session.kind == LaunchKind::Cinema
+                && tracked.session.phase.is_active()
+                && tracked
+                    .session
+                    .app_id
+                    .as_deref()
+                    .is_some_and(crate::edge_cinema::is_service_cinema_app_id)
+        })
+        .ok_or_else(|| "Nie znaleziono aktywnej sesji tej usługi Edge Cinema.".to_string())?;
+    let mut session = state.launches[tracked_index].session.clone();
+
+    let context = SessionContext::for_launch(&session.id, session.app_id.as_deref(), None);
+    let current = session_orchestrator::current_snapshot(app);
+    let steps = session_orchestrator::transition_steps(current.current, SessionId::Cinema)?;
+    let last_index = steps.len().saturating_sub(1);
+    let mut applied = current;
+    for (index, step) in steps.iter().enumerate() {
+        applied = session_orchestrator::apply_transition(
+            app,
+            *step,
+            TransitionCause::Launch,
+            (index == last_index).then(|| context.clone()),
+        )
+        .map_err(|error| error.message)?;
+    }
+    if applied.current != SessionId::Cinema
+        || applied
+            .context
+            .as_ref()
+            .and_then(|context| context.launch_id.as_deref())
+            != Some(session.id.as_str())
+    {
+        return Err("Nie udało się przypisać wybranej usługi do aktywnej sesji.".into());
+    }
+    session.session_revision = Some(applied.revision);
+    state.launches[tracked_index].session.session_revision = session.session_revision;
+    state.launches[tracked_index].session.updated_at_ms = now_ms();
+    Ok(session)
 }
 
 pub(crate) fn launch_by_id(app: &AppHandle, launch_id: &str) -> Option<LaunchSession> {
@@ -1153,7 +1281,9 @@ pub(crate) fn cancel_launch(app: &AppHandle, launch_id: &str) -> Result<LaunchSe
             .launches
             .iter_mut()
             .find(|tracked| tracked.session.id == launch_id)
-            .ok_or_else(|| "Nie znaleziono sesji uruchomienia o podanym identyfikatorze.".to_string())?;
+            .ok_or_else(|| {
+                "Nie znaleziono sesji uruchomienia o podanym identyfikatorze.".to_string()
+            })?;
         if tracked.session.phase.is_terminal() {
             return Ok(tracked.session.clone());
         }
@@ -1203,8 +1333,8 @@ pub fn get_launch_registry_status(app: AppHandle) -> LaunchRegistrySnapshot {
 mod tests {
     use super::{
         advance, apply_baseline, matching_pids, reset_resume_state, same_launch_group, set_phase,
-        window_close_is_terminal, ProcessTable, LaunchKind, LaunchPhase, LaunchSession, LaunchWatch,
-        Observation, TrackedLaunch, EXIT_GRACE_MS, START_TIMEOUT_MS,
+        window_close_is_terminal, LaunchKind, LaunchPhase, LaunchSession, LaunchWatch, Observation,
+        ProcessTable, TrackedLaunch, EXIT_GRACE_MS, START_TIMEOUT_MS,
     };
     use crate::process_table::ProcessIdentity;
     use crate::window_broker::{ForegroundWindow, TrackedWindow};
@@ -1294,7 +1424,12 @@ mod tests {
 
         let event = advance(
             &mut session,
-            &observation(vec![(200, 1, "Playnite.FullscreenApp.exe")], vec![], None, 2_000),
+            &observation(
+                vec![(200, 1, "Playnite.FullscreenApp.exe")],
+                vec![],
+                None,
+                2_000,
+            ),
         )
         .unwrap();
         assert_eq!(event.session.phase, LaunchPhase::ProcessStarted);
@@ -1325,11 +1460,7 @@ mod tests {
         assert!(event.session.foreground);
         assert_eq!(event.session.window_id, Some(700));
 
-        let event = advance(
-            &mut session,
-            &observation(vec![], vec![], None, 10_000),
-        )
-        .unwrap();
+        let event = advance(&mut session, &observation(vec![], vec![], None, 10_000)).unwrap();
         assert_eq!(event.session.phase, LaunchPhase::ExitPending);
 
         assert!(advance(
@@ -1351,7 +1482,12 @@ mod tests {
         let mut session = tracked();
         advance(
             &mut session,
-            &observation(vec![(200, 1, "Playnite.FullscreenApp.exe")], vec![], None, 2_000),
+            &observation(
+                vec![(200, 1, "Playnite.FullscreenApp.exe")],
+                vec![],
+                None,
+                2_000,
+            ),
         );
         advance(&mut session, &observation(vec![], vec![], None, 3_000));
         assert_eq!(session.session.phase, LaunchPhase::ExitPending);
@@ -1369,7 +1505,12 @@ mod tests {
         let mut session = tracked();
         advance(
             &mut session,
-            &observation(vec![(200, 1, "Playnite.FullscreenApp.exe")], vec![], None, 2_000),
+            &observation(
+                vec![(200, 1, "Playnite.FullscreenApp.exe")],
+                vec![],
+                None,
+                2_000,
+            ),
         );
         advance(&mut session, &observation(vec![], vec![], None, 3_000));
         let event = advance(
@@ -1391,7 +1532,12 @@ mod tests {
         let mut session = tracked();
         advance(
             &mut session,
-            &observation(vec![(200, 1, "Playnite.FullscreenApp.exe")], vec![], None, 2_000),
+            &observation(
+                vec![(200, 1, "Playnite.FullscreenApp.exe")],
+                vec![],
+                None,
+                2_000,
+            ),
         );
         let event = advance(
             &mut session,
@@ -1704,16 +1850,28 @@ mod tests {
     }
 
     #[test]
-    fn cinema_launches_are_not_superseded_by_generic_managed_apps() {
+    fn cinema_launches_coexist_across_services_and_deduplicate_within_a_service() {
         assert!(same_launch_group(
             LaunchKind::Cinema,
-            Some("edge-cinema"),
+            Some("edge-cinema:netflix"),
             LaunchKind::Cinema,
-            Some("edge-cinema"),
+            Some("edge-cinema:netflix"),
+        ));
+        assert!(!same_launch_group(
+            LaunchKind::Cinema,
+            Some("edge-cinema:netflix"),
+            LaunchKind::Cinema,
+            Some("edge-cinema:disney"),
         ));
         assert!(!same_launch_group(
             LaunchKind::Cinema,
             Some("edge-cinema"),
+            LaunchKind::Cinema,
+            Some("edge-cinema:netflix"),
+        ));
+        assert!(!same_launch_group(
+            LaunchKind::Cinema,
+            Some("edge-cinema:netflix"),
             LaunchKind::ManagedApp,
             Some("edge"),
         ));
@@ -1721,7 +1879,7 @@ mod tests {
             LaunchKind::ManagedApp,
             Some("edge"),
             LaunchKind::Cinema,
-            Some("edge-cinema"),
+            Some("edge-cinema:netflix"),
         ));
         assert_eq!(
             super::session_target_for(
@@ -1729,6 +1887,15 @@ mod tests {
                 Some(crate::session_orchestrator::SessionId::Cinema)
             ),
             Some(crate::session_orchestrator::SessionId::Cinema)
+        );
+        assert_eq!(
+            crate::session_orchestrator::transition_steps(
+                crate::session_orchestrator::SessionId::Cinema,
+                crate::session_orchestrator::SessionId::Cinema,
+            )
+            .unwrap(),
+            vec![crate::session_orchestrator::SessionId::Cinema],
+            "selecting another active Cinema service still reapplies its context"
         );
     }
 
@@ -2030,11 +2197,7 @@ mod tests {
     #[test]
     fn malformed_or_empty_process_snapshot_does_not_fabricate_a_session() {
         let mut session = tracked();
-        assert!(advance(
-            &mut session,
-            &observation(vec![], vec![], None, 1_500),
-        )
-        .is_none());
+        assert!(advance(&mut session, &observation(vec![], vec![], None, 1_500),).is_none());
         assert_eq!(session.session.phase, LaunchPhase::Requested);
     }
 
@@ -2050,7 +2213,10 @@ mod tests {
 
 #[cfg(test)]
 mod session_owner_tests {
-    use super::{advance, LaunchKind, LaunchPhase, LaunchSession, LaunchWatch, Observation, TrackedLaunch, EXIT_GRACE_MS};
+    use super::{
+        advance, LaunchKind, LaunchPhase, LaunchSession, LaunchWatch, Observation, TrackedLaunch,
+        EXIT_GRACE_MS,
+    };
     use crate::process_table::{ProcessIdentity, ProcessTable};
     use crate::window_broker::ForegroundWindow;
     use std::collections::HashMap;
@@ -2129,7 +2295,10 @@ mod session_owner_tests {
         advance(
             &mut launch,
             &observe(
-                vec![(STEAM_PID, 1, "steam.exe"), (GAME_PID, STEAM_PID, "Game.exe")],
+                vec![
+                    (STEAM_PID, 1, "steam.exe"),
+                    (GAME_PID, STEAM_PID, "Game.exe"),
+                ],
                 &[(STEAM_PID, 7_000), (GAME_PID, 8_000)],
                 2_000,
             ),
@@ -2140,7 +2309,11 @@ mod session_owner_tests {
         // after the exit grace window, and it still remembers both identities.
         advance(
             &mut launch,
-            &observe(vec![(STEAM_PID, 1, "steam.exe")], &[(STEAM_PID, 7_000)], 3_000),
+            &observe(
+                vec![(STEAM_PID, 1, "steam.exe")],
+                &[(STEAM_PID, 7_000)],
+                3_000,
+            ),
         );
         advance(
             &mut launch,
@@ -2161,7 +2334,10 @@ mod session_owner_tests {
         advance(
             &mut launch,
             &observe(
-                vec![(STEAM_PID, 1, "steam.exe"), (GAME_PID, STEAM_PID, "Game.exe")],
+                vec![
+                    (STEAM_PID, 1, "steam.exe"),
+                    (GAME_PID, STEAM_PID, "Game.exe"),
+                ],
                 &[(STEAM_PID, 7_000), (GAME_PID, 8_000)],
                 2_000,
             ),
@@ -2170,7 +2346,10 @@ mod session_owner_tests {
         advance(
             &mut launch,
             &observe(
-                vec![(STEAM_PID, 1, "chrome.exe"), (GAME_PID, STEAM_PID, "Game.exe")],
+                vec![
+                    (STEAM_PID, 1, "chrome.exe"),
+                    (GAME_PID, STEAM_PID, "Game.exe"),
+                ],
                 &[(STEAM_PID, 9_999), (GAME_PID, 8_000)],
                 3_000,
             ),
@@ -2181,7 +2360,10 @@ mod session_owner_tests {
             Some(&7_000),
             "only the original root identity is ever handed to the focus policy"
         );
-        assert!(!launch.known_identities.values().any(|created| *created == 9_999));
+        assert!(!launch
+            .known_identities
+            .values()
+            .any(|created| *created == 9_999));
     }
 
     #[test]
