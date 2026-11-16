@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { playniteLaunchRef } from "../contracts";
+import { ensureControllerHomeForExternalLaunch } from "./controllerHomePreflight";
 
 /**
  * Granica adaptera biblioteki Playnite (VELORA 1.0).
@@ -188,6 +189,7 @@ export async function launchPlayniteGame(gameId: string): Promise<PlayniteLaunch
     throw new Error("Nieprawidłowy identyfikator gry Playnite.");
   }
   try {
+    await ensureControllerHomeForExternalLaunch();
     const raw = await invoke<unknown>("launch_playnite_game", { gameId });
     if (!isRecord(raw) || raw.gameId !== gameId || raw.launched !== true) {
       throw new Error(LAUNCH_FAILURE);

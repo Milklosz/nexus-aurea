@@ -43,6 +43,7 @@ const ownerLabels: Record<FocusOwner, string> = {
   external: "inna aplikacja",
   ambient: "ekran Ambient",
   keyboard: "klawiatura ekranowa",
+  "controller-preflight": "potwierdzenie powrotu pada",
   diagnostics: "diagnostyka",
   search: "wyszukiwarka",
   "control-center": "Control Center",

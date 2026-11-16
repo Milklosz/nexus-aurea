@@ -128,7 +128,14 @@ describe("Ecosystem — kompatybilność z dotychczasowym UI", () => {
 
   it("eksporty Edge Cinema i nazwy komend pozostają niezmienione", async () => {
     expect(EDGE_CINEMA_PROFILE_NAME).toBe("VELORA-EdgeCinema");
-    expect(EDGE_CINEMA_NOTES).toHaveLength(3);
+    expect(EDGE_CINEMA_NOTES).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("osobny, trwały profil"),
+        expect.stringContaining("przy pierwszym uruchomieniu zaloguj się"),
+        expect.stringContaining("VELORA-EdgeCinema pozostaje nietknięty"),
+        expect.stringContaining("nie gwarantuje i nie zmienia obsługi DRM"),
+      ]),
+    );
     mocks.invoke.mockResolvedValue({
       windows: true,
       edgeDetected: true,

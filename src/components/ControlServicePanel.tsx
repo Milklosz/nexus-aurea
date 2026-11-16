@@ -136,9 +136,11 @@ export function ControlServicePanel() {
           {" · Aktywne okno: "}{status.foregroundProcess ?? "niedostępne"}
         </p>
         <p role="status">
-          DualSense Home: {status.gamepadHomeRunning
-            ? `${status.gamepadHomeDeviceCount ?? 0} aktywne · PS + Options`
-            : `niedostępny · fallback ${status.fallbackHotkey ?? "Ctrl+Alt+N"}`}
+          DualSense Home: {!status.running
+            ? `Control Service wyłączony · skrót ${status.fallbackHotkey ?? "Ctrl+Alt+N"} dostępny po włączeniu usługi`
+            : status.gamepadHomeRunning
+              ? `${status.gamepadHomeDeviceCount ?? 0} aktywne · PS + Options`
+              : `niedostępny · fallback ${status.fallbackHotkey ?? "Ctrl+Alt+N"}`}
           {status.gamepadHomeLastError ? ` · ${status.gamepadHomeLastError}` : ""}
           {status.gamepadHomeLastChord ? ` · ostatnia kombinacja: ${status.gamepadHomeLastChord.outcome}` : ""}
         </p>
@@ -181,8 +183,8 @@ export function ControlServicePanel() {
           </select>
         </label>}
         {status.gamepadHomeWarning && <p role="note">{status.gamepadHomeWarning}</p>}
-        <p>Ctrl+Alt+N wraca do VELORA. Ctrl+Alt+F12 natychmiast wyłącza usługę. Tryb gry zwalnia skrót klawiaturowy; DualSense PS + Options pozostaje dostępny jako powrót.</p>
-        <p>DualSense Home odczytuje wyłącznie raporty Sony, aby wykryć PS + Options. Nie blokuje, nie przechwytuje i nie mapuje inputu gry. Gdy pada lub Win32 nie da odczytu, działa Ctrl+Alt+N.</p>
+        <p>Gdy Control Service jest aktywny, {status.fallbackHotkey ?? "Ctrl+Alt+N"} wraca do VELORA, a Ctrl+Alt+F12 natychmiast wyłącza usługę. Tryb gry zwalnia skrót klawiaturowy. Niezależny powrót lokalnym DualShock 4 ustawisz na tę sesję w Control Center.</p>
+        <p>DualSense Home odczytuje wyłącznie raporty Sony, aby wykryć PS + Options. Nie blokuje, nie przechwytuje i nie mapuje inputu gry. Gdy usługa działa, wybrany skrót pozostaje alternatywą przy niedostępnym padzie lub odmowie Win32.</p>
         <p>Globalne mapowanie przycisków, ruch kursora i głośność są wyłączone w tym prototypie.</p>
         {error && <p role="alert">{error}</p>}
         <p className="control-service-notice" role={urgentNotice ? "alert" : "status"} aria-live={urgentNotice ? "assertive" : "polite"}>{notice}</p>

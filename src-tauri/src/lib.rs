@@ -6,15 +6,15 @@ mod claude_usage;
 mod control_service;
 mod credential_store;
 mod diagnostics;
+mod display_audio;
 #[allow(dead_code)]
 mod ds4;
-mod display_audio;
 mod edge_cinema;
 mod gamepad_home;
-mod pad_hub;
 mod launch_registry;
 mod music_service;
 mod operation_registry;
+mod pad_hub;
 mod platform_launchers;
 mod playnite_library;
 #[allow(dead_code)]
@@ -54,6 +54,7 @@ pub fn run() {
             claude_usage::get_claude_usage,
             platform_launchers::launch_platform,
             pad_hub::get_native_controller_status,
+            pad_hub::set_controller_home_enabled,
             control_service::get_control_service_status,
             control_service::start_control_service,
             control_service::set_control_game_mode,

@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { NativeControllerStore, type NativeControllerDeps } from "../services/nativeControllerStore";
-import type { NativeControllerEvent, NativeControllerStatus } from "../services/nativeController";
+import { disabledNativeControllerStatus, type NativeControllerEvent, type NativeControllerStatus } from "../services/nativeController";
 
 function harness(initial: Partial<NativeControllerStatus> = {}) {
   let emit: ((event: NativeControllerEvent) => void) | null = null;
   const stops: Array<ReturnType<typeof vi.fn>> = [];
   let status: NativeControllerStatus = {
-    supported: true, running: true, lastError: null, pads: [], ignoredReports: 0, ...initial,
+    ...disabledNativeControllerStatus, supported: true, running: true, ...initial,
   };
   const listen = vi.fn(async (callback: (event: NativeControllerEvent) => void) => {
     emit = callback;
@@ -17,6 +17,10 @@ function harness(initial: Partial<NativeControllerStatus> = {}) {
   const deps: NativeControllerDeps = {
     listen,
     getStatus: vi.fn(async () => status),
+    setHomeEnabled: vi.fn(async (enabled: boolean) => {
+      status = { ...status, homeEnabled: enabled, homeOverride: enabled };
+      return status;
+    }),
     now: () => 1000,
   };
   return {
@@ -90,6 +94,13 @@ describe("NativeControllerStore", () => {
     expect(h.store.getModel().activeDevice).toBe("pre");
   });
 
+  it("publishes the session-only Home policy returned by the native command", async () => {
+    const h = harness();
+    await h.store.setHomeEnabled(true);
+    expect(h.deps.setHomeEnabled).toHaveBeenCalledWith(true);
+    expect(h.store.getStatusSnapshot()).toMatchObject({ homeEnabled: true, homeOverride: true });
+  });
+
   it("reconcile drops a pad the native layer no longer lists (missed disconnect)", async () => {
     const h = harness();
     h.store.acquire();
@@ -107,6 +118,17 @@ describe("NativeControllerStore", () => {
     await flush();
     expect(h.store.getModel().unavailableReason).toBeNull();
     expect(h.store.getModel().pads).toEqual([]);
+  });
+
+  it("clears stale native ownership when the sink stops without an error", async () => {
+    const h = harness({ pads: [{ device: "a", revision: "v2", transport: "usb" }] });
+    const release = h.store.acquire();
+    await flush();
+    expect(h.store.getModel().pads).toHaveLength(1);
+    h.setStatus({ running: false, pads: [] });
+    await h.store.reconcile();
+    expect(h.store.getModel().pads).toEqual([]);
+    release();
   });
 
   it("reports unavailable when the native runtime failed to start", async () => {
@@ -147,13 +169,113 @@ describe("NativeControllerStore", () => {
       calls += 1;
       if (calls === 1) {
         h.fire({ kind: "disconnected", device: "a" }); // the event overtakes the stale reply
-        return { supported: true, running: true, lastError: null, pads: [{ device: "a", revision: "v2", transport: "usb" }], ignoredReports: 0 };
+        return { ...disabledNativeControllerStatus, supported: true, running: true, pads: [{ device: "a", revision: "v2", transport: "usb" }] };
       }
-      return { supported: true, running: true, lastError: null, pads: [], ignoredReports: 0 };
+      return { ...disabledNativeControllerStatus, supported: true, running: true, pads: [] };
     });
     await h.store.reconcile();
     expect(calls).toBe(2); // asked again because an event arrived in flight
     expect(h.store.getModel().pads).toEqual([]);
+  });
+
+  it("shares one pending native status read and ignores its reply after the store generation changes", async () => {
+    const h = harness();
+    let resolveOld!: (status: NativeControllerStatus) => void;
+    (h.deps.getStatus as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => new Promise<NativeControllerStatus>((resolve) => { resolveOld = resolve; }))
+      .mockResolvedValue({ ...disabledNativeControllerStatus, supported: true, running: true, pads: [] });
+    const release = h.store.acquire();
+    await flush();
+    expect(h.deps.getStatus).toHaveBeenCalledTimes(1);
+
+    const reads = [h.store.reconcile(), h.store.reconcile(), h.store.reconcile()];
+    expect(h.deps.getStatus).toHaveBeenCalledTimes(1);
+    release();
+    const releaseAgain = h.store.acquire();
+    await flush();
+    expect(h.deps.getStatus).toHaveBeenCalledTimes(2);
+
+    resolveOld({
+      ...disabledNativeControllerStatus,
+      supported: true,
+      running: true,
+      pads: [{ device: "stale", revision: "v2", transport: "usb" }],
+    });
+    await Promise.all(reads);
+    await flush();
+    expect(h.store.getModel().pads.map((pad) => pad.device)).not.toContain("stale");
+    expect(h.store.getStatusSnapshot().pads.map((pad) => pad.device)).not.toContain("stale");
+    releaseAgain();
+  });
+
+  it("marks a timed out native status read unknown and ignores a late reply", async () => {
+    const h = harness();
+    let resolveRead!: (status: NativeControllerStatus) => void;
+    (h.deps.getStatus as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => new Promise<NativeControllerStatus>((resolve) => { resolveRead = resolve; }),
+    );
+    const release = h.store.acquire();
+    await flush();
+    h.store.invalidateStatusRead();
+    resolveRead({
+      ...disabledNativeControllerStatus,
+      supported: true,
+      running: true,
+      pads: [{ device: "late", revision: "v2", transport: "usb" }],
+    });
+    await flush();
+    expect(h.store.getStatusKnown()).toBe(false);
+    expect(h.store.getModel().pads.map((pad) => pad.device)).not.toContain("late");
+    release();
+  });
+
+  it("keeps timed-out status reads singleflight until settle, then allows a fresh read", async () => {
+    const h = harness();
+    let resolveStalled!: (status: NativeControllerStatus) => void;
+    (h.deps.getStatus as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => new Promise<NativeControllerStatus>((resolve) => { resolveStalled = resolve; }))
+      .mockResolvedValueOnce({ ...disabledNativeControllerStatus, supported: true, running: true, pads: [] });
+
+    const stalled = h.store.reconcile();
+    expect(h.deps.getStatus).toHaveBeenCalledTimes(1);
+    h.store.invalidateStatusRead();
+    const joinedAfterFirstTimeout = h.store.reconcile();
+    h.store.invalidateStatusRead();
+    const joinedAfterSecondTimeout = h.store.reconcile();
+
+    expect(h.deps.getStatus).toHaveBeenCalledTimes(1);
+    resolveStalled({
+      ...disabledNativeControllerStatus,
+      supported: true,
+      running: true,
+      pads: [{ device: "stale", revision: "v2", transport: "usb" }],
+    });
+    await Promise.all([stalled, joinedAfterFirstTimeout, joinedAfterSecondTimeout]);
+    await flush();
+    expect(h.store.getStatusKnown()).toBe(false);
+    expect(h.store.getModel().pads).toEqual([]);
+
+    await h.store.reconcile();
+    expect(h.deps.getStatus).toHaveBeenCalledTimes(2);
+    expect(h.store.getStatusKnown()).toBe(true);
+  });
+
+  it("keeps an explicit Home acknowledgement newer than an older pending status read", async () => {
+    const h = harness();
+    let resolveRead!: (status: NativeControllerStatus) => void;
+    (h.deps.getStatus as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => new Promise<NativeControllerStatus>((resolve) => { resolveRead = resolve; }),
+    );
+    const release = h.store.acquire();
+    await flush();
+
+    const enabled = await h.store.setHomeEnabled(true);
+    expect(enabled.homeEnabled).toBe(true);
+    resolveRead({ ...disabledNativeControllerStatus, supported: true, running: true, homeEnabled: false });
+    await flush();
+
+    expect(h.store.getStatusSnapshot().homeEnabled).toBe(true);
+    release();
   });
 
   it("resets the model when the last consumer leaves", async () => {

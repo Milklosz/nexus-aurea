@@ -15,6 +15,7 @@ const base: FocusOwnerInput = {
   veloraFocused: true,
   ambientActive: false,
   keyboardOpen: false,
+  controllerPreflightOpen: false,
   diagnosticsOpen: false,
   controlCenterOpen: false,
   activeElement: null,
@@ -26,6 +27,7 @@ describe("resolveFocusOwner", () => {
   it("has exactly one owner and follows the layer order", () => {
     expect(resolveFocusOwner(base)).toBe("home-dock");
     expect(resolveFocusOwner({ ...base, controlCenterOpen: true })).toBe("control-center");
+    expect(resolveFocusOwner({ ...base, controllerPreflightOpen: true })).toBe("controller-preflight");
     expect(resolveFocusOwner({ ...base, controlCenterOpen: true, controlCenterPanel: "search" })).toBe("search");
     expect(resolveFocusOwner({ ...base, diagnosticsOpen: true, controlCenterOpen: true })).toBe("diagnostics");
     expect(resolveFocusOwner({ ...base, keyboardOpen: true, controlCenterOpen: true, controlCenterPanel: "search" })).toBe("keyboard");
@@ -42,13 +44,23 @@ describe("resolveFocusOwner", () => {
   it("a hidden interface never owns input", () => {
     expect(ownerAcceptsController("external")).toBe(false);
     expect(ownerAcceptsController("ambient")).toBe(false);
-    for (const owner of ["keyboard", "diagnostics", "search", "control-center", "home-actions", "home-dock"] as const) {
+    for (const owner of ["keyboard", "controller-preflight", "diagnostics", "search", "control-center", "home-actions", "home-dock"] as const) {
       expect(ownerAcceptsController(owner)).toBe(true);
     }
   });
 });
 
 describe("FocusOwnershipGuard", () => {
+  it("settles confirms when a local controller preflight opens or closes", () => {
+    const guard = new FocusOwnershipGuard();
+    guard.observe("home-dock", 1000);
+    guard.observe("controller-preflight", 1100);
+    expect(guard.allows({ type: "confirm" }, 1200)).toBe(false);
+    guard.observe("home-dock", 2000);
+    expect(guard.allows({ type: "confirm" }, 2010)).toBe(false);
+    expect(guard.allows({ type: "confirm" }, 2000 + CONFIRM_SETTLE_MS)).toBe(true);
+  });
+
   it("swallows a confirm right after a panel closes, but never move or back", () => {
     const guard = new FocusOwnershipGuard();
     guard.observe("control-center", 1000);

@@ -14,6 +14,7 @@ use crate::control_service::ControlService;
 use crate::display_audio::{self, DisplayAudioSnapshot};
 use crate::launch_registry::{LaunchRegistry, LaunchRegistrySnapshot};
 use crate::operation_registry::SessionOperation;
+use crate::pad_hub::{NativeControllerStatus, PadHub};
 use crate::session_orchestrator::{self, SessionOrchestrator, SessionSnapshot};
 use crate::window_broker::{WindowBroker, WindowBrokerSnapshot};
 
@@ -56,6 +57,7 @@ pub struct DiagnosticsSnapshot {
     pub launch_registry: LaunchRegistrySnapshot,
     pub window_broker: WindowBrokerSnapshot,
     pub control_service: crate::control_service::ControlServiceStatus,
+    pub native_controller: NativeControllerStatus,
     pub display_audio: DisplayAudioSnapshot,
     pub errors: Vec<DiagnosticsError>,
     pub limitations: Vec<String>,
@@ -162,6 +164,12 @@ fn collect_errors(snapshot: &DiagnosticsSnapshot) -> Vec<DiagnosticsError> {
             message: error.clone(),
         });
     }
+    if let Some(error) = snapshot.native_controller.last_error.as_ref() {
+        errors.push(DiagnosticsError {
+            source: "nativeController".into(),
+            message: error.clone(),
+        });
+    }
     if let Some(error) = snapshot.control_service.gamepad_home_last_error.as_ref() {
         errors.push(DiagnosticsError {
             source: "gamepadHome".into(),
@@ -199,6 +207,7 @@ pub(crate) fn capture(app: &AppHandle) -> DiagnosticsSnapshot {
     let launch_registry = app.state::<LaunchRegistry>().snapshot();
     let window_broker = app.state::<WindowBroker>().refresh();
     let control_service = app.state::<ControlService>().status();
+    let native_controller = app.state::<PadHub>().status();
     let display_audio = display_audio::snapshot();
     let mut snapshot = DiagnosticsSnapshot {
         generated_at_ms: now_ms(),
@@ -209,6 +218,7 @@ pub(crate) fn capture(app: &AppHandle) -> DiagnosticsSnapshot {
         launch_registry,
         window_broker,
         control_service,
+        native_controller,
         display_audio,
         errors: Vec::new(),
         limitations: limitations(),
@@ -314,6 +324,12 @@ fn sanitize_snapshot(snapshot: &mut DiagnosticsSnapshot) {
     sanitize_optional(&mut snapshot.control_service.gamepad_home_warning);
     snapshot.control_service.fallback_hotkey =
         sanitize_text(&snapshot.control_service.fallback_hotkey);
+    sanitize_optional(&mut snapshot.native_controller.last_error);
+    for pad in &mut snapshot.native_controller.pads {
+        if pad.device.len() != 16 || !pad.device.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            pad.device = "invalid-id".into();
+        }
+    }
     snapshot.display_audio.display_signature =
         sanitize_text(&snapshot.display_audio.display_signature);
     sanitize_optional(&mut snapshot.display_audio.display_error);
@@ -386,6 +402,7 @@ mod tests {
         AudioEndpointInfo, DisplayAudioPolicy, DisplayAudioSnapshot, DisplayInfo,
     };
     use crate::launch_registry::{LaunchRegistrySnapshot, LaunchSession};
+    use crate::pad_hub::NativeControllerStatus;
     use crate::session_orchestrator::SessionSnapshot;
     use crate::window_broker::{ForegroundWindow, WindowBrokerSnapshot};
 
@@ -457,6 +474,7 @@ mod tests {
                 gamepad_home_last_chord: None,
                 last_error: None,
             },
+            native_controller: NativeControllerStatus::default(),
             display_audio: DisplayAudioSnapshot {
                 windows: true,
                 supported: true,
@@ -516,6 +534,26 @@ mod tests {
         }
         assert!(json.contains("\"readonly\":true"));
         assert!(json.contains("\"automaticmodechanges\":false"));
+    }
+
+    #[test]
+    fn native_controller_diagnostics_keep_only_hashed_ids_and_numeric_trace() {
+        let mut snapshot = minimal_snapshot();
+        snapshot.native_controller.pads.push(crate::ds4::PadInfo {
+            device: r"\\?\HID#VID_054C&PID_09CC#sensitive-instance".into(),
+            revision: crate::ds4::Ds4Revision::V2,
+            transport: crate::ds4::Ds4Transport::Bluetooth,
+        });
+        snapshot.native_controller.last_error =
+            Some(r"Failed to open C:\Users\private\controller.log".into());
+        crate::diagnostics::sanitize_snapshot(&mut snapshot);
+        let json = serde_json::to_string(&snapshot).unwrap();
+        assert!(json.contains("invalid-id"));
+        assert!(json.contains("<redacted-path>"));
+        assert!(!json.contains("sensitive-instance"));
+        assert!(!json.contains("controller.log"));
+        assert!(json.contains("\"homeEnabled\":false"));
+        assert!(json.contains("\"lastHomeButtons\":null"));
     }
 
     #[test]

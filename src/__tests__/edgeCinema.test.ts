@@ -10,6 +10,7 @@ vi.mock("@tauri-apps/api/core", () => ({ isTauri: mocks.isTauri, invoke: mocks.i
 import {
   EDGE_CINEMA_NOTES,
   EDGE_CINEMA_PROFILE_NAME,
+  EDGE_CINEMA_SERVICES_DIRECTORY,
   edgeCinemaErrorMessage,
   getEdgeCinemaStatus,
   launchEdgeCinema,
@@ -24,13 +25,14 @@ afterEach(() => {
 describe("Edge Cinema bridge", () => {
   it("exports the stable dedicated profile name", () => {
     expect(EDGE_CINEMA_PROFILE_NAME).toBe("VELORA-EdgeCinema");
+    expect(EDGE_CINEMA_SERVICES_DIRECTORY).toBe("EdgeCinemaServices");
   });
 
   it("returns the native status shape from get_edge_cinema_status", async () => {
     const status = {
       windows: true,
       edgeDetected: true,
-      profileDir: "C:/Users/tester/AppData/Local/VELORA/VELORA-EdgeCinema",
+      profileDir: "EdgeCinemaServices",
       notes: ["notatka"],
     };
     mocks.invoke.mockResolvedValue(status);
@@ -43,7 +45,7 @@ describe("Edge Cinema bridge", () => {
     const receipt = {
       launched: true,
       mode: "app-fullscreen",
-      profileDir: "C:/Users/tester/AppData/Local/VELORA/VELORA-EdgeCinema",
+      profileDir: "EdgeCinemaServices/netflix",
     };
     mocks.invoke.mockResolvedValue(receipt);
 
@@ -77,6 +79,8 @@ describe("Edge Cinema bridge", () => {
     expect(notes).toMatch(/4K/);
     expect(notes).toMatch(/HDR/);
     expect(notes).toMatch(/logowania/i);
+    expect(notes).toMatch(/EdgeCinemaServices/);
+    expect(notes).toMatch(/nietknięty/i);
   });
 
   it("maps native Edge errors to clear Polish guidance and preserves unknowns", () => {
@@ -87,6 +91,10 @@ describe("Edge Cinema bridge", () => {
       .toMatch(/profilu/);
     expect(edgeCinemaErrorMessage("Windows nie uruchomił okna Edge Cinema."))
       .toMatch(/Sprawdź instalację Edge/);
+    expect(edgeCinemaErrorMessage("Windows nie przywrócił fokusu okna Edge Cinema."))
+      .toMatch(/Wybierz je ręcznie/);
+    expect(edgeCinemaErrorMessage("Nie można bezpiecznie ustalić okna wybranej usługi."))
+      .toMatch(/potwierdzić okna/);
     expect(edgeCinemaErrorMessage(new Error("Widevine 4K HDR HDCP problem"))).toMatch(/4K/);
     expect(edgeCinemaErrorMessage(new Error("Adres usługi nie znajduje się na liście zaufanych stron.")))
       .toBe("Adres usługi nie znajduje się na liście zaufanych stron.");

@@ -119,10 +119,12 @@ pub(crate) fn is_dualsense_device_path(path: &str) -> bool {
 /// are consulted only when Windows cannot supply IDs (USB and Bluetooth forms).
 pub(crate) fn dualsense_identity(ids: Option<(u16, u16)>, path: &str) -> Option<DualSenseModel> {
     let lower = path.to_ascii_lowercase();
-    let (vendor, product) = ids.or_else(|| Some((
-        crate::ds4::hex_id_after(&lower, ["vid_", "vid&"])?,
-        crate::ds4::hex_id_after(&lower, ["pid_", "pid&"])?,
-    )))?;
+    let (vendor, product) = ids.or_else(|| {
+        Some((
+            crate::ds4::hex_id_after(&lower, ["vid_", "vid&"])?,
+            crate::ds4::hex_id_after(&lower, ["pid_", "pid&"])?,
+        ))
+    })?;
     match (vendor, product) {
         (0x054c, 0x0ce6) => Some(DualSenseModel::DualSense),
         (0x054c, 0x0df2) => Some(DualSenseModel::DualSenseEdge),
@@ -244,6 +246,7 @@ struct DeviceChord {
     ps_pressed_at_ms: Option<u64>,
     options_pressed_at_ms: Option<u64>,
     latched: bool,
+    neutral_generation: u64,
     last_seen_ms: u64,
 }
 
@@ -251,6 +254,7 @@ struct DeviceChord {
 pub(crate) struct ComboTracker {
     devices: HashMap<String, DeviceChord>,
     last_trigger_ms: Option<u64>,
+    neutral_generation: u64,
 }
 
 impl ComboTracker {
@@ -270,6 +274,7 @@ impl ComboTracker {
         buttons: DualSenseButtons,
         at_ms: u64,
     ) -> (bool, ChordOutcome) {
+        let neutral_generation = self.neutral_generation;
         if !self.devices.contains_key(device) && self.devices.len() >= MAX_TRACKED_DEVICES {
             let oldest = self
                 .devices
@@ -303,6 +308,7 @@ impl ComboTracker {
         }
         if !buttons.ps && !buttons.options {
             state.latched = false;
+            state.neutral_generation = neutral_generation;
             return (
                 false,
                 if was_pressed {
@@ -311,6 +317,11 @@ impl ComboTracker {
                     ChordOutcome::Ignored
                 },
             );
+        }
+        // A source transition from disabled to enabled must observe a neutral
+        // sample before a held/stale chord can be considered a fresh gesture.
+        if state.neutral_generation != neutral_generation {
+            return (false, ChordOutcome::Ignored);
         }
         if state.latched {
             return (false, ChordOutcome::Latched);
@@ -345,6 +356,11 @@ impl ComboTracker {
         state.latched = true;
         self.last_trigger_ms = Some(at_ms);
         (true, ChordOutcome::Triggered)
+    }
+
+    pub(crate) fn require_neutral_rearm(&mut self) {
+        self.neutral_generation = self.neutral_generation.saturating_add(1);
+        self.last_trigger_ms = None;
     }
 
     pub(crate) fn remove_device(&mut self, device: &str) {
@@ -719,7 +735,10 @@ impl GamepadHomeRuntime {
     pub(crate) fn start(hub: &crate::pad_hub::PadHub) -> Result<Self, String> {
         let subscription = hub.subscribe_raw()?;
         Ok(Self {
-            report_epoch: ReportEpoch { epoch: subscription.epoch(), ..Default::default() },
+            report_epoch: ReportEpoch {
+                epoch: subscription.epoch(),
+                ..Default::default()
+            },
             subscription,
             tracker: ComboTracker::default(),
             bookkeeping: DeviceBookkeeping::default(),
@@ -736,13 +755,17 @@ impl GamepadHomeRuntime {
         let mut triggered = false;
         // Bounded work per turn even if a producer keeps the queue busy.
         for _ in 0..64 {
-            let Ok(envelope) = self.subscription.receiver.try_recv() else { break; };
+            let Ok(envelope) = self.subscription.receiver.try_recv() else {
+                break;
+            };
             if envelope.epoch != self.subscription.epoch() {
                 self.tracker.devices.clear(); // Keep the global cooldown.
                 continue;
             }
             triggered |= match envelope.message {
-                crate::pad_hub::RawMessage::Reports(reports) => self.handle_reports(app, reports, envelope.epoch),
+                crate::pad_hub::RawMessage::Reports(reports) => {
+                    self.handle_reports(app, reports, envelope.epoch)
+                }
                 crate::pad_hub::RawMessage::DeviceChange { w_param, device } => {
                     self.handle_device_change(w_param, device)
                 }
@@ -771,7 +794,12 @@ impl GamepadHomeRuntime {
         false
     }
 
-    fn handle_reports(&mut self, app: &AppHandle, reports: Vec<native::RawReport>, epoch: u64) -> bool {
+    fn handle_reports(
+        &mut self,
+        app: &AppHandle,
+        reports: Vec<native::RawReport>,
+        epoch: u64,
+    ) -> bool {
         let mut triggered = false;
         let at_ms = now_ms();
         for report in reports {
@@ -922,7 +950,9 @@ impl ReportEpoch {
             self.needs_neutral = true;
             self.ready.clear();
         }
-        if !self.needs_neutral || self.ready.contains(&device) { return true; }
+        if !self.needs_neutral || self.ready.contains(&device) {
+            return true;
+        }
         if !buttons.ps && !buttons.options && self.ready.len() < MAX_TRACKED_DEVICES {
             self.ready.insert(device);
             return true;
@@ -1435,16 +1465,28 @@ mod tests {
     #[test]
     fn identity_uses_windows_ids_then_usb_or_bluetooth_fallback() {
         let bt = r"\\?\BTHENUM#VID&0002054C_PID&0CE6#pad";
-        assert_eq!(super::dualsense_identity(None, bt), Some(super::DualSenseModel::DualSense));
-        assert_eq!(super::dualsense_identity(Some((0x054c, 0x0df2)), "opaque"), Some(super::DualSenseModel::DualSenseEdge));
-        assert_eq!(super::dualsense_identity(Some((0x045e, 0x0ce6)), USB_PATH), None);
+        assert_eq!(
+            super::dualsense_identity(None, bt),
+            Some(super::DualSenseModel::DualSense)
+        );
+        assert_eq!(
+            super::dualsense_identity(Some((0x054c, 0x0df2)), "opaque"),
+            Some(super::DualSenseModel::DualSenseEdge)
+        );
+        assert_eq!(
+            super::dualsense_identity(Some((0x045e, 0x0ce6)), USB_PATH),
+            None
+        );
         assert_eq!(super::dualsense_identity(None, r"VID_054C&PID_0CE65"), None);
         assert_eq!(super::dualsense_identity(None, r"VID_054C&PID_05C4"), None);
     }
     #[test]
     fn overload_requires_each_device_to_release_before_rearming() {
         let mut guard = super::ReportEpoch::default();
-        let held = super::DualSenseButtons { ps: true, options: true };
+        let held = super::DualSenseButtons {
+            ps: true,
+            options: true,
+        };
         assert!(guard.allow(0, 1, held));
         assert!(!guard.allow(1, 1, held));
         assert!(!guard.allow(1, 2, held));
@@ -1458,7 +1500,10 @@ mod tests {
     fn an_unarmed_second_pad_cannot_clear_the_first_pads_chord_latch() {
         let mut guard = super::ReportEpoch::default();
         let mut tracker = super::ComboTracker::default();
-        let held = super::DualSenseButtons { ps: true, options: true };
+        let held = super::DualSenseButtons {
+            ps: true,
+            options: true,
+        };
         assert!(guard.allow(1, 1, super::DualSenseButtons::default()));
         assert!(guard.allow(1, 1, held));
         assert!(tracker.observe("pad-a", held, 1000));
@@ -1470,7 +1515,10 @@ mod tests {
     #[test]
     fn overload_reconnects_release_capacity_and_reused_handles_require_neutral() {
         let mut guard = super::ReportEpoch::default();
-        let held = super::DualSenseButtons { ps: true, options: true };
+        let held = super::DualSenseButtons {
+            ps: true,
+            options: true,
+        };
         let neutral = super::DualSenseButtons::default();
         assert!(!guard.allow(1, 0, held)); // overflow first
         for device in 0..super::MAX_TRACKED_DEVICES + 2 {
@@ -1661,6 +1709,28 @@ mod tests {
     }
 
     #[test]
+    fn source_reenable_requires_a_neutral_sample_before_accepting_a_chord() {
+        let mut tracker = ComboTracker::default();
+        tracker.require_neutral_rearm();
+        assert_eq!(
+            tracker.observe_diagnostic("pad", buttons(true, true), 10),
+            (false, ChordOutcome::Ignored)
+        );
+        assert_eq!(
+            tracker.observe_diagnostic("pad", buttons(false, false), 20),
+            (false, ChordOutcome::Released)
+        );
+        assert_eq!(
+            tracker.observe_diagnostic("pad", buttons(false, true), 30),
+            (false, ChordOutcome::Armed)
+        );
+        assert_eq!(
+            tracker.observe_diagnostic("pad", buttons(true, true), 40),
+            (true, ChordOutcome::Triggered)
+        );
+    }
+
+    #[test]
     fn chord_rejects_a_button_held_before_the_window() {
         let mut tracker = ComboTracker::default();
         assert!(!tracker.observe(
@@ -1721,46 +1791,36 @@ mod tests {
     #[test]
     fn cooldown_and_stale_device_reset_prevent_repeat_triggers() {
         let mut tracker = ComboTracker::default();
-        assert!(tracker.observe(
-            "pad",
-            DualSenseButtons {
-                ps: true,
-                options: true
-            },
-            0
-        ));
-        assert!(!tracker.observe(
-            "pad",
-            DualSenseButtons {
-                ps: false,
-                options: false
-            },
-            100
-        ));
-        assert!(!tracker.observe(
-            "pad",
-            DualSenseButtons {
-                ps: true,
-                options: true
-            },
-            COMBO_COOLDOWN_MS - 1
-        ));
+        tracker.require_neutral_rearm();
+        let neutral = DualSenseButtons::default();
+        let held = DualSenseButtons {
+            ps: true,
+            options: true,
+        };
+        assert!(!tracker.observe("pad", neutral, 0));
+        assert!(tracker.observe("pad", held, 10));
+        assert!(!tracker.observe("pad", neutral, 100));
+        assert!(!tracker.observe("pad", held, COMBO_COOLDOWN_MS - 1));
         assert_eq!(tracker.device_count(), 1);
         assert_eq!(tracker.prune(1_000 + DEVICE_STALE_MS), 0);
         assert_eq!(tracker.device_count(), 0);
-        assert!(tracker.observe(
+        assert!(!tracker.observe("pad", held, 10_000));
+        assert!(!tracker.observe("pad", neutral, 10_010));
+        assert!(!tracker.observe(
             "pad",
             DualSenseButtons {
                 ps: true,
-                options: true
+                options: false
             },
-            10_000
+            10_020
         ));
+        assert!(tracker.observe("pad", held, 10_030));
     }
 
     #[test]
     fn disconnect_and_reconnect_resets_the_chord_state() {
         let mut tracker = ComboTracker::default();
+        tracker.require_neutral_rearm();
         assert!(!tracker.observe(
             "pad",
             DualSenseButtons {
@@ -1771,14 +1831,21 @@ mod tests {
         ));
         tracker.remove_device("pad");
         assert_eq!(tracker.device_count(), 0);
-        assert!(tracker.observe(
+        let held = DualSenseButtons {
+            ps: true,
+            options: true,
+        };
+        assert!(!tracker.observe("pad", held, 1_000));
+        assert!(!tracker.observe("pad", DualSenseButtons::default(), 1_010));
+        assert!(!tracker.observe(
             "pad",
             DualSenseButtons {
                 ps: true,
-                options: true
+                options: false
             },
-            1_000
+            1_020,
         ));
+        assert!(tracker.observe("pad", held, 1_030));
     }
 
     #[test]

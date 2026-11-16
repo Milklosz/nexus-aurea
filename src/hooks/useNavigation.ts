@@ -26,9 +26,11 @@ export interface UseNavigationOptions {
   onHorizontalZone?: (delta: -1 | 1) => boolean;
 }
 
+export type ActivationOrigin = "keyboard";
+
 export function useNavigation(
   count: number,
-  onActivate: () => void,
+  onActivate: (origin: ActivationOrigin) => void,
   onMenu: () => void,
   options?: UseNavigationOptions,
 ) {
@@ -90,7 +92,7 @@ export function useNavigation(
         // On a Home top-bar action the browser presses that button itself; the dock launch must not fire.
         if (target instanceof Element && target.closest(HOME_ACTIONS_SELECTOR)) return;
         event.preventDefault();
-        activateRef.current();
+        activateRef.current("keyboard");
         return;
       }
       if (intent.kind === "menu") {

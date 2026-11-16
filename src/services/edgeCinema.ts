@@ -1,15 +1,16 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 
 /**
- * Nazwa dedykowanego, trwałego profilu Microsoft Edge używanego przez Edge Cinema.
- * Ta sama wartość jest używana po stronie Rust do zbudowania ścieżki
- * `<LOCALAPPDATA>/VELORA/VELORA-EdgeCinema`.
+ * Nazwa poprzedniego profilu Edge Cinema. Pozostaje nietknięty i nie jest
+ * migrowany; nowe profile usług są tworzone osobno pod EdgeCinemaServices.
  */
 export const EDGE_CINEMA_PROFILE_NAME = "VELORA-EdgeCinema";
+export const EDGE_CINEMA_SERVICES_DIRECTORY = "EdgeCinemaServices";
 
 /** Uczciwe, polskie komunikaty opisujące zachowanie i ograniczenia Edge Cinema. */
 export const EDGE_CINEMA_NOTES: string[] = [
-  "Dedykowany, trwały profil Microsoft Edge (VELORA-EdgeCinema) zachowuje logowania do serwisów między uruchomieniami.",
+  "Każda usługa Edge Cinema ma osobny, trwały profil w EdgeCinemaServices/<usługa>; przy pierwszym uruchomieniu zaloguj się do tej usługi.",
+  "Dotychczasowy profil VELORA-EdgeCinema pozostaje nietknięty i nie jest migrowany, więc logowania trzeba wprowadzić ponownie w nowych profilach.",
   "Błędy uruchomienia (brak Edge, katalog profilu, uruchomienie okna) są komunikowane czytelnie po polsku.",
   "VELORA nie gwarantuje i nie zmienia obsługi DRM / Widevine / PlayReady, jakości 4K, HDR, HDCP, możliwości GPU, poziomu subskrypcji ani dostępności usługi — zależą one od sprzętu, sterowników i dostawcy.",
 ];
@@ -32,6 +33,8 @@ export type EdgeCinemaReceipt = {
 const UNTRUSTED_STREAMING_URL_ERROR = "Adres usługi nie znajduje się na liście zaufanych stron.";
 const NON_WINDOWS_ERROR = "Edge Cinema jest dostępne tylko w natywnej aplikacji Windows.";
 const DEFAULT_ERROR_FALLBACK = "Nie udało się uruchomić Edge Cinema. Spróbuj ponownie.";
+const EDGE_FOCUS_DENIED_ERROR = "Windows nie przywrócił fokusu okna Edge Cinema.";
+const EDGE_WINDOW_UNAVAILABLE_ERROR = "Nie można bezpiecznie ustalić okna wybranej usługi.";
 
 const EDGE_NOT_INSTALLED_GUIDANCE = "Nie znaleziono przeglądarki Microsoft Edge. Zainstaluj Edge i spróbuj ponownie.";
 const PROFILE_DIR_GUIDANCE = "Nie udało się przygotować dedykowanego profilu Edge Cinema. Sprawdź uprawnienia do folderu danych aplikacji i spróbuj ponownie.";
@@ -60,6 +63,12 @@ export function edgeCinemaErrorMessage(cause: unknown, fallback: string = DEFAUL
   const message = messageFromCause(cause);
   if (!message) return fallback;
   if (message === UNTRUSTED_STREAMING_URL_ERROR) return message;
+  if (message === EDGE_FOCUS_DENIED_ERROR) {
+    return "Windows nie przełączył fokusu na otwarte okno. Wybierz je ręcznie na pasku zadań.";
+  }
+  if (message === EDGE_WINDOW_UNAVAILABLE_ERROR) {
+    return "Nie udało się potwierdzić okna tej usługi. Spróbuj ponownie.";
+  }
   if (/(drm|widevine|playready|hdcp|\b4k\b|\bhdr\b)/i.test(message)) return DRM_NOTE;
   if (/nie wykryto/i.test(message) && /edge/i.test(message)) return EDGE_NOT_INSTALLED_GUIDANCE;
   if (/profilu|katalogu profilu|user-data-dir/i.test(message)) return PROFILE_DIR_GUIDANCE;

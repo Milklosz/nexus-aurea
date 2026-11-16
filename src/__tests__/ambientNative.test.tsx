@@ -14,7 +14,7 @@ vi.mock("../services/nativeController", async (importOriginal) => {
   return {
     ...original,
     listenForNativeController: mocks.listen,
-    getNativeControllerStatus: vi.fn(async () => ({ supported: true, running: true, lastError: null, pads: [], ignoredReports: 0 })),
+    getNativeControllerStatus: vi.fn(async () => ({ ...original.disabledNativeControllerStatus, supported: true, running: true })),
   };
 });
 

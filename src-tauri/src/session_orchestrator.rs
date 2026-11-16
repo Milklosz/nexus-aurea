@@ -54,6 +54,9 @@ pub enum TransitionCause {
 pub(crate) enum HomeRequestSource {
     /// Local UI or the local keyboard fallback: the user is physically here.
     ExplicitUser,
+    /// A physically attached local controller report forwarded by PadHub.
+    /// This is a user gesture; remote IPC must never select this variant.
+    LocalController,
     /// DualSense chord or paired iPhone: explicit intent, but potentially
     /// remote; never steal focus from a foreign foreground application.
     Device,
@@ -76,7 +79,11 @@ pub struct SessionContext {
 }
 
 impl SessionContext {
-    pub(crate) fn for_launch(launch_id: &str, app_id: Option<&str>, process_id: Option<u32>) -> Self {
+    pub(crate) fn for_launch(
+        launch_id: &str,
+        app_id: Option<&str>,
+        process_id: Option<u32>,
+    ) -> Self {
         Self {
             launch_id: Some(launch_id.to_string()),
             app_id: app_id.map(str::to_string),
@@ -677,9 +684,7 @@ pub(crate) fn restore_persisted_session(
                 previous_session: machine.current,
                 previous_revision: machine.revision,
                 reason: RecoveryReason::CorruptState,
-                message: format!(
-                    "{error} VELORA rozpoczęła od bezpiecznego ekranu głównego."
-                ),
+                message: format!("{error} VELORA rozpoczęła od bezpiecznego ekranu głównego."),
             };
             machine.recovery = Some(recovery.clone());
             let snapshot = machine.snapshot();
@@ -854,7 +859,8 @@ fn return_home_observed(
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(completion) = cached.as_ref() {
             let current = current_snapshot(app);
-            if home_completion_is_reusable(Some(completion), &current, now) {
+            let foreground_hwnd = window_broker::foreground(app).hwnd;
+            if home_completion_is_reusable(Some(completion), &current, now, foreground_hwnd) {
                 return Ok(completion.result.clone());
             }
         }
@@ -864,11 +870,7 @@ fn return_home_observed(
         .operations
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .begin(
-            OperationKind::ReturnHome,
-            now_ms(),
-            RETURN_HOME_TIMEOUT_MS,
-        );
+        .begin(OperationKind::ReturnHome, now_ms(), RETURN_HOME_TIMEOUT_MS);
 
     // Claim the operation before the irreversible transition. A cancel that
     // arrives after this point returns `None` instead of falsely reporting
@@ -901,10 +903,7 @@ fn return_home_observed(
         return Err(error);
     }
 
-    let restore_reason = match source {
-        HomeRequestSource::ExplicitUser => RestoreReason::UserRequest,
-        HomeRequestSource::Device => RestoreReason::DeviceRequest,
-    };
+    let restore_reason = restore_reason_for_home_request(source);
     let restore = window_broker::restore_velora(app, restore_reason);
     // The restore can take up to ~100 ms. Re-read the authoritative snapshot
     // so a concurrent transition is not overwritten by a stale event payload.
@@ -938,10 +937,20 @@ fn return_home_observed(
     Ok(result)
 }
 
+fn restore_reason_for_home_request(source: HomeRequestSource) -> RestoreReason {
+    match source {
+        HomeRequestSource::ExplicitUser | HomeRequestSource::LocalController => {
+            RestoreReason::UserRequest
+        }
+        HomeRequestSource::Device => RestoreReason::DeviceRequest,
+    }
+}
+
 fn home_completion_is_reusable(
     completion: Option<&HomeCompletion>,
     current: &SessionSnapshot,
     now: u64,
+    foreground_hwnd: Option<u64>,
 ) -> bool {
     let Some(completion) = completion else {
         return false;
@@ -949,6 +958,10 @@ fn home_completion_is_reusable(
     current.current == SessionId::VeloraHome
         && completion.revision == current.revision
         && now.saturating_sub(completion.at_ms) <= HOME_DEDUPE_MS
+        && completion.result.restore.restored
+        && completion.result.restore.own_window.is_some()
+        && completion.result.restore.foreground_after.hwnd == completion.result.restore.own_window
+        && foreground_hwnd == completion.result.restore.own_window
 }
 
 type HomeJob = (
@@ -1000,13 +1013,7 @@ where
     };
     let requested = current_snapshot(&app);
     sender
-        .try_send((
-            app,
-            cause,
-            source,
-            requested,
-            Box::new(on_complete),
-        ))
+        .try_send((app, cause, source, requested, Box::new(on_complete)))
         .is_ok()
 }
 
@@ -1043,11 +1050,7 @@ pub async fn request_session_transition(
 #[tauri::command]
 pub async fn return_velora_home(app: AppHandle) -> Result<ReturnHomeResult, SessionError> {
     tauri::async_runtime::spawn_blocking(move || {
-        return_home(
-            &app,
-            TransitionCause::User,
-            HomeRequestSource::ExplicitUser,
-        )
+        return_home(&app, TransitionCause::User, HomeRequestSource::ExplicitUser)
     })
     .await
     .unwrap_or_else(|_| Err(internal_error(SessionId::VeloraHome, SessionId::VeloraHome)))
@@ -1057,9 +1060,9 @@ pub async fn return_velora_home(app: AppHandle) -> Result<ReturnHomeResult, Sess
 mod tests {
     use super::{
         allowed_targets, apply_persisted_recovery, home_request_is_superseded,
-        transition_is_allowed, transition_steps, SessionChangedEvent, SessionContext,
-        SessionErrorCode, SessionId, SessionMachine, TransitionCause, TransitionRequest,
-        COMMAND_TTL_MS,
+        restore_reason_for_home_request, transition_is_allowed, transition_steps,
+        HomeRequestSource, RestoreReason, SessionChangedEvent, SessionContext, SessionErrorCode,
+        SessionId, SessionMachine, TransitionCause, TransitionRequest, COMMAND_TTL_MS,
     };
     use crate::session_store::PersistedSession;
     use serde_json::json;
@@ -1083,6 +1086,22 @@ mod tests {
                 SessionId::Desktop,
                 SessionId::Ambient,
             ]
+        );
+    }
+
+    #[test]
+    fn local_controller_requests_user_restore_while_remote_device_stays_conservative() {
+        assert_eq!(
+            restore_reason_for_home_request(HomeRequestSource::LocalController),
+            RestoreReason::UserRequest
+        );
+        assert_eq!(
+            restore_reason_for_home_request(HomeRequestSource::ExplicitUser),
+            RestoreReason::UserRequest
+        );
+        assert_eq!(
+            restore_reason_for_home_request(HomeRequestSource::Device),
+            RestoreReason::DeviceRequest
         );
     }
 
@@ -1171,11 +1190,17 @@ mod tests {
             .unwrap();
         assert_eq!(entered.current, SessionId::Cinema);
         assert_eq!(
-            entered.context.as_ref().and_then(|context| context.launch_id.as_deref()),
+            entered
+                .context
+                .as_ref()
+                .and_then(|context| context.launch_id.as_deref()),
             Some("cinema-1")
         );
         assert_eq!(
-            entered.context.as_ref().and_then(|context| context.session_revision),
+            entered
+                .context
+                .as_ref()
+                .and_then(|context| context.session_revision),
             Some(entered.revision)
         );
         assert_eq!(event.unwrap().cause, TransitionCause::Launch);
@@ -1203,7 +1228,12 @@ mod tests {
             .transition_at(SessionId::Game, TransitionCause::Launch, Some(context), 10)
             .unwrap();
         let (returned, _) = state
-            .transition_at(SessionId::VeloraHome, TransitionCause::ProcessExit, None, 20)
+            .transition_at(
+                SessionId::VeloraHome,
+                TransitionCause::ProcessExit,
+                None,
+                20,
+            )
             .unwrap();
         assert_eq!(returned.revision, entered.revision + 1);
         assert_eq!(returned.current, SessionId::VeloraHome);
@@ -1342,7 +1372,10 @@ mod tests {
         assert_eq!(snapshot.context, None);
         assert_eq!(recovery.reason, super::RecoveryReason::UnexpectedExit);
         assert_eq!(recovery.previous_revision, 1);
-        assert_eq!(snapshot.recovery.as_ref().map(|entry| entry.reason), Some(super::RecoveryReason::UnexpectedExit));
+        assert_eq!(
+            snapshot.recovery.as_ref().map(|entry| entry.reason),
+            Some(super::RecoveryReason::UnexpectedExit)
+        );
     }
 
     #[test]
@@ -1389,8 +1422,14 @@ mod tests {
     #[test]
     fn repeated_command_id_is_idempotent_and_returns_the_original_snapshot() {
         let mut state = machine();
-        let first = state.apply_command(&request(SessionId::Cinema, "cmd-1"), 100).unwrap().0;
-        let second = state.apply_command(&request(SessionId::Cinema, "cmd-1"), 200).unwrap().0;
+        let first = state
+            .apply_command(&request(SessionId::Cinema, "cmd-1"), 100)
+            .unwrap()
+            .0;
+        let second = state
+            .apply_command(&request(SessionId::Cinema, "cmd-1"), 200)
+            .unwrap()
+            .0;
         assert_eq!(first, second);
         assert_eq!(state.snapshot().revision, 1);
     }
@@ -1398,7 +1437,9 @@ mod tests {
     #[test]
     fn command_id_reuse_for_a_different_target_is_rejected() {
         let mut state = machine();
-        state.apply_command(&request(SessionId::Cinema, "cmd-1"), 100).unwrap();
+        state
+            .apply_command(&request(SessionId::Cinema, "cmd-1"), 100)
+            .unwrap();
         let error = state
             .apply_command(&request(SessionId::Game, "cmd-1"), 200)
             .unwrap_err();
@@ -1409,13 +1450,18 @@ mod tests {
     #[test]
     fn stale_revision_guard_rejects_the_transition_without_mutation() {
         let mut state = machine();
-        state.apply_command(&request(SessionId::Cinema, "cmd-1"), 100).unwrap();
+        state
+            .apply_command(&request(SessionId::Cinema, "cmd-1"), 100)
+            .unwrap();
         let mut stale = request(SessionId::Game, "cmd-2");
         stale.expected_revision = Some(0);
         let error = state.apply_command(&stale, 200).unwrap_err();
         assert_eq!(error.code, SessionErrorCode::StaleRevision);
         assert_eq!(error.current_revision, 1);
-        assert_eq!(error.allowed_targets, super::allowed_targets(SessionId::Cinema).to_vec());
+        assert_eq!(
+            error.allowed_targets,
+            super::allowed_targets(SessionId::Cinema).to_vec()
+        );
         assert_eq!(state.snapshot().current, SessionId::Cinema);
     }
 
@@ -1513,11 +1559,8 @@ mod tests {
         // A second launch into the same Game session keeps the revision but
         // replaces the launch context. That is still a newer session.
         let mut same_target_new_launch = request.clone();
-        same_target_new_launch.context = Some(SessionContext::for_launch(
-            "game-2",
-            Some("1091500"),
-            None,
-        ));
+        same_target_new_launch.context =
+            Some(SessionContext::for_launch("game-2", Some("1091500"), None));
         assert!(home_request_is_superseded(
             &request,
             &same_target_new_launch
@@ -1542,16 +1585,22 @@ mod tests {
 
     #[test]
     fn concurrent_home_requests_reuse_only_the_same_home_revision_within_the_window() {
-        use crate::window_broker::{ForegroundWindow, RestoreOutcome, RestoreReason, RestoreResult};
+        use crate::window_broker::{
+            ForegroundWindow, RestoreOutcome, RestoreReason, RestoreResult,
+        };
         let snapshot = machine().snapshot();
+        let own_foreground = ForegroundWindow {
+            hwnd: Some(10),
+            ..ForegroundWindow::default()
+        };
         let restore = RestoreResult {
             attempted: false,
             restored: true,
             outcome: RestoreOutcome::AlreadyFocused,
             reason: RestoreReason::UserRequest,
             own_window: Some(10),
-            foreground_before: ForegroundWindow::default(),
-            foreground_after: ForegroundWindow::default(),
+            foreground_before: own_foreground.clone(),
+            foreground_after: own_foreground,
             error_code: None,
             denial: None,
             message: "VELORA ma już fokus.".into(),
@@ -1570,34 +1619,64 @@ mod tests {
         assert!(super::home_completion_is_reusable(
             Some(&completion),
             &snapshot,
-            1_000 + super::HOME_DEDUPE_MS
+            1_000 + super::HOME_DEDUPE_MS,
+            Some(10),
         ));
         assert!(!super::home_completion_is_reusable(
             Some(&completion),
             &snapshot,
-            1_000 + super::HOME_DEDUPE_MS + 1
+            1_000 + super::HOME_DEDUPE_MS + 1,
+            Some(10),
         ));
         let mut newer = snapshot.clone();
         newer.revision = newer.revision.saturating_add(1);
         assert!(!super::home_completion_is_reusable(
             Some(&completion),
             &newer,
-            1_100
+            1_100,
+            Some(10),
         ));
         let mut game = snapshot.clone();
         game.current = SessionId::Game;
         assert!(!super::home_completion_is_reusable(
             Some(&completion),
             &game,
-            1_100
+            1_100,
+            Some(10),
         ));
-        assert!(!super::home_completion_is_reusable(None, &snapshot, 1_100));
+        assert!(!super::home_completion_is_reusable(
+            None,
+            &snapshot,
+            1_100,
+            Some(10)
+        ));
+
+        let mut denied_remote = completion.clone();
+        denied_remote.result.restore.restored = false;
+        denied_remote.result.restore.outcome = RestoreOutcome::BlockedUnsafeForeground;
+        denied_remote.result.restore.foreground_after.hwnd = Some(20);
+        assert!(!super::home_completion_is_reusable(
+            Some(&denied_remote),
+            &snapshot,
+            1_100,
+            Some(20),
+        ));
+        assert!(
+            super::home_completion_is_reusable(Some(&completion), &snapshot, 1_100, Some(10),),
+            "a successful local retry is reusable while VELORA remains foreground"
+        );
+        assert!(
+            !super::home_completion_is_reusable(Some(&completion), &snapshot, 1_100, Some(20),),
+            "a later foreground change must permit another restore attempt"
+        );
     }
 }
 
 #[cfg(test)]
 mod stale_watcher_tests {
-    use super::{context_owned_by_launch, SessionContext, SessionId, SessionMachine, TransitionCause};
+    use super::{
+        context_owned_by_launch, SessionContext, SessionId, SessionMachine, TransitionCause,
+    };
 
     fn launch_context(launch_id: &str) -> SessionContext {
         SessionContext::for_launch(launch_id, Some("edge-cinema"), None)
@@ -1614,8 +1693,14 @@ mod stale_watcher_tests {
                 1_000,
             )
             .unwrap();
-        assert!(context_owned_by_launch(machine.snapshot().context.as_ref(), "cinema-1"));
-        assert!(!context_owned_by_launch(machine.snapshot().context.as_ref(), "cinema-0"));
+        assert!(context_owned_by_launch(
+            machine.snapshot().context.as_ref(),
+            "cinema-1"
+        ));
+        assert!(!context_owned_by_launch(
+            machine.snapshot().context.as_ref(),
+            "cinema-0"
+        ));
     }
 
     #[test]
@@ -1634,7 +1719,10 @@ mod stale_watcher_tests {
         machine
             .transition_at(SessionId::VeloraHome, TransitionCause::User, None, 2_000)
             .unwrap();
-        assert!(!context_owned_by_launch(machine.snapshot().context.as_ref(), "cinema-1"));
+        assert!(!context_owned_by_launch(
+            machine.snapshot().context.as_ref(),
+            "cinema-1"
+        ));
 
         // A newer launch then takes the session. The old id must not own it,
         // so the stale watcher cannot pull the new session back to Home.
@@ -1646,8 +1734,14 @@ mod stale_watcher_tests {
                 3_000,
             )
             .unwrap();
-        assert!(!context_owned_by_launch(machine.snapshot().context.as_ref(), "cinema-1"));
-        assert!(context_owned_by_launch(machine.snapshot().context.as_ref(), "cinema-2"));
+        assert!(!context_owned_by_launch(
+            machine.snapshot().context.as_ref(),
+            "cinema-1"
+        ));
+        assert!(context_owned_by_launch(
+            machine.snapshot().context.as_ref(),
+            "cinema-2"
+        ));
     }
 
     #[test]

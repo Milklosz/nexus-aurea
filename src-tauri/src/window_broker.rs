@@ -93,7 +93,9 @@ pub(crate) fn window_score(input: &WindowScoreInput<'_>) -> Option<u8> {
 pub(crate) fn mark_main_windows(windows: &mut [TrackedWindow]) {
     let mut best: HashMap<u32, (usize, u8)> = HashMap::new();
     for (index, window) in windows.iter().enumerate() {
-        let entry = best.entry(window.process_id).or_insert((index, window.score));
+        let entry = best
+            .entry(window.process_id)
+            .or_insert((index, window.score));
         if window.score > entry.1 {
             *entry = (index, window.score);
         }
@@ -177,7 +179,10 @@ pub struct RestoreResult {
     pub message: String,
 }
 
-pub(crate) fn classify_foreground_denial(error_code: Option<u32>, focused: bool) -> Option<ForegroundDenial> {
+pub(crate) fn classify_foreground_denial(
+    error_code: Option<u32>,
+    focused: bool,
+) -> Option<ForegroundDenial> {
     if focused {
         return None;
     }
@@ -214,7 +219,6 @@ pub(crate) fn foreground_change(
     }
 }
 
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RestoreDecision {
     Allow,
@@ -223,9 +227,7 @@ pub(crate) enum RestoreDecision {
 }
 
 fn shell_desktop_class(class_name: Option<&str>) -> bool {
-    class_name.is_some_and(|class| {
-        matches!(class, "Progman" | "WorkerW" | "SHELLDLL_DefView")
-    })
+    class_name.is_some_and(|class| matches!(class, "Progman" | "WorkerW" | "SHELLDLL_DefView"))
 }
 
 fn is_velora_process(process: &str) -> bool {
@@ -602,7 +604,11 @@ impl WindowBroker {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 (
-                    state.tracked_processes.iter().copied().collect::<HashSet<_>>(),
+                    state
+                        .tracked_processes
+                        .iter()
+                        .copied()
+                        .collect::<HashSet<_>>(),
                     state.own_window,
                 )
             };
@@ -680,7 +686,11 @@ impl WindowBroker {
         self.restore_with_owners(reason, &EndedSessionOwners::new())
     }
 
-    fn restore_with_owners(&self, reason: RestoreReason, owners: &EndedSessionOwners) -> RestoreResult {
+    fn restore_with_owners(
+        &self,
+        reason: RestoreReason,
+        owners: &EndedSessionOwners,
+    ) -> RestoreResult {
         #[cfg(not(target_os = "windows"))]
         {
             let _ = owners;
@@ -854,7 +864,11 @@ pub(crate) fn close_tracked_window(app: &AppHandle, window: u64) -> Result<(), S
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         (
             state.own_window,
-            state.tracked_processes.iter().copied().collect::<HashSet<_>>(),
+            state
+                .tracked_processes
+                .iter()
+                .copied()
+                .collect::<HashSet<_>>(),
         )
     };
     if own_window == Some(window) {
@@ -886,11 +900,103 @@ pub(crate) fn close_tracked_window(app: &AppHandle, window: u64) -> Result<(), S
     }
 }
 
+fn owned_window_identity_matches(
+    expected_process_id: u32,
+    actual_process_id: u32,
+    expected_created_at_100ns: u64,
+    actual_created_at_100ns: u64,
+) -> bool {
+    expected_process_id != 0
+        && expected_created_at_100ns != 0
+        && expected_process_id == actual_process_id
+        && expected_created_at_100ns == actual_created_at_100ns
+}
+
+/// Raise one HWND previously observed for a specific LaunchRegistry owner.
+/// The caller supplies the launch's captured process identity; this method
+/// rechecks the live HWND owner and creation time immediately before a single
+/// bounded foreground request. It never focuses an unowned foreign window.
+pub(crate) fn activate_owned_window(
+    window: u64,
+    expected_process_id: u32,
+    expected_created_at_100ns: u64,
+) -> Result<bool, String> {
+    let identity = crate::process_table::identity(expected_process_id)
+        .ok_or_else(|| "Proces wybranego okna nie jest już dostępny.".to_string())?;
+    if !owned_window_identity_matches(
+        expected_process_id,
+        identity.process_id,
+        expected_created_at_100ns,
+        identity.created_at_100ns,
+    ) {
+        return Err("Tożsamość procesu wybranego okna uległa zmianie.".into());
+    }
+    if window == 0 || expected_process_id == std::process::id() {
+        return Err("Nie można aktywować tego okna.".into());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        native::activate_owned_window(window, expected_process_id, expected_created_at_100ns)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (window, expected_process_id, expected_created_at_100ns);
+        Err("Aktywowanie okna jest dostępne tylko w natywnej aplikacji Windows.".into())
+    }
+}
+
+/// Post WM_CLOSE to exactly one previously observed HWND after verifying its
+/// owning process identity. This scoped path does not consult the broker's
+/// broader process set, which can include sibling Cinema services.
+pub(crate) fn close_owned_window(
+    window: u64,
+    expected_process_id: u32,
+    expected_created_at_100ns: u64,
+) -> Result<(), String> {
+    let identity = crate::process_table::identity(expected_process_id)
+        .ok_or_else(|| "Proces wybranego okna nie jest już dostępny.".to_string())?;
+    if !owned_window_identity_matches(
+        expected_process_id,
+        identity.process_id,
+        expected_created_at_100ns,
+        identity.created_at_100ns,
+    ) {
+        return Err("Tożsamość procesu wybranego okna uległa zmianie.".into());
+    }
+    if window == 0 || expected_process_id == std::process::id() {
+        return Err("Nie można zamknąć tego okna.".into());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        native::close_owned_window(window, expected_process_id, expected_created_at_100ns)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (window, expected_process_id, expected_created_at_100ns);
+        Err("Zamykanie okien jest dostępne tylko w natywnej aplikacji Windows.".into())
+    }
+}
+
 pub(crate) fn windows_for_processes(
     app: &AppHandle,
     process_ids: &HashSet<u32>,
 ) -> Vec<TrackedWindow> {
-    app.state::<WindowBroker>().windows_for_processes(process_ids)
+    app.state::<WindowBroker>()
+        .windows_for_processes(process_ids)
+}
+
+pub(crate) fn window_process_id(window: u64) -> Option<u32> {
+    #[cfg(target_os = "windows")]
+    {
+        native::window_process_id(window)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window;
+        None
+    }
 }
 
 pub(crate) fn foreground(app: &AppHandle) -> ForegroundWindow {
@@ -1048,6 +1154,7 @@ mod native {
     const GW_OWNER: u32 = 4;
     const WS_EX_TOOLWINDOW: isize = 0x0000_0080;
     const SW_RESTORE: i32 = 9;
+    const SW_SHOW: i32 = 5;
     const FLASHW_TRAY: u32 = 2;
     const FLASHW_TIMERNOFG: u32 = 12;
     const DWMWA_CLOAKED: u32 = 14;
@@ -1144,9 +1251,8 @@ mod native {
         }
         let mut path = vec![0u16; 32_768];
         let mut length = path.len() as u32;
-        let succeeded = unsafe {
-            QueryFullProcessImageNameW(process, 0, path.as_mut_ptr(), &mut length) != 0
-        };
+        let succeeded =
+            unsafe { QueryFullProcessImageNameW(process, 0, path.as_mut_ptr(), &mut length) != 0 };
         unsafe { CloseHandle(process) };
         if !succeeded {
             return None;
@@ -1340,10 +1446,62 @@ mod native {
         unsafe { PostMessageW(hwnd(window), WM_CLOSE, 0, 0) != 0 }
     }
 
-    pub(super) fn request_foreground(own_window: u64, reason: RestoreReason) -> RestoreResult {        let foreground_before = foreground().unwrap_or_default();
+    pub(super) fn activate_owned_window(
+        window: u64,
+        expected_process_id: u32,
+        expected_created_at_100ns: u64,
+    ) -> Result<bool, String> {
+        if !is_window_valid(window)
+            || window_process_id(window) != Some(expected_process_id)
+            || !process_table::identity(expected_process_id)
+                .is_some_and(|identity| identity.created_at_100ns == expected_created_at_100ns)
+        {
+            return Err("Uchwyt okna lub tożsamość procesu nie pasują do sesji.".into());
+        }
+        let target = hwnd(window);
+        if unsafe { IsIconic(target) } != 0 {
+            unsafe { ShowWindowAsync(target, SW_RESTORE) };
+        } else if unsafe { IsWindowVisible(target) } == 0 {
+            unsafe { ShowWindowAsync(target, SW_SHOW) };
+        }
+        unsafe { SetForegroundWindow(target) };
+        let mut focused = foreground().ok().and_then(|value| value.hwnd) == Some(window);
+        for _ in 0..5 {
+            if focused {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            focused = foreground().ok().and_then(|value| value.hwnd) == Some(window);
+        }
+        Ok(focused)
+    }
+
+    pub(super) fn close_owned_window(
+        window: u64,
+        expected_process_id: u32,
+        expected_created_at_100ns: u64,
+    ) -> Result<(), String> {
+        if !is_window_valid(window)
+            || window_process_id(window) != Some(expected_process_id)
+            || !process_table::identity(expected_process_id)
+                .is_some_and(|identity| identity.created_at_100ns == expected_created_at_100ns)
+        {
+            return Err("Uchwyt okna lub tożsamość procesu nie pasują do sesji.".into());
+        }
+        if request_close(window) {
+            Ok(())
+        } else {
+            Err("Windows nie przyjął żądania zamknięcia okna.".into())
+        }
+    }
+
+    pub(super) fn request_foreground(own_window: u64, reason: RestoreReason) -> RestoreResult {
+        let foreground_before = foreground().unwrap_or_default();
         let window = hwnd(own_window);
         if unsafe { IsIconic(window) } != 0 {
             unsafe { ShowWindowAsync(window, SW_RESTORE) };
+        } else if unsafe { IsWindowVisible(window) } == 0 {
+            unsafe { ShowWindowAsync(window, SW_SHOW) };
         }
         unsafe { SetLastError(0) };
         unsafe { SetForegroundWindow(window) };
@@ -1392,8 +1550,9 @@ mod native {
 mod tests {
     use super::{
         classify_foreground_denial, evaluate_restore, foreground_change, mark_main_windows,
-        window_score, ForegroundChange, ForegroundDenial, ForegroundWindow, RestoreDecision,
-        RestoreOutcome, RestoreReason, RestoreResult, TrackedWindow, WindowBroker, WindowScoreInput,
+        owned_window_identity_matches, window_score, ForegroundChange, ForegroundDenial,
+        ForegroundWindow, RestoreDecision, RestoreOutcome, RestoreReason, RestoreResult,
+        TrackedWindow, WindowBroker, WindowScoreInput,
     };
 
     const OWN_PID: u32 = 4242;
@@ -1408,6 +1567,15 @@ mod tests {
             class_name: class.map(str::to_string),
             window_present: present,
         }
+    }
+
+    #[test]
+    fn owned_window_activation_and_close_require_exact_pid_and_creation_time() {
+        assert!(owned_window_identity_matches(77, 77, 5_000, 5_000));
+        assert!(!owned_window_identity_matches(77, 78, 5_000, 5_000));
+        assert!(!owned_window_identity_matches(77, 77, 5_000, 5_001));
+        assert!(!owned_window_identity_matches(0, 77, 5_000, 5_000));
+        assert!(!owned_window_identity_matches(77, 77, 0, 0));
     }
 
     #[test]
@@ -1695,26 +1863,107 @@ mod tests {
 
     #[test]
     fn auxiliary_or_cloaked_windows_are_not_main_window_candidates() {
-        let base = |visible, iconic, has_owner, toolwindow, cloaked, width, height, class, foreground| {
-            WindowScoreInput {
-                visible,
-                iconic,
-                has_owner,
-                toolwindow,
-                cloaked,
-                width,
-                height,
-                class_name: class,
-                foreground,
-            }
-        };
-        assert_eq!(window_score(&base(false, false, false, false, false, 1920, 1080, Some("SDL_app"), true)), None);
-        assert_eq!(window_score(&base(true, false, false, true, false, 1920, 1080, Some("SDL_app"), true)), None);
-        assert_eq!(window_score(&base(true, false, false, false, true, 1920, 1080, Some("SDL_app"), true)), None);
-        assert_eq!(window_score(&base(true, false, false, false, false, 0, 1080, Some("SDL_app"), true)), None);
-        assert!(window_score(&base(true, false, true, false, false, 800, 600, None, false)).unwrap() < 20);
-        let main = window_score(&base(true, false, false, false, false, 1920, 1080, Some("SDL_app"), true)).unwrap();
-        let background = window_score(&base(true, false, false, false, false, 1920, 1080, Some("SDL_app"), false)).unwrap();
+        let base =
+            |visible, iconic, has_owner, toolwindow, cloaked, width, height, class, foreground| {
+                WindowScoreInput {
+                    visible,
+                    iconic,
+                    has_owner,
+                    toolwindow,
+                    cloaked,
+                    width,
+                    height,
+                    class_name: class,
+                    foreground,
+                }
+            };
+        assert_eq!(
+            window_score(&base(
+                false,
+                false,
+                false,
+                false,
+                false,
+                1920,
+                1080,
+                Some("SDL_app"),
+                true
+            )),
+            None
+        );
+        assert_eq!(
+            window_score(&base(
+                true,
+                false,
+                false,
+                true,
+                false,
+                1920,
+                1080,
+                Some("SDL_app"),
+                true
+            )),
+            None
+        );
+        assert_eq!(
+            window_score(&base(
+                true,
+                false,
+                false,
+                false,
+                true,
+                1920,
+                1080,
+                Some("SDL_app"),
+                true
+            )),
+            None
+        );
+        assert_eq!(
+            window_score(&base(
+                true,
+                false,
+                false,
+                false,
+                false,
+                0,
+                1080,
+                Some("SDL_app"),
+                true
+            )),
+            None
+        );
+        assert!(
+            window_score(&base(
+                true, false, true, false, false, 800, 600, None, false
+            ))
+            .unwrap()
+                < 20
+        );
+        let main = window_score(&base(
+            true,
+            false,
+            false,
+            false,
+            false,
+            1920,
+            1080,
+            Some("SDL_app"),
+            true,
+        ))
+        .unwrap();
+        let background = window_score(&base(
+            true,
+            false,
+            false,
+            false,
+            false,
+            1920,
+            1080,
+            Some("SDL_app"),
+            false,
+        ))
+        .unwrap();
         assert!(main > background);
     }
 
@@ -1772,8 +2021,8 @@ mod tests {
 mod handoff_and_session_end_tests {
     use super::{
         evaluate_session_end_restore, foreground_belongs_to_ended_session,
-        foreground_handoff_targets, grant_foreground_handoff, EndedSessionOwners, ForegroundHandoff,
-        ForegroundWindow, RestoreDecision, RestoreOutcome, ASFW_ANY,
+        foreground_handoff_targets, grant_foreground_handoff, EndedSessionOwners,
+        ForegroundHandoff, ForegroundWindow, RestoreDecision, RestoreOutcome, ASFW_ANY,
     };
     use std::collections::{HashMap, HashSet};
 
@@ -1864,7 +2113,12 @@ mod handoff_and_session_end_tests {
         let empty = owners(&[]);
         let none = HashSet::new();
         assert_eq!(
-            decide(&foreground(Some(OWN_PID), Some("nexus-aurea.exe")), None, &empty, &none),
+            decide(
+                &foreground(Some(OWN_PID), Some("nexus-aurea.exe")),
+                None,
+                &empty,
+                &none
+            ),
             RestoreDecision::Allow
         );
         assert_eq!(
@@ -1878,7 +2132,10 @@ mod handoff_and_session_end_tests {
             class_name: None,
             window_present: true,
         };
-        assert_eq!(decide(&already, None, &empty, &none), RestoreDecision::AlreadyFocused);
+        assert_eq!(
+            decide(&already, None, &empty, &none),
+            RestoreDecision::AlreadyFocused
+        );
         assert_eq!(
             evaluate_session_end_restore(
                 Some(OWN_HWND),
@@ -1898,8 +2155,16 @@ mod handoff_and_session_end_tests {
     fn owner_lookup_requires_both_pid_and_creation_time() {
         let steam = foreground(Some(STEAM_PID), Some("steam.exe"));
         let ended = owners(&[(STEAM_PID, STEAM_CREATED)]);
-        assert!(foreground_belongs_to_ended_session(&steam, Some(STEAM_CREATED), &ended));
-        assert!(!foreground_belongs_to_ended_session(&steam, Some(STEAM_CREATED + 1), &ended));
+        assert!(foreground_belongs_to_ended_session(
+            &steam,
+            Some(STEAM_CREATED),
+            &ended
+        ));
+        assert!(!foreground_belongs_to_ended_session(
+            &steam,
+            Some(STEAM_CREATED + 1),
+            &ended
+        ));
         assert!(!foreground_belongs_to_ended_session(
             &ForegroundWindow::default(),
             Some(STEAM_CREATED),
@@ -1913,7 +2178,10 @@ mod handoff_and_session_end_tests {
             foreground_handoff_targets(&[0, OWN_PID, 812, 812, 0, 913], OWN_PID),
             vec![812, 913]
         );
-        assert_eq!(foreground_handoff_targets(&[ASFW_ANY], OWN_PID), vec![ASFW_ANY]);
+        assert_eq!(
+            foreground_handoff_targets(&[ASFW_ANY], OWN_PID),
+            vec![ASFW_ANY]
+        );
         assert!(foreground_handoff_targets(&[0, OWN_PID], OWN_PID).is_empty());
     }
 

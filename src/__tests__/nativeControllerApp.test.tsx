@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
 import { crossSourceGate } from "../services/crossSourceGate";
-import type { Ds4ButtonName, NativeControllerEvent } from "../services/nativeController";
+import { disabledNativeControllerStatus, type Ds4ButtonName, type NativeControllerEvent } from "../services/nativeController";
 
 /**
  * The real App driven by synthetic native DualShock 4 events: the whole chain
@@ -16,6 +16,9 @@ const mocks = vi.hoisted(() => ({
   emit: null as ((event: NativeControllerEvent) => void) | null,
   listen: vi.fn(),
   openService: vi.fn(async () => {}),
+  status: null as Record<string, unknown> | null,
+  getStatus: null as (() => Promise<Record<string, unknown>>) | null,
+  setHomeEnabled: vi.fn(),
 }));
 
 vi.mock("../services/openStreamingService", () => ({
@@ -28,7 +31,10 @@ vi.mock("../services/nativeController", async (importOriginal) => {
   return {
     ...original,
     listenForNativeController: mocks.listen,
-    getNativeControllerStatus: vi.fn(async () => ({ supported: true, running: true, lastError: null, pads: [], ignoredReports: 0 })),
+    getNativeControllerStatus: vi.fn(async () => mocks.getStatus
+      ? mocks.getStatus()
+      : mocks.status ?? ({ ...original.disabledNativeControllerStatus, supported: true, running: true })),
+    setControllerHomeEnabled: mocks.setHomeEnabled,
   };
 });
 
@@ -43,6 +49,14 @@ function advance(ms: number) {
   });
 }
 const connected = (): NativeControllerEvent => ({ kind: "connected", device: "pad", revision: "v2", transport: "usb" });
+const armedNativeStatus = () => ({
+  ...disabledNativeControllerStatus,
+  supported: true,
+  running: true,
+  pads: [{ device: "pad", revision: "v2" as const, transport: "usb" as const }],
+  homeEnabled: true,
+  homeOverride: true,
+});
 function state(buttons: Ds4ButtonName[] = [], dpad: Partial<Record<"up" | "down" | "left" | "right", boolean>> = {}): NativeControllerEvent {
   return { kind: "state", device: "pad", revision: "v2", transport: "usb", dpad: { up: false, down: false, left: false, right: false, ...dpad }, leftX: 0, leftY: 0, buttons };
 }
@@ -67,6 +81,15 @@ beforeEach(async () => {
   mocks.emit = null;
   mocks.listen.mockReset();
   mocks.openService.mockClear();
+  mocks.status = null;
+  mocks.getStatus = null;
+  mocks.setHomeEnabled.mockReset().mockImplementation(async (enabled: boolean) => ({
+    ...(mocks.status ?? {}),
+    supported: true,
+    running: true,
+    homeEnabled: enabled,
+    homeOverride: enabled,
+  }));
   mocks.listen.mockImplementation(async (callback: (event: NativeControllerEvent) => void) => {
     mocks.emit = callback;
     return () => { mocks.emit = null; };
@@ -82,11 +105,13 @@ afterEach(() => {
 });
 
 async function boot() {
+  if (!mocks.status && !mocks.getStatus) mocks.status = armedNativeStatus();
   const view = render(<App />);
   await settle();
   advance(100);
   await send(connected());
   advance(100);
+  act(() => screen.getByRole("button", { name: "Otwórz Netflix" }).focus());
   return view;
 }
 
@@ -116,6 +141,7 @@ describe("App driven by a native DualShock 4", () => {
     advance(250);
     expect(dialogOpen()).toBe(true);
     await tap(["circle"]);
+    await settle();
     expect(dialogOpen()).toBe(false);
     expect(focused()).toBe(before);
   });
@@ -145,9 +171,87 @@ describe("App driven by a native DualShock 4", () => {
   });
 
   it("Cross on the dock launches the focused service exactly once (positive control)", async () => {
+    mocks.status = armedNativeStatus();
     await boot();
     await tap(["cross"]);
     expect(mocks.openService).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks a controller launch when the native sink has stopped", async () => {
+    mocks.status = {
+      supported: true,
+      running: false,
+      lastError: "Raw Input registration failed",
+      pads: [],
+      homeEnabled: false,
+      homeOverride: null,
+    };
+    await boot();
+    await tap(["cross"]);
+    expect(mocks.openService).not.toHaveBeenCalled();
+    expect(screen.getByText(/Nie wykryto pewnego powrotu lokalnym padem/)).toBeTruthy();
+  });
+
+  it("keeps a local controller in VELORA when the native status read times out", async () => {
+    let resolveStatus!: (status: Record<string, unknown>) => void;
+    mocks.getStatus = () => new Promise((resolve) => { resolveStatus = resolve; });
+    await boot();
+    await tap(["cross"]);
+    advance(2_100);
+    await settle();
+    expect(mocks.openService).not.toHaveBeenCalled();
+    expect(screen.getByText(/Nie wykryto pewnego powrotu lokalnym padem/)).toBeTruthy();
+
+    resolveStatus({ supported: true, running: true, pads: [], homeEnabled: false, homeOverride: null });
+    await settle();
+    expect(mocks.openService).not.toHaveBeenCalled();
+  });
+
+  it("cancels a pending Home preflight and never launches after a late native acknowledgement", async () => {
+    mocks.status = {
+      supported: true,
+      running: true,
+      pads: [{ device: "0123456789abcdef", revision: "v2", transport: "bluetooth" }],
+      homeEnabled: false,
+      homeOverride: null,
+    };
+    let resolveEnable!: (status: Record<string, unknown>) => void;
+    mocks.setHomeEnabled.mockImplementationOnce(() => new Promise((resolve) => { resolveEnable = resolve; }));
+    await boot();
+    fireEvent.click(screen.getByRole("button", { name: "Otwórz Netflix" }));
+    await settle();
+    expect(screen.getByRole("dialog").textContent).toContain("Włącz powrót na tę sesję i otwórz");
+    fireEvent.click(screen.getByRole("button", { name: "Włącz powrót na tę sesję i otwórz" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Anuluj" }));
+    await settle();
+    resolveEnable({ ...mocks.status, supported: true, running: true, homeEnabled: true, homeOverride: true });
+    await settle();
+    expect(mocks.openService).not.toHaveBeenCalled();
+  });
+
+  it("times out preflight confirmation and ignores a later native acknowledgement", async () => {
+    mocks.status = {
+      supported: true,
+      running: true,
+      pads: [{ device: "0123456789abcdef", revision: "v2", transport: "bluetooth" }],
+      homeEnabled: false,
+      homeOverride: null,
+    };
+    let resolveEnable!: (status: Record<string, unknown>) => void;
+    mocks.setHomeEnabled.mockImplementationOnce(() => new Promise((resolve) => { resolveEnable = resolve; }));
+    await boot();
+    fireEvent.click(screen.getByRole("button", { name: "Otwórz Netflix" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Włącz powrót na tę sesję i otwórz" }));
+    await settle();
+    advance(8_100);
+    await settle();
+    expect(screen.getByRole("dialog").textContent).toContain("Anuluj");
+    fireEvent.click(screen.getByRole("button", { name: "Anuluj" }));
+    resolveEnable({ ...mocks.status, supported: true, running: true, homeEnabled: true, homeOverride: true });
+    await settle();
+    expect(mocks.openService).not.toHaveBeenCalled();
   });
 
   it("falls back to the dock when the opener became disabled while the panel was open", async () => {
@@ -166,6 +270,7 @@ describe("App driven by a native DualShock 4", () => {
   });
 
   it("a Cross pressed in the gap right after a panel closes does not launch the dock app", async () => {
+    mocks.status = armedNativeStatus();
     await boot();
     await tap(["options"]);
     expect(dialogOpen()).toBe(true);

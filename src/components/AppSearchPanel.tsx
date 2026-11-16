@@ -46,7 +46,7 @@ export function AppSearchPanel({ entries, onLaunch }: AppSearchPanelProps) {
       <ul className="app-search-results" aria-label="Wyniki wyszukiwania">
         {results.map((entry) => (
           <li key={entry.id}>
-            <button type="button" data-remote-allow="" onClick={() => onLaunch(entry.id)}>
+            <button type="button" data-remote-allow="" data-app-launch-entry={entry.id} onClick={() => onLaunch(entry.id)}>
               <span>{entry.title}</span>
               <small>{entry.group}</small>
             </button>

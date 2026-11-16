@@ -46,6 +46,48 @@ export interface NativeControllerStatus {
   lastError: string | null;
   pads: Array<{ device: string; revision: Ds4Revision; transport: Ds4Transport }>;
   ignoredReports: number;
+  droppedRawReports: number;
+  homeEnabled: boolean;
+  homeOverride: boolean | null;
+  receivedReports: number;
+  validReports: number;
+  backgroundReports: number;
+  lastReportAtMs: number | null;
+  lastHomeButtons: { ps: boolean; options: boolean; atMs: number } | null;
+  psRisingCount: number;
+  lastPsRisingAtMs: number | null;
+  optionsRisingCount: number;
+  lastOptionsRisingAtMs: number | null;
+  lastChord: {
+    outcome: "triggered" | "armed" | "cooldown" | "latched" | "released" | "rejectedWindow" | "ignored";
+    atMs: number;
+    homeEnabled: boolean;
+    actionRequested: boolean;
+  } | null;
+  lastRestore: {
+    outcome: NativeHomeOutcome;
+    atMs: number;
+    ownWindow: number | null;
+    foregroundBeforeHwnd: number | null;
+    foregroundAfterHwnd: number | null;
+    foregroundBeforeProcessId: number | null;
+    foregroundAfterProcessId: number | null;
+    errorCode: number | null;
+  } | null;
+  queueRejected: number;
+  lastTrace: NativeHomeTrace | null;
+}
+
+export type NativeHomeStage = "report" | "recognition" | "dispatch" | "restore";
+export type NativeHomeOutcome =
+  | "reportReceived" | "validControllerReport" | "homeButtonsChanged" | "homeDisabled"
+  | "chordTriggered" | "returnQueued" | "queueRejected" | "restored" | "alreadyFocused"
+  | "blockedUnsafeForeground" | "blockedByWindows" | "windowUnavailable"
+  | "unsupportedPlatform" | "failed";
+export interface NativeHomeTrace {
+  stage: NativeHomeStage;
+  outcome: NativeHomeOutcome;
+  atMs: number;
 }
 
 export const disabledNativeControllerStatus: NativeControllerStatus = {
@@ -54,6 +96,22 @@ export const disabledNativeControllerStatus: NativeControllerStatus = {
   lastError: null,
   pads: [],
   ignoredReports: 0,
+  droppedRawReports: 0,
+  homeEnabled: false,
+  homeOverride: null,
+  receivedReports: 0,
+  validReports: 0,
+  backgroundReports: 0,
+  lastReportAtMs: null,
+  lastHomeButtons: null,
+  psRisingCount: 0,
+  lastPsRisingAtMs: null,
+  optionsRisingCount: 0,
+  lastOptionsRisingAtMs: null,
+  lastChord: null,
+  lastRestore: null,
+  queueRejected: 0,
+  lastTrace: null,
 };
 
 const BUTTONS: ReadonlySet<string> = new Set<Ds4ButtonName>([
@@ -105,6 +163,12 @@ export function parseNativeControllerEvent(payload: unknown): NativeControllerEv
 export async function getNativeControllerStatus(): Promise<NativeControllerStatus> {
   if (!isTauri()) return disabledNativeControllerStatus;
   return invoke<NativeControllerStatus>("get_native_controller_status");
+}
+
+/** Explicitly opts this VELORA process into the local PS + Options Home chord. */
+export async function setControllerHomeEnabled(enabled: boolean): Promise<NativeControllerStatus> {
+  if (!isTauri()) return disabledNativeControllerStatus;
+  return invoke<NativeControllerStatus>("set_controller_home_enabled", { enabled });
 }
 
 export async function listenForNativeController(
@@ -235,6 +299,13 @@ export const initialNativeControllerModel: NativeControllerModel = {
   lastInputAt: null,
   snapshotAt: null,
 };
+
+/** A healthy native DS4 is the sole navigation source until it disconnects. */
+export function nativeControllerOwnsGamepadApi(model: NativeControllerModel): boolean {
+  return !model.unavailableReason
+    && model.activeDevice !== null
+    && model.pads.some((pad) => pad.device === model.activeDevice);
+}
 
 export function isNeutral(snapshot: NativeSnapshot | null): boolean {
   if (!snapshot) return true;
