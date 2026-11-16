@@ -25,9 +25,7 @@ use crate::ds4::{
 use crate::gamepad_home::{ChordOutcome, ComboTracker, DualSenseButtons};
 #[path = "controller_supervisor.rs"]
 mod controller_supervisor;
-pub use controller_supervisor::{
-    ControllerFallbackConfig, ControllerFallbackGesture, ControllerFallbackStatus,
-};
+pub use controller_supervisor::{ControllerFallbackConfig, ControllerFallbackStatus};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 

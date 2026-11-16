@@ -75,7 +75,7 @@ mod native {
             parent: Hwnd,
             menu: *mut c_void,
             instance: *mut c_void,
-            param: *const c_void,
+            param: *mut c_void,
         ) -> Hwnd;
         fn DestroyWindow(hwnd: Hwnd) -> i32;
         fn GetForegroundWindow() -> Hwnd;
@@ -180,7 +180,7 @@ mod native {
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
-                std::ptr::null(),
+                std::ptr::null_mut(),
             )
         };
         if hwnd.is_null() {

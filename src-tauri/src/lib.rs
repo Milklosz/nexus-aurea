@@ -19,8 +19,8 @@ mod platform_launchers;
 mod playnite_library;
 #[allow(dead_code)]
 mod playnite_manifest;
-mod process_table;
 mod pointer_indicator;
+mod process_table;
 mod remote_access;
 #[allow(dead_code)]
 mod remote_reliability;
