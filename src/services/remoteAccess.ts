@@ -134,7 +134,7 @@ export async function listenForRemoteAccessStatus(
 }
 
 const remoteCommands: ReadonlySet<string> = new Set([
-  "up", "down", "left", "right", "select", "back", "home",
+  "up", "down", "left", "right", "select", "back", "home", "menu", "switch-apps",
   "volume-up", "volume-down", "mute",
   "profile-cinema", "profile-gaming", "profile-desktop",
 ]);

@@ -67,6 +67,8 @@ pub enum RemoteCommand {
     Select,
     Back,
     Home,
+    Menu,
+    SwitchApps,
     VolumeUp,
     VolumeDown,
     Mute,
@@ -431,6 +433,8 @@ impl RemoteCommand {
             Self::Select => "select",
             Self::Back => "back",
             Self::Home => "home",
+            Self::Menu => "menu",
+            Self::SwitchApps => "switch-apps",
             Self::VolumeUp => "volume-up",
             Self::VolumeDown => "volume-down",
             Self::Mute => "mute",
@@ -1264,17 +1268,45 @@ impl RemoteAccess {
             CommandReservation::Execute { previous_sequence } => previous_sequence,
         };
 
-        // Home is the one command with a fully native, session-authoritative
-        // action. Perform it before the HTTP acknowledgement so a hidden or
-        // busy WebView cannot turn a real Home request into a false success.
-        let native_home = request.command == RemoteCommand::Home;
+        // Authenticated native actions must not depend on a background WebView.
+        // The allowlisted navigation bridge independently validates its owned
+        // foreground target; the phone never supplies keys, HWNDs or processes.
+        let native_action = match request.command {
+            RemoteCommand::Up | RemoteCommand::Down | RemoteCommand::Left
+            | RemoteCommand::Right | RemoteCommand::Select | RemoteCommand::Back =>
+                crate::streaming_control::route_remote_navigation(app, request.command.as_str()),
+            RemoteCommand::VolumeUp | RemoteCommand::VolumeDown | RemoteCommand::Mute => {
+                let action = match request.command {
+                    RemoteCommand::VolumeUp => "up",
+                    RemoteCommand::VolumeDown => "down",
+                    _ => "mute",
+                };
+                crate::music_service::adjust_system_volume_blocking(action.into()).map(|()| true)
+            }
+            _ => Ok(false),
+        };
+        match native_action {
+            Ok(true) => {
+                self.record_command_receipt(&request.device_id, request.sequence, request.command.as_str());
+                return StatusCode::NO_CONTENT;
+            }
+            Err(_) => {
+                self.rollback_command_reservation(&request.device_id, request.sequence, previous_sequence);
+                return StatusCode::CONFLICT;
+            }
+            Ok(false) => {}
+        }
+
+        // Bring the shell back through the conservative paired-device policy
+        // before delivering Home, Control Center or the application picker.
+        let native_home = matches!(request.command, RemoteCommand::Home | RemoteCommand::Menu | RemoteCommand::SwitchApps);
         if native_home {
             let result = crate::session_orchestrator::return_home(
                 app,
                 crate::session_orchestrator::TransitionCause::ControlService,
                 crate::session_orchestrator::HomeRequestSource::Device,
             );
-            if result.is_err() {
+            if !matches!(&result, Ok(result) if result.restore.restored || result.restore.outcome == crate::window_broker::RestoreOutcome::AlreadyFocused) {
                 self.rollback_command_reservation(
                     &request.device_id,
                     request.sequence,
@@ -1288,7 +1320,7 @@ impl RemoteAccess {
             .emit("nexus-remote-command", request.command.clone())
             .is_err()
         {
-            if native_home {
+            if request.command == RemoteCommand::Home {
                 // The native Home transition already happened; report it
                 // truthfully and keep the receipt so a retry cannot repeat it.
                 self.record_command_receipt(
@@ -1298,8 +1330,9 @@ impl RemoteAccess {
                 );
                 return StatusCode::NO_CONTENT;
             }
-            // No side effect reached the UI. Release the reservation so the
-            // same signed command can be retried cleanly.
+            // Panel delivery failed. Home may already have succeeded, but the
+            // requested panel did not: never acknowledge a partial action.
+            // A deliberate retry can repeat the idempotent Home transition.
             self.rollback_command_reservation(
                 &request.device_id,
                 request.sequence,
@@ -2466,6 +2499,10 @@ mod tests {
             RemoteCommand::VolumeUp
         );
         assert!(serde_json::from_str::<RemoteCommand>("\"run-shell\"").is_err());
+        for (wire, command) in [("menu", RemoteCommand::Menu), ("switch-apps", RemoteCommand::SwitchApps)] {
+            assert_eq!(serde_json::from_str::<RemoteCommand>(&format!("\"{wire}\"")).unwrap(), command);
+            assert_eq!(command.as_str(), wire);
+        }
     }
 }
 

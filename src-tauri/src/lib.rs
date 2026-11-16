@@ -20,6 +20,7 @@ mod playnite_library;
 #[allow(dead_code)]
 mod playnite_manifest;
 mod process_table;
+mod pointer_indicator;
 mod remote_access;
 #[allow(dead_code)]
 mod remote_reliability;
@@ -29,6 +30,7 @@ mod session_monitor;
 mod session_orchestrator;
 mod session_store;
 mod single_instance;
+mod streaming_control;
 mod window_broker;
 
 #[cfg(test)]
@@ -48,6 +50,7 @@ pub fn run() {
         .manage(session_orchestrator::SessionOrchestrator::default())
         .manage(window_broker::WindowBroker::default())
         .manage(pad_hub::PadHub::default())
+        .manage(streaming_control::StreamingControl::default())
         .manage(launch_registry::LaunchRegistry::default())
         .invoke_handler(tauri::generate_handler![
             platform_launchers::get_platform_launcher_status,
@@ -55,6 +58,10 @@ pub fn run() {
             platform_launchers::launch_platform,
             pad_hub::get_native_controller_status,
             pad_hub::set_controller_home_enabled,
+            pad_hub::get_controller_fallback_status,
+            pad_hub::configure_controller_fallback,
+            streaming_control::get_streaming_control_status,
+            streaming_control::configure_streaming_control,
             control_service::get_control_service_status,
             control_service::start_control_service,
             control_service::set_control_game_mode,
@@ -137,6 +144,8 @@ pub fn run() {
         if let tauri::RunEvent::Exit = event {
             session_orchestrator::mark_clean_shutdown(app);
             app.state::<pad_hub::PadHub>().stop();
+            streaming_control::stop_streaming_control(app);
+            pointer_indicator::stop();
             launch_registry::stop_watcher();
             window_broker::stop_foreground_monitor();
             display_audio::stop_monitor();

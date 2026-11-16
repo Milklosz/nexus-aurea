@@ -83,6 +83,8 @@ export function intentFromRemote(command: RemoteCommand): NavIntent | null {
       return { kind: "back" };
     case "home":
       return { kind: "home" };
+    case "menu":
+      return { kind: "menu" };
     default:
       return null;
   }

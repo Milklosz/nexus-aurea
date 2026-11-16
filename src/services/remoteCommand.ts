@@ -4,7 +4,7 @@ import { moveAureaFocus, type NavigationDirection } from "./aureaNavigation";
 import { dispatchNavIntent, intentFromRemote } from "./navIntent";
 
 export type RemoteCommand =
-  | "up" | "down" | "left" | "right" | "select" | "back" | "home"
+  | "up" | "down" | "left" | "right" | "select" | "back" | "home" | "menu" | "switch-apps"
   | "volume-up" | "volume-down" | "mute"
   | "profile-cinema" | "profile-gaming" | "profile-desktop";
 
@@ -15,6 +15,8 @@ export type RemoteCommandHandlers = {
   selectRemote?: () => void;
   back: () => void;
   home: () => void;
+  menu?: () => void;
+  switchApplications?: () => void;
   volume: (action: SystemVolumeAction) => void;
   profile: (profile: CinemaProfile) => void;
   /** Optional: full 2D direction handler (takes precedence over grid/fallback). */
@@ -57,13 +59,15 @@ export function dispatchRemoteCommand(command: RemoteCommand, handlers: RemoteCo
       ),
       select: () => (handlers.selectRemote ?? handlers.select)(),
       back: () => handlers.back(),
-      // The pilot has no menu command; intentFromRemote never yields "menu".
-      menu: () => {},
+      menu: () => handlers.menu?.(),
       home: () => handlers.home(),
     });
     return;
   }
   switch (command) {
+    case "switch-apps":
+      handlers.switchApplications?.();
+      break;
     case "volume-up":
       handlers.volume("up");
       break;
