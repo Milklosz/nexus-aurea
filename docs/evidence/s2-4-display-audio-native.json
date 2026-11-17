@@ -1,0 +1,67 @@
+{
+  "sourceState": "S2.4 in progress, display module + read-only probe; not a built RC acceptance",
+  "baseSha": "740f5964df4e2dc843f436b0e5e7a61af9cafc13",
+  "evidenceType": "readOnlyWindowsApiObservation",
+  "observedAtUtc": "2026-11-17T14:00:39.030Z",
+  "snapshot": {
+    "windows": true,
+    "supported": true,
+    "displays": [
+      {
+        "name": "Panasonic-TV",
+        "width": 3840,
+        "height": 2160,
+        "refreshHz": 60,
+        "bitsPerPixel": 32,
+        "primary": true,
+        "hdr": false,
+        "hdrError": null,
+        "diagnostics": {
+          "x": 0,
+          "y": 0,
+          "desktopWidth": 3840,
+          "desktopHeight": 2160,
+          "scalePercent": 140,
+          "refreshMillihz": 60000,
+          "connectionType": "HDMI",
+          "adapterName": "NVIDIA GeForce RTX 3070 Laptop GPU",
+          "edidManufacturerId": 43316,
+          "edidProductCodeId": 41622,
+          "identitySource": "displayConfig"
+        }
+      }
+    ],
+    "audio": [
+      {
+        "name": "Panasonic-TV (NVIDIA High Definition Audio)",
+        "state": "active",
+        "defaultDevice": true
+      }
+    ],
+    "displayError": null,
+    "audioError": "Windows zgłosił 62 punktów końcowych audio; pokazano pierwsze 32.",
+    "policy": {
+      "readOnly": true,
+      "automaticModeChanges": false,
+      "notes": [
+        "Ten raport tylko odczytuje stan wyświetlaczy i audio.",
+        "Odczyt diagnostyczny nie zmienia rozdzielczości, HDR, głośności ani domyślnych urządzeń.",
+        "Automatyczne przełączanie trybów obrazu i dźwięku jest wyłączone.",
+        "Tryb 4K 60 Hz dla Panasonic nie jest zakładany; raport pokazuje rzeczywisty tryb zgłoszony przez Windows."
+      ]
+    },
+    "limitations": [
+      "Moduł jest fundamentem diagnostycznym; nie zawiera jeszcze silnika scen.",
+      "HDR jest raportowany tylko wtedy, gdy Windows udostępni stan zaawansowanego koloru; w przeciwnym razie hdr ma wartość null, a hdrError opisuje przyczynę. Wartość hdr odzwierciedla stan zaawansowanego koloru Windows, a nie certyfikację HDR monitora.",
+      "Odświeżanie i głębia kolorów opisują bieżący tryb systemowy, a nie maksymalne możliwości monitora; wartość 0 oznacza, że Windows nie zwrócił danych.",
+      "Identyfikatory monitorów i punktów końcowych audio są nieodwracalnymi skrótami; surowe ścieżki urządzeń nie opuszczają backendu.",
+      "Identyfikator monitora jest oparty na ścieżce urządzenia Windows; jeśli system jej nie zwróci, identyfikator może zmienić się po ponownym uruchomieniu.",
+      "Lista audio obejmuje urządzenia renderujące w każdym stanie; głośność i wyciszenie są odczytywane tylko dla aktywnych punktów końcowych.",
+      "Połączenie i EDID są raportowane z aktywnej ścieżki DisplayConfig tylko przy jednoznacznym powiązaniu. Brak danych i lustrzane cele pozostają nieznane; raport nie odczytuje numeru portu ani nie negocjuje trybu.",
+      "Położenie i wymiary pulpitu są fizycznymi pikselami; skala pochodzi z GetScaleFactorForMonitor, niezależnie od manifestu DPI procesu. Nie należy ponownie skalować fizycznych prostokątów UI Automation. Odświeżanie w mHz pochodzi z ułamka DisplayConfig, jeśli jest dostępny.",
+      "Automatyczna zmiana trybu obrazu nie jest zaimplementowana w tym buildzie."
+    ],
+    "capturedAtMs": 1794924017535
+  },
+  "redaction": "Device-derived identifiers, non-default audio endpoints and per-device audio settings are omitted."
+}

@@ -103,6 +103,7 @@ jobs:
         run: pnpm tauri build --ci --target x86_64-pc-windows-msvc
 
       - name: Record and verify Windows build provenance
+        id: windows-provenance
         if: runner.os == 'Windows' && success()
         shell: pwsh
         run: |
@@ -154,6 +155,12 @@ jobs:
           node scripts/build-provenance.mjs verify-release --preview --installer "$($assets[0])" --manifest "$($assets[1])"
           if ($LASTEXITCODE -ne 0) { throw 'The release assets do not match each other.' }
 
+          if ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF.StartsWith('refs/heads/')) {
+            $smokePayloads = @(Get-ChildItem -LiteralPath $extractDirectory -Recurse -File -Filter 'nexus-aurea.exe')
+            if ($smokePayloads.Count -ne 1) { throw 'Expected exactly one verified application executable.' }
+            "smoke_payload=$($smokePayloads[0].FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          }
+
           $provenance = Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
           @(
             '## Windows installer provenance'
@@ -189,6 +196,15 @@ jobs:
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/velora-build-provenance.json
           if-no-files-found: error
           retention-days: 30
+
+      - name: Upload verified Windows executable for no-install smoke
+        if: runner.os == 'Windows' && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: VELORA-Windows-release-smoke-${{ github.sha }}
+          path: ${{ steps.windows-provenance.outputs.smoke_payload }}
+          if-no-files-found: error
+          retention-days: 7
 
   playnite-extension:
     name: Windows / Playnite extension (net462)

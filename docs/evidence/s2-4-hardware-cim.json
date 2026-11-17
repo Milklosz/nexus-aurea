@@ -1,0 +1,27 @@
+{
+  "observedOn": "2026-11-17",
+  "recordedAtUtc": "2026-11-17T13:52:45Z",
+  "method": "read-only Get-CimInstance; elevated after sandbox CIM access denied",
+  "sourceBase": "740f5964df4e2dc843f436b0e5e7a61af9cafc13",
+  "evidenceType": "supported Windows hardware API observation; not Computer Use acceptance",
+  "computer": {
+    "manufacturer": "Micro-Star International Co., Ltd.",
+    "model": "GP76 Leopard 11UG",
+    "totalPhysicalMemoryBytes": 34046590976,
+    "processor": "11th Gen Intel(R) Core(TM) i7-11800H @ 2.30GHz"
+  },
+  "gpuReportedModes": [
+    {"name": "Intel(R) UHD Graphics", "width": 1920, "height": 1080, "refreshHz": 240},
+    {"name": "NVIDIA GeForce RTX 3070 Laptop GPU", "width": 3840, "height": 2160, "refreshHz": 60}
+  ],
+  "activeEdidNames": [
+    {"manufacturer": "SHP", "friendlyName": "LQ173M1JW05", "active": true},
+    {"manufacturer": "MEI", "friendlyName": "Panasonic-TV", "active": true}
+  ],
+  "limitations": [
+    "No serial number, device instance path, account, IP or machine name recorded.",
+    "GPU WMI mode alone does not establish monitor-to-adapter path; native DisplayConfig telemetry is needed for that association.",
+    "DPI, refresh rational, current audio endpoint and advanced color state are not established by this CIM receipt.",
+    "No system settings were changed."
+  ]
+}

@@ -378,6 +378,10 @@ fn sanitize_snapshot(snapshot: &mut DiagnosticsSnapshot) {
     for display in &mut snapshot.display_audio.displays {
         display.name = sanitize_text(&display.name);
         sanitize_optional(&mut display.hdr_error);
+        sanitize_optional(&mut display.diagnostics.adapter_name);
+        sanitize_optional(&mut display.diagnostics.dpi_provenance);
+        sanitize_optional(&mut display.diagnostics.connection_type);
+        display.diagnostics.identity_source = sanitize_text(&display.diagnostics.identity_source);
     }
     for endpoint in &mut snapshot.display_audio.audio {
         endpoint.name = sanitize_text(&endpoint.name);
@@ -554,6 +558,7 @@ mod tests {
                     primary: true,
                     hdr: Some(false),
                     hdr_error: None,
+                    diagnostics: Default::default(),
                 }],
                 audio: vec![AudioEndpointInfo {
                     id: "def".into(),

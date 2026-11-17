@@ -113,4 +113,34 @@ describe("System Intelligence panel", () => {
     expect(mocks.exportReport).toHaveBeenCalledOnce();
     expect(report.value).not.toContain("C:\\\\Users");
   });
+
+  it("shows physical negative coordinates and actual DPI without assuming HDMI or 60Hz", async () => {
+    mocks.snapshot = snapshot();
+    mocks.snapshot.displayAudio.displays[0].diagnostics = {
+      x: -3840, y: 1080, desktopWidth: 3840, desktopHeight: 2160,
+      scalePercent: 140, effectiveDpiX: 144, effectiveDpiY: 144, dpiProvenance: "getDpiForMonitorPerMonitorProcess", refreshMillihz: 59_940,
+      connectionType: null, adapterName: "NVIDIA GeForce RTX 3070 Laptop GPU",
+      edidManufacturerId: null, edidProductCodeId: null, identitySource: "gdiFallback",
+    };
+    render(<SystemDiagnosticsPanel />);
+    expect(await screen.findByText(/3840×2160 px \(-3840, 1080\)/)).toBeTruthy();
+    expect(screen.getByText(/skala API 140% \(DPI okna może się różnić\)/)).toBeTruthy();
+    expect(screen.getByText(/144×144 DPI · efektywna skala 150%/)).toBeTruthy();
+    expect(screen.getByText(/59,94 Hz \(DisplayConfig\)/)).toBeTruthy();
+    expect(screen.getByText(/połączenie nieznane/)).toBeTruthy();
+    expect(screen.queryByText(/HDMI/)).toBeNull();
+  });
+
+  it("does not present an unverified 96-DPI default as the effective monitor scale", async () => {
+    mocks.snapshot = snapshot();
+    mocks.snapshot.displayAudio.displays[0].diagnostics = {
+      x: 0, y: 0, desktopWidth: 3840, desktopHeight: 2160,
+      scalePercent: 140, effectiveDpiX: 96, effectiveDpiY: 96, dpiProvenance: null,
+      refreshMillihz: 60_000, connectionType: "HDMI", adapterName: null,
+      edidManufacturerId: null, edidProductCodeId: null, identitySource: "displayConfig",
+    };
+    render(<SystemDiagnosticsPanel />);
+    expect(await screen.findByText(/efektywne DPI nieznane/)).toBeTruthy();
+    expect(screen.queryByText(/efektywna skala 100%/)).toBeNull();
+  });
 });

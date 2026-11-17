@@ -10,6 +10,7 @@ import { AudioControls } from "./AudioControls";
 import { SessionsPanel } from "./SessionsPanel";
 import { DesktopRecoveryControls } from "./DesktopRecoveryControls";
 import { TvModePanel } from "./TvModePanel";
+import { TvNavigationSettings } from "./TvNavigationSettings";
 import { PlayniteLibrary } from "./PlayniteLibrary";
 import { AppSearchPanel } from "./AppSearchPanel";
 import type { SearchEntry } from "../services/appSearch";
@@ -185,8 +186,9 @@ export function SessionControllerControls({ homeEnabled, nativeRunning }: { home
       </button>
       <button type="button" data-remote-admin="" disabled={busy} onClick={() => void refresh()}>Odśwież stan sterowania</button>
     </div>
+    <TvNavigationSettings revision={`${streaming.enabled}:${streaming.pointerMode}`} />
     {!homeEnabled && <p>Najpierw włącz powrót Home na tę sesję.</p>}
-    <p>D-pad: strzałki · Cross: Enter lub kliknięcie · Circle: wstecz · Square: Tab · touchpad: Shift+Tab · Triangle: tryb wskaźnika · prawy analog: wskaźnik · L2/R2: przewijanie.</p>
+    <p>D-pad i lewy analog: nawigacja · Cross: wybór · Circle: wstecz · Square: odtwórz/pauza po uzbrojeniu · Triangle: tryb wskaźnika · prawy analog: wskaźnik lub przewijanie · L2/R2: przewijanie. Options otwiera Control Center po zwolnieniu, jeśli nie użyto gestu Home. L1/R1 pozostają zarezerwowane dla dotychczasowego gestu zastępczego Home.</p>
     <p className="cc-card-note">Sterowanie obejmuje wyłącznie aktywne okno streamingowe uruchomione i rozpoznane przez VELORA. Obsługa stron wymaga testów; w trybie wskaźnika nad własnym oknem pojawia się oznaczenie.</p>
     <button type="button" data-remote-admin="" aria-expanded={showDiagnostics} aria-controls="cc-couch-diagnostics"
       onClick={() => setShowDiagnostics(!showDiagnostics)}>Wynik sterowania i gestu Home</button>

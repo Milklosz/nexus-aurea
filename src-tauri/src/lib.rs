@@ -32,8 +32,10 @@ mod session_monitor;
 mod session_orchestrator;
 mod session_store;
 mod single_instance;
+mod spatial_navigation;
 mod streaming_control;
 mod tv_mode;
+mod tv_navigation;
 mod velora_session_manager;
 mod window_broker;
 
@@ -76,6 +78,13 @@ pub fn run() {
             pad_hub::configure_controller_fallback,
             streaming_control::get_streaming_control_status,
             streaming_control::configure_streaming_control,
+            streaming_control::get_tv_navigation_status,
+            streaming_control::configure_tv_navigation,
+            streaming_control::set_tv_navigation_mode,
+            streaming_control::set_tv_navigation_media_controls,
+            streaming_control::capture_tv_navigation_target,
+            streaming_control::simulate_tv_navigation_action,
+            streaming_control::cancel_tv_navigation_simulation,
             control_service::get_control_service_status,
             control_service::start_control_service,
             control_service::set_control_game_mode,

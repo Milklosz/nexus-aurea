@@ -309,7 +309,9 @@ describe("App driven by a native DualShock 4", () => {
     await settle();
     advance(500);
     expect(dialogOpen()).toBe(false);
-    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "F3" })); });
+    const shortcut = new KeyboardEvent("keydown", { key: "F3", cancelable: true });
+    await act(async () => { window.dispatchEvent(shortcut); });
+    expect(shortcut.defaultPrevented).toBe(true);
     advance(50);
     expect(dialogOpen()).toBe(true);
   });

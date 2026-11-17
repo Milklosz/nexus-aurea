@@ -1,0 +1,27 @@
+{
+  "observedOn": "2026-11-17",
+  "recordedAtUtc": "2026-11-17T14:02:29Z",
+  "evidenceType": "readOnlyWindowsApiObservation",
+  "method": "Get-Process metadata + GetDpiForWindow/GetWindowDpiAwarenessContext/AreDpiAwarenessContextsEqual; no UI input or settings write",
+  "window": {
+    "processName": "nexus-aurea",
+    "executableRelativePath": "outputs/s2-3-cc24aff/nexus-aurea.exe",
+    "baselineSourceSha": "cc24affd970b3f4fb478f58f1dceb218708f7753",
+    "dpi": 144,
+    "effectiveScalePercentFromWindowDpi": 150,
+    "awareness": "perMonitorAware",
+    "perMonitorV2": true
+  },
+  "comparison": {
+    "monitorApi": "GetScaleFactorForMonitor",
+    "resourceScaleBucketPercent": 140,
+    "sourceEvidence": "s2-4-display-audio-native.json",
+    "conclusion": "Monitor resource-scale enum is not the exact effective DPI of this PMv2 window. Use window DPI or Tauri scaleFactor for exact window geometry; retain resource bucket as separately labeled telemetry."
+  },
+  "limitations": [
+    "This observes the running isolated S2.3 window, not a completed S2.4 RC.",
+    "No system scaling setting was changed.",
+    "Physical dimensions and refresh are independently recorded by DisplayConfig; this DPI result alone does not validate pointer hit testing or fullscreen."
+  ],
+  "redaction": "Transient process and window identifiers are omitted."
+}
