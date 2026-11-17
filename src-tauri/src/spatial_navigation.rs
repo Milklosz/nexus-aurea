@@ -1,7 +1,9 @@
 //! Opt-in UI Automation navigation scoped to an already-owned streaming window.
 //! Never reads names, values, URLs or text. Call only on a non-UI MTA worker.
 use crate::edge_cinema::StreamingWindowTarget;
-use crate::tv_navigation::{SpatialCandidateRejections, SpatialNavigationDiagnostics};
+use crate::tv_navigation::{
+    SpatialCandidateRejections, SpatialFailureKind, SpatialNavigationDiagnostics,
+};
 use tauri::AppHandle;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,22 +19,19 @@ pub(crate) struct SpatialOutcome {
     pub accepted: bool,
     pub effect: String,
     pub diagnostics: SpatialNavigationDiagnostics,
-    pub failure_reason: Option<String>,
-    pub pointer_fallback_recommended: bool,
+    pub failure_reason: Option<SpatialFailureKind>,
 }
 
 fn failed_outcome(
-    reason: &'static str,
+    reason: SpatialFailureKind,
     message: impl Into<String>,
     diagnostics: SpatialNavigationDiagnostics,
-    pointer_fallback_recommended: bool,
 ) -> SpatialOutcome {
     SpatialOutcome {
         accepted: false,
         effect: message.into(),
         diagnostics,
-        failure_reason: Some(reason.into()),
-        pointer_fallback_recommended,
+        failure_reason: Some(reason),
     }
 }
 
@@ -126,10 +125,9 @@ pub(crate) fn navigate(
     if !crate::edge_cinema::streaming_target_is_current(app, target) {
         invalidate();
         return Ok(failed_outcome(
-            "targetChanged",
+            SpatialFailureKind::TargetChanged,
             "Spatial navigation stopped because the owned streaming target changed.",
             SpatialNavigationDiagnostics::default(),
-            false,
         ));
     }
     #[cfg(target_os = "windows")]
@@ -140,10 +138,9 @@ pub(crate) fn navigate(
     {
         let _ = (direction, still_authorized);
         Ok(failed_outcome(
-            "unsupportedPlatform",
+            SpatialFailureKind::UnsupportedPlatform,
             "Spatial navigation requires Windows UI Automation.",
             SpatialNavigationDiagnostics::default(),
-            false,
         ))
     }
 }
@@ -156,10 +153,9 @@ pub(crate) fn activate(
     if !crate::edge_cinema::streaming_target_is_current(app, target) {
         invalidate();
         return Ok(failed_outcome(
-            "targetChanged",
+            SpatialFailureKind::TargetChanged,
             "Spatial navigation stopped because the owned streaming target changed.",
             SpatialNavigationDiagnostics::default(),
-            false,
         ));
     }
     #[cfg(target_os = "windows")]
@@ -170,10 +166,9 @@ pub(crate) fn activate(
     {
         let _ = still_authorized;
         Ok(failed_outcome(
-            "unsupportedPlatform",
+            SpatialFailureKind::UnsupportedPlatform,
             "Spatial navigation requires Windows UI Automation.",
             SpatialNavigationDiagnostics::default(),
-            false,
         ))
     }
 }
@@ -194,7 +189,7 @@ pub(crate) fn is_editable_focus(
     }
     #[cfg(target_os = "windows")]
     {
-        native::editable(app, target)
+        native::editable(app, target).map_err(|failure| failure.message().to_string())
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -227,6 +222,89 @@ mod native {
     const QUERY_BUDGET: Duration = Duration::from_millis(40);
     const ACTION_BUDGET: Duration = Duration::from_millis(250);
     const CACHE_TTL: Duration = Duration::from_millis(500);
+
+    /// Internal typed error for the Windows UIA path. Every variant owns a
+    /// fixed, non-sensitive human message and maps to exactly one public
+    /// SpatialFailureKind, so failures are classified by type — never by
+    /// parsing an error string. No element name or page text is ever included.
+    #[derive(Clone, Copy, Debug)]
+    pub(super) enum NavigationError {
+        ProviderUnavailable,
+        QueryBudgetExhausted,
+        NoEligibleCandidates,
+        NoCandidateInDirection,
+        FocusNotCandidate,
+        FocusOutsideOwnedWindow,
+        FocusAncestryTooDeep,
+        ActionBudgetExceeded,
+        InvokeUnsupported,
+        CandidateInvalidated,
+        FocusNotObserved,
+        ScopeChanged,
+        AuthorizationRevoked,
+        TargetChanged,
+        ProviderCallFailed,
+    }
+
+    impl NavigationError {
+        pub(super) fn message(self) -> &'static str {
+            match self {
+                Self::ProviderUnavailable => {
+                    "Spatial: accessibility provider unavailable or stale; select keyboard or pointer mode."
+                }
+                Self::QueryBudgetExhausted => {
+                    "Spatial: accessibility discovery budget exhausted; select pointer mode."
+                }
+                Self::NoEligibleCandidates => {
+                    "Spatial: no eligible controls in the current scope."
+                }
+                Self::NoCandidateInDirection => {
+                    "Spatial: no actionable control in this direction; use pointer mode."
+                }
+                Self::FocusNotCandidate => {
+                    "Spatial: the focused control is not an actionable candidate; use pointer mode."
+                }
+                Self::FocusOutsideOwnedWindow => {
+                    "Spatial: focus is outside the owned window scope."
+                }
+                Self::FocusAncestryTooDeep => "Spatial: focus ancestry exceeds safe scope.",
+                Self::ActionBudgetExceeded => {
+                    "Spatial: accessibility action exceeded its work budget; action cancelled."
+                }
+                Self::InvokeUnsupported => {
+                    "Spatial: focused control has no supported Invoke pattern; use pointer mode."
+                }
+                Self::CandidateInvalidated => "Spatial: selected control is no longer eligible.",
+                Self::FocusNotObserved => {
+                    "Spatial: provider accepted focus request but focus was not observed."
+                }
+                Self::ScopeChanged => "Spatial: modal scope changed; action cancelled.",
+                Self::AuthorizationRevoked => "Spatial: action authorization was revoked.",
+                Self::TargetChanged => "Spatial: owned target changed before action.",
+                Self::ProviderCallFailed => "Spatial: accessibility provider call failed.",
+            }
+        }
+
+        fn kind(self) -> SpatialFailureKind {
+            match self {
+                Self::ProviderUnavailable => SpatialFailureKind::ProviderUnavailable,
+                Self::QueryBudgetExhausted => SpatialFailureKind::QueryBudgetExhausted,
+                Self::NoEligibleCandidates => SpatialFailureKind::NoEligibleCandidates,
+                Self::NoCandidateInDirection => SpatialFailureKind::NoCandidateInDirection,
+                Self::FocusNotCandidate => SpatialFailureKind::FocusNotCandidate,
+                Self::FocusOutsideOwnedWindow => SpatialFailureKind::FocusOutsideOwnedWindow,
+                Self::FocusAncestryTooDeep => SpatialFailureKind::FocusAncestryTooDeep,
+                Self::ActionBudgetExceeded => SpatialFailureKind::ActionBudgetExceeded,
+                Self::InvokeUnsupported => SpatialFailureKind::InvokeUnsupported,
+                Self::CandidateInvalidated => SpatialFailureKind::CandidateInvalidated,
+                Self::FocusNotObserved => SpatialFailureKind::FocusNotObserved,
+                Self::ScopeChanged => SpatialFailureKind::ScopeChanged,
+                Self::AuthorizationRevoked => SpatialFailureKind::AuthorizationRevoked,
+                Self::TargetChanged => SpatialFailureKind::TargetChanged,
+                Self::ProviderCallFailed => SpatialFailureKind::ProviderCallFailed,
+            }
+        }
+    }
 
     struct ComApartment;
     impl Drop for ComApartment {
@@ -270,21 +348,20 @@ mod native {
             bottom: rect.bottom as f64,
         }
     }
-    fn error() -> String {
-        "Spatial: accessibility provider unavailable or stale; select keyboard or pointer mode."
-            .into()
+    fn error() -> NavigationError {
+        NavigationError::ProviderUnavailable
     }
 
-    fn check_budget(started: Instant) -> Result<(), String> {
+    fn check_budget(started: Instant) -> Result<(), NavigationError> {
         if started.elapsed() >= ACTION_BUDGET {
-            Err("Spatial: accessibility action exceeded its work budget; action cancelled.".into())
+            Err(NavigationError::ActionBudgetExceeded)
         } else {
             Ok(())
         }
     }
 
     impl Provider {
-        fn new(target: &StreamingWindowTarget) -> Result<Self, String> {
+        fn new(target: &StreamingWindowTarget) -> Result<Self, NavigationError> {
             unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok() }.map_err(|_| error())?;
             let apartment = ComApartment;
             let automation: IUIAutomation2 =
@@ -314,7 +391,7 @@ mod native {
             &self,
             root: &IUIAutomationElement,
             started: Instant,
-        ) -> Result<IUIAutomationElement, String> {
+        ) -> Result<IUIAutomationElement, NavigationError> {
             check_budget(started)?;
             let mut current =
                 unsafe { self.automation.GetFocusedElement() }.map_err(|_| error())?;
@@ -342,11 +419,10 @@ mod native {
                     }
                 }
                 check_budget(started)?;
-                current = unsafe { self.walker.GetParentElement(&current) }.map_err(|_| {
-                    "Spatial: focus is outside the owned window scope.".to_string()
-                })?;
+                current = unsafe { self.walker.GetParentElement(&current) }
+                    .map_err(|_| NavigationError::FocusOutsideOwnedWindow)?;
             }
-            Err("Spatial: focus ancestry exceeds safe scope.".into())
+            Err(NavigationError::FocusAncestryTooDeep)
         }
 
         fn eligible(
@@ -409,7 +485,7 @@ mod native {
             element: &IUIAutomationElement,
             scope: &IUIAutomationElement,
             started: Instant,
-        ) -> Result<bool, String> {
+        ) -> Result<bool, NavigationError> {
             let mut current = element.clone();
             for _ in 0..MAX_DEPTH {
                 check_budget(started)?;
@@ -432,7 +508,7 @@ mod native {
             &mut self,
             scope: &IUIAutomationElement,
             started: Instant,
-        ) -> Result<(), String> {
+        ) -> Result<(), NavigationError> {
             let query_started = Instant::now();
             self.candidates.clear();
             self.scope = None;
@@ -518,15 +594,14 @@ mod native {
                 .min(u64::MAX as u128) as u64;
             self.diagnostics.budget_exhausted = budget_exhausted;
             if budget_exhausted {
-                return Err(
-                    "Spatial: accessibility discovery budget exhausted; select pointer mode."
-                        .into(),
-                );
+                // diagnostics.budget_exhausted was set above at the point the
+                // traversal limit was reached; no error string is inspected.
+                return Err(NavigationError::QueryBudgetExhausted);
             }
             self.scope = Some(scope.clone());
             self.captured = Instant::now();
             if self.candidates.is_empty() {
-                return Err("Spatial: no eligible controls in the current scope.".into());
+                return Err(NavigationError::NoEligibleCandidates);
             }
             Ok(())
         }
@@ -537,7 +612,7 @@ mod native {
             target: &StreamingWindowTarget,
             direction: Option<Direction>,
             still_authorized: &dyn Fn() -> bool,
-        ) -> Result<SpatialOutcome, String> {
+        ) -> Result<SpatialOutcome, NavigationError> {
             let started = Instant::now();
             self.diagnostics = SpatialNavigationDiagnostics::default();
             let root = unsafe {
@@ -583,11 +658,9 @@ mod native {
             }
             .ok_or_else(|| {
                 if direction.is_some() {
-                    "Spatial: no actionable control in this direction; use pointer mode."
-                        .to_string()
+                    NavigationError::NoCandidateInDirection
                 } else {
-                    "Spatial: the focused control is not an actionable candidate; use pointer mode."
-                        .to_string()
+                    NavigationError::FocusNotCandidate
                 }
             })?;
             let candidate = &self.candidates[selected];
@@ -598,32 +671,29 @@ mod native {
                     started,
                 )
                 .map_err(|rejection| match rejection {
-                    CandidateRejection::ActionBudget => {
-                        "Spatial: accessibility action exceeded its work budget; action cancelled."
-                            .to_string()
-                    }
-                    _ => "Spatial: selected control is no longer eligible.".to_string(),
+                    CandidateRejection::ActionBudget => NavigationError::ActionBudgetExceeded,
+                    _ => NavigationError::CandidateInvalidated,
                 })?;
             // Moving/removed controls invalidate selection instead of activating
             // an old rectangle after a dynamic page update.
             if current_bounds != candidate.bounds {
-                return Err("Spatial: selected control moved; selection invalidated.".into());
+                return Err(NavigationError::CandidateInvalidated);
             }
             let current_scope = self.current_scope(&root, started)?;
             if !unsafe { self.automation.CompareElements(&scope, &current_scope) }
                 .map_err(|_| error())?
                 .as_bool()
             {
-                return Err("Spatial: modal scope changed; action cancelled.".into());
+                return Err(NavigationError::ScopeChanged);
             }
             if !self.in_scope(&candidate.element, &scope, started)? {
-                return Err("Spatial: selected control left its owned scope.".into());
+                return Err(NavigationError::CandidateInvalidated);
             }
             if !still_authorized() {
-                return Err("Spatial: action authorization was revoked.".into());
+                return Err(NavigationError::AuthorizationRevoked);
             }
             if !crate::edge_cinema::streaming_target_is_current(app, target) {
-                return Err("Spatial: owned target changed before action.".into());
+                return Err(NavigationError::TargetChanged);
             }
             check_budget(started)?;
             let effect = if direction.is_some() {
@@ -632,22 +702,20 @@ mod native {
                     .map_err(|_| error())?
                     .as_bool()
                 {
-                    return Err(
-                        "Spatial: provider accepted focus request but focus was not observed."
-                            .into(),
-                    );
+                    return Err(NavigationError::FocusNotObserved);
                 }
                 "focus-observed"
             } else {
-                let pattern = unsafe { candidate.element.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId) }.map_err(|_| "Spatial: focused control has no supported Invoke pattern; use pointer mode.".to_string())?;
+                let pattern = unsafe { candidate.element.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId) }
+                    .map_err(|_| NavigationError::InvokeUnsupported)?;
                 check_budget(started)?;
                 if !still_authorized() {
-                    return Err("Spatial: action authorization was revoked before Invoke.".into());
+                    return Err(NavigationError::AuthorizationRevoked);
                 }
                 if !crate::edge_cinema::streaming_target_is_current(app, target) {
-                    return Err("Spatial: owned target changed before Invoke.".into());
+                    return Err(NavigationError::TargetChanged);
                 }
-                unsafe { pattern.Invoke() }.map_err(|_| error())?;
+                unsafe { pattern.Invoke() }.map_err(|_| NavigationError::ProviderCallFailed)?;
                 "invoke-accepted-effect-unverified"
             };
             self.diagnostics.candidate_count = self.candidates.len();
@@ -656,44 +724,7 @@ mod native {
                 effect: effect.into(),
                 diagnostics: self.diagnostics,
                 failure_reason: None,
-                pointer_fallback_recommended: false,
             })
-        }
-    }
-
-    fn failure_reason(error: &str, diagnostics: SpatialNavigationDiagnostics) -> (&'static str, bool) {
-        if diagnostics.budget_exhausted || error.contains("discovery budget") {
-            ("queryBudgetExhausted", true)
-        } else if error.contains("no eligible controls") {
-            ("noEligibleCandidates", true)
-        } else if error.contains("no actionable control in this direction") {
-            ("noCandidateInDirection", true)
-        } else if error.contains("focused control is not an actionable candidate") {
-            ("focusNotCandidate", true)
-        } else if error.contains("focus is outside the owned window scope") {
-            ("focusOutsideOwnedWindow", false)
-        } else if error.contains("ancestry exceeds safe scope") {
-            ("focusAncestryTooDeep", true)
-        } else if error.contains("work budget") {
-            ("actionBudgetExceeded", true)
-        } else if error.contains("no supported Invoke pattern") {
-            ("invokeUnsupported", true)
-        } else if error.contains("no longer eligible") || error.contains("left its owned scope") {
-            ("candidateInvalidated", true)
-        } else if error.contains("selected control moved") {
-            ("candidateInvalidated", true)
-        } else if error.contains("focus was not observed") {
-            ("focusNotObserved", true)
-        } else if error.contains("modal scope changed") {
-            ("scopeChanged", false)
-        } else if error.contains("authorization was revoked") {
-            ("authorizationRevoked", false)
-        } else if error.contains("owned target changed") || error.contains("focus or owned session changed") {
-            ("targetChanged", false)
-        } else if error.contains("provider unavailable or stale") {
-            ("providerUnavailable", true)
-        } else {
-            ("providerCallFailed", true)
         }
     }
 
@@ -716,42 +747,32 @@ mod native {
             {
                 match Provider::new(target) {
                     Ok(provider) => *slot = Some(provider),
-                    Err(message) => {
+                    Err(failure) => {
                         let mut diagnostics = SpatialNavigationDiagnostics::default();
                         diagnostics.query_ms = elapsed_ms(started);
-                        return failed_outcome(
-                            "providerUnavailable",
-                            message,
-                            diagnostics,
-                            true,
-                        );
+                        return failed_outcome(failure.kind(), failure.message(), diagnostics);
                     }
                 }
             }
             let provider = slot.as_mut().expect("provider was initialized above");
             let result = provider.act(app, target, direction, still_authorized);
-            let failure = result.as_ref().err().cloned();
+            let failure = result.as_ref().err().copied();
             let mut diagnostics = provider.diagnostics;
-            if let Some(message) = failure.as_deref() {
+            if let Some(failure) = failure {
                 if diagnostics.query_ms == 0 {
                     diagnostics.query_ms = elapsed_ms(started);
                 }
-                if message.contains("focus is outside the owned window scope") {
-                    diagnostics.focus_in_scope = Some(false);
-                } else if message.contains("ancestry exceeds safe scope") {
-                    diagnostics.focus_in_scope = None;
+                // Structured classification: update content-free diagnostics
+                // from the typed error, never by parsing an error string.
+                match failure {
+                    NavigationError::FocusOutsideOwnedWindow => {
+                        diagnostics.focus_in_scope = Some(false)
+                    }
+                    NavigationError::FocusAncestryTooDeep => diagnostics.focus_in_scope = None,
+                    NavigationError::ActionBudgetExceeded => diagnostics.budget_exhausted = true,
+                    _ => {}
                 }
-                if message.contains("work budget") {
-                    diagnostics.budget_exhausted = true;
-                }
-                let (reason, pointer_fallback_recommended) =
-                    failure_reason(message, diagnostics);
-                let outcome = failed_outcome(
-                    reason,
-                    message,
-                    diagnostics,
-                    pointer_fallback_recommended,
-                );
+                let outcome = failed_outcome(failure.kind(), failure.message(), diagnostics);
                 // No retry after failure; discard every stale COM reference.
                 *slot = None;
                 return outcome;
@@ -775,7 +796,7 @@ mod native {
     pub(super) fn editable(
         app: &AppHandle,
         target: &StreamingWindowTarget,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, NavigationError> {
         PROVIDER.with(|slot| {
             let mut slot = slot.borrow_mut();
             if slot
@@ -807,12 +828,10 @@ mod native {
                     .map_err(|_| error())?
                     .as_bool()
                 {
-                    return Err(
-                        "Spatial: editable-focus identity changed during inspection.".into(),
-                    );
+                    return Err(NavigationError::ProviderCallFailed);
                 }
                 if !crate::edge_cinema::streaming_target_is_current(app, target) {
-                    return Err("Spatial: foreground changed during editable-focus check.".into());
+                    return Err(NavigationError::TargetChanged);
                 }
                 Ok(password || kind == UIA_EditControlTypeId || kind == UIA_ComboBoxControlTypeId)
             })();
@@ -821,6 +840,94 @@ mod native {
             }
             result
         })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn typed_errors_map_to_expected_kinds_and_safe_labels() {
+            for (failure, kind) in [
+                (
+                    NavigationError::ProviderUnavailable,
+                    SpatialFailureKind::ProviderUnavailable,
+                ),
+                (
+                    NavigationError::QueryBudgetExhausted,
+                    SpatialFailureKind::QueryBudgetExhausted,
+                ),
+                (
+                    NavigationError::NoEligibleCandidates,
+                    SpatialFailureKind::NoEligibleCandidates,
+                ),
+                (
+                    NavigationError::NoCandidateInDirection,
+                    SpatialFailureKind::NoCandidateInDirection,
+                ),
+                (
+                    NavigationError::FocusNotCandidate,
+                    SpatialFailureKind::FocusNotCandidate,
+                ),
+                (
+                    NavigationError::FocusOutsideOwnedWindow,
+                    SpatialFailureKind::FocusOutsideOwnedWindow,
+                ),
+                (
+                    NavigationError::FocusAncestryTooDeep,
+                    SpatialFailureKind::FocusAncestryTooDeep,
+                ),
+                (
+                    NavigationError::ActionBudgetExceeded,
+                    SpatialFailureKind::ActionBudgetExceeded,
+                ),
+                (
+                    NavigationError::InvokeUnsupported,
+                    SpatialFailureKind::InvokeUnsupported,
+                ),
+                (
+                    NavigationError::CandidateInvalidated,
+                    SpatialFailureKind::CandidateInvalidated,
+                ),
+                (
+                    NavigationError::FocusNotObserved,
+                    SpatialFailureKind::FocusNotObserved,
+                ),
+                (NavigationError::ScopeChanged, SpatialFailureKind::ScopeChanged),
+                (
+                    NavigationError::AuthorizationRevoked,
+                    SpatialFailureKind::AuthorizationRevoked,
+                ),
+                (NavigationError::TargetChanged, SpatialFailureKind::TargetChanged),
+                (
+                    NavigationError::ProviderCallFailed,
+                    SpatialFailureKind::ProviderCallFailed,
+                ),
+            ] {
+                assert_eq!(failure.kind(), kind);
+                assert_eq!(
+                    failure.kind().fallback_eligible(),
+                    kind.fallback_eligible()
+                );
+                assert!(!failure.message().is_empty());
+                assert!(!failure.kind().display_label().is_empty());
+            }
+        }
+
+        #[test]
+        fn ownership_failures_are_never_fallback_eligible() {
+            for failure in [
+                NavigationError::FocusOutsideOwnedWindow,
+                NavigationError::ScopeChanged,
+                NavigationError::AuthorizationRevoked,
+                NavigationError::TargetChanged,
+            ] {
+                assert!(
+                    !failure.kind().fallback_eligible(),
+                    "{failure:?} must not enable fallback"
+                );
+            }
+        }
     }
 }
 

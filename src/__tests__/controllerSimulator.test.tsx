@@ -307,6 +307,45 @@ describe("Controller Simulator", () => {
   });
 });
 
+describe("sticky pointer fallback feedback", () => {
+  it("shows a persistent banner and typed receipt feedback after a recoverable failure", async () => {
+    mocks.simulate.mockResolvedValue({
+      accepted: false, effect: "Spatial provider did not confirm the action (no control in that direction). Pointer mode is active.",
+      sequence: 1, generation: 4, mode: "pointer", activeStrategy: "pointer",
+      targetSession: "owned-session", lastResult: null,
+      fallbackReason: "noCandidateInDirection", fallbackActivated: true,
+      modeChangedByFallback: true,
+      fallbackNotice: "sticky pointer fallback enabled — original action was not repeated",
+    });
+    render(<ControllerSimulator />); await flush(); await selectTarget();
+    fireEvent.click(screen.getByRole("button", { name: "D-pad ↓" }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+    expect(screen.getByText(/sticky pointer fallback enabled — original action was not repeated/, { selector: "[data-fallback-notice]" })).toBeTruthy();
+    expect(screen.getByText(/Ścieżka zastępcza/)).toBeTruthy();
+    expect(screen.getByText(/noCandidateInDirection/)).toBeTruthy();
+    expect(screen.getByText(/Zmiana trybu przez ścieżkę zastępczą/)).toBeTruthy();
+    // One native action only: the original action was not replayed as a click.
+    expect(mocks.simulate).toHaveBeenCalledTimes(1);
+    expect(mocks.simulate).toHaveBeenLastCalledWith(expect.objectContaining({ action: "down" }));
+  });
+  it("never shows the sticky banner for an ownership or authorization failure", async () => {
+    mocks.simulate.mockResolvedValue({
+      accepted: false, effect: "Spatial navigation stopped because the owned streaming target changed.",
+      sequence: 1, generation: 3, mode: "spatial", activeStrategy: "spatial",
+      targetSession: "owned-session", lastResult: null,
+      fallbackReason: "targetChanged", fallbackActivated: false,
+      modeChangedByFallback: false, fallbackNotice: null,
+    });
+    render(<ControllerSimulator />); await flush(); await selectTarget();
+    fireEvent.click(screen.getByRole("button", { name: "D-pad ↓" }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+    expect(screen.queryByText(/sticky pointer fallback enabled/)).toBeNull();
+    expect(screen.getByText(/Ścieżka zastępcza/)).toBeTruthy();
+    expect(screen.getByText(/nie przełączono trybu ani nie powtórzono polecenia/)).toBeTruthy();
+    expect(screen.queryByText(/Zmiana trybu przez ścieżkę zastępczą/)).toBeNull();
+  });
+});
+
 it("offers direct session and mode buttons without a native select popup", async () => {
  render(<ControllerSimulator />); await flush();
  const target=screen.getByRole("button", {name:"Cel: YouTube"});
