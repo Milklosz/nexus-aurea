@@ -101,4 +101,32 @@ describe("Edge Cinema bridge", () => {
     expect(edgeCinemaErrorMessage({}, "Własny komunikat")).toBe("Własny komunikat");
     expect(edgeCinemaErrorMessage("webview2 failed with code 5")).toBe("Nie udało się uruchomić Edge Cinema. Spróbuj ponownie.");
   });
+
+  it("maps protected-content, site-change and navigation failures to calm, honest guidance", () => {
+    const protectedNotice = edgeCinemaErrorMessage(new Error("Treść chroniona — odtwarzanie niedostępne"));
+    expect(protectedNotice).toMatch(/nie omija zabezpieczeń/);
+    expect(protectedNotice).toMatch(/nie gwarantuje odtwarzania/);
+    expect(protectedNotice).not.toMatch(/kompatybiln|sprawdzon|gwarantowane działanie/i);
+
+    const siteNotice = edgeCinemaErrorMessage("W oknie Edge Cinema otwarta jest inna usługa.");
+    expect(siteNotice).toMatch(/inny adres/);
+    expect(siteNotice).toMatch(/oficjalny adres/);
+    expect(siteNotice).not.toMatch(/kompatybiln|sprawdzon/i);
+
+    for (const raw of [
+      "Strona usługi zmieniła adres (redirect 302).",
+      "site changed unexpectedly",
+      "navigation to service failed",
+    ]) {
+      const mapped = edgeCinemaErrorMessage(new Error(raw));
+      expect(mapped).not.toBe(raw);
+      expect(mapped).not.toMatch(/C:\\|0x| at /i);
+      expect(mapped).toMatch(/oficjalny adres|przejść do strony/);
+    }
+
+    const navNotice = edgeCinemaErrorMessage("Nie udało się przejść do strony usługi: timeout");
+    expect(navNotice).toMatch(/Sprawdź połączenie/);
+    expect(navNotice).toMatch(/nie gwarantuje/);
+    expect(navNotice).not.toMatch(/kompatybiln|sprawdzon/i);
+  });
 });
