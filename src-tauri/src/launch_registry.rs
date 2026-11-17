@@ -2461,6 +2461,227 @@ mod tests {
         assert!(watch.baseline_process_ids.is_empty());
         assert!(watch.baseline_window_ids.is_empty());
     }
+
+    // ---- Deterministic simulated session workflows (no real processes) ----
+    // Every pid/hwnd/creation time below is derived from the loop index. The
+    // helpers drive the same pure `advance` state machine the watcher uses, so
+    // the invariants hold without spawning Edge or touching the desktop.
+
+    fn sim_cinema(id: &str, pid: u32) -> TrackedLaunch {
+        let mut watch = LaunchWatch::new(
+            LaunchKind::Cinema,
+            "Edge Cinema",
+            Some("edge-cinema:netflix".into()),
+            Vec::new(),
+            Some(pid),
+            true,
+            true,
+            Vec::new(),
+            true,
+            Some(crate::session_orchestrator::SessionId::Cinema),
+        )
+        .detect_window_close()
+        .include_root_window();
+        watch.baseline_captured = true;
+        TrackedLaunch {
+            session: LaunchSession {
+                id: id.into(),
+                kind: LaunchKind::Cinema,
+                display_name: "Edge Cinema".into(),
+                app_id: Some("edge-cinema:netflix".into()),
+                phase: LaunchPhase::Requested,
+                process_ids: Vec::new(),
+                foreground: false,
+                window_id: None,
+                started_at_ms: 1_000,
+                updated_at_ms: 1_000,
+                last_activation_at_ms: None,
+                error: None,
+                restore: None,
+                session_revision: None,
+                pid_reuse_detected: false,
+                attention: None,
+            },
+            watch,
+            absent_since_ms: None,
+            window_absent_since_ms: None,
+            known_identities: HashMap::new(),
+        }
+    }
+
+    fn sim_obs(
+        processes: Vec<(u32, u32, &str)>,
+        windows: &[(u64, u32, u64)],
+        foreground: Option<u64>,
+        identities: &[(u32, u64)],
+        at_ms: u64,
+    ) -> Observation {
+        let mut value = observation(
+            processes,
+            windows
+                .iter()
+                .map(|&(hwnd, process_id, _)| (hwnd, process_id, "Chrome_WidgetWin_1"))
+                .collect(),
+            foreground,
+            at_ms,
+        );
+        for (window, &(_, _, created)) in value.windows.iter_mut().zip(windows.iter()) {
+            window.process_created_at_100ns = Some(created);
+        }
+        value.identities.extend(identities.iter().map(|&(process_id, created)| {
+            (
+                process_id,
+                ProcessIdentity {
+                    process_id,
+                    created_at_100ns: created,
+                },
+            )
+        }));
+        value
+    }
+
+    fn was_ended(event: &Option<super::LaunchEvent>) -> bool {
+        event.as_ref().is_some_and(|event| event.session.phase == LaunchPhase::Ended)
+    }
+
+    /// Repeated Home → launch → window-close OR crash → restore → Home cycles.
+    /// Each session ends with exactly one `Ended` transition — the single event
+    /// that drives one focus restoration — and no later observation can reopen
+    /// it or request focus a second time.
+    #[test]
+    fn soak_repeated_cinema_launch_close_and_crash_cycles_end_exactly_once() {
+        // Duplicate launches of the same service are one group; sibling
+        // services remain independent across the whole soak.
+        for _ in 0..64u32 {
+            assert!(same_launch_group(
+                LaunchKind::Cinema,
+                Some("edge-cinema:netflix"),
+                LaunchKind::Cinema,
+                Some("edge-cinema:netflix")
+            ));
+            assert!(!same_launch_group(
+                LaunchKind::Cinema,
+                Some("edge-cinema:netflix"),
+                LaunchKind::Cinema,
+                Some("edge-cinema:disney")
+            ));
+        }
+
+        for iteration in 0..64u32 {
+            let base = 1_000_000u64 + iteration as u64 * 100_000;
+            let pid = 3_000 + iteration;
+            let created = 500 + iteration as u64 * 13;
+            let hwnd = 0x1000_0000u64 + iteration as u64 * 4;
+
+            let mut launch = sim_cinema(&format!("cinema-soak-{iteration}"), pid);
+            let processes = vec![(pid, 1u32, "msedge.exe")];
+            let live_windows = [(hwnd, pid, created)];
+            let ids = [(pid, created)];
+            let no_windows: [(u64, u32, u64); 0] = [];
+            let no_ids: [(u32, u64); 0] = [];
+
+            // Home → launch: Requested → ProcessStarted → SessionActive.
+            let live = sim_obs(processes.clone(), &live_windows, Some(hwnd), &ids, base + 1);
+            assert_eq!(
+                advance(&mut launch, &live).map(|e| e.session.phase),
+                Some(LaunchPhase::ProcessStarted)
+            );
+            assert_eq!(
+                advance(&mut launch, &live).map(|e| e.session.phase),
+                Some(LaunchPhase::SessionActive)
+            );
+            assert_eq!(launch.session.window_id, Some(hwnd));
+
+            let mut ended_events = 0u32;
+            if iteration % 2 == 0 {
+                // Crash: process disappears → ExitPending → Ended after grace.
+                let end = advance(
+                    &mut launch,
+                    &sim_obs(vec![], &no_windows, None, &no_ids, base + 2),
+                );
+                assert_eq!(end.as_ref().map(|e| e.session.phase), Some(LaunchPhase::ExitPending));
+                let end = advance(
+                    &mut launch,
+                    &sim_obs(vec![], &no_windows, None, &no_ids, base + 2 + EXIT_GRACE_MS + 1),
+                );
+                ended_events += u32::from(was_ended(&end));
+            } else {
+                // Window close: browser process lingers, app window is gone.
+                let _ = advance(
+                    &mut launch,
+                    &sim_obs(processes.clone(), &no_windows, None, &ids, base + 2),
+                );
+                let end = advance(
+                    &mut launch,
+                    &sim_obs(processes.clone(), &no_windows, None, &ids, base + 2 + EXIT_GRACE_MS + 1),
+                );
+                ended_events += u32::from(was_ended(&end));
+            }
+            assert_eq!(ended_events, 1, "cycle {iteration}: exactly one Ended event");
+            assert!(launch.session.phase.is_terminal());
+
+            // Terminal: a resurrected window/process/foreground must not reopen
+            // the launch or request a second restoration.
+            assert!(!was_ended(&advance(
+                &mut launch,
+                &sim_obs(processes, &live_windows, Some(hwnd), &ids, base + 10_000)
+            )));
+            assert!(advance(
+                &mut launch,
+                &sim_obs(vec![], &no_windows, None, &no_ids, base + 20_000)
+            )
+            .is_none());
+            assert!(launch.session.phase.is_terminal());
+        }
+    }
+
+    /// Adversarial live sessions: a cloaked/other-desktop window and a recycled
+    /// root PID must never yield an early Ended event or be recorded as an owned
+    /// identity, so focus can never be handed to a foreign process.
+    #[test]
+    fn soak_cloaked_window_and_recycled_pid_never_end_a_live_cinema_session() {
+        for iteration in 0..64u32 {
+            let base = 2_000_000u64 + iteration as u64 * 50_000;
+            let pid = 6_000 + iteration;
+            let created = 900 + iteration as u64 * 3;
+            let hwnd = 0x2000_0000u64 + iteration as u64 * 4;
+
+            let mut launch = sim_cinema(&format!("cinema-live-{iteration}"), pid);
+            let processes = vec![(pid, 1u32, "msedge.exe")];
+            let ids = [(pid, created)];
+
+            let live = sim_obs(processes.clone(), &[(hwnd, pid, created)], Some(hwnd), &ids, base + 1);
+            advance(&mut launch, &live);
+            advance(&mut launch, &live);
+            assert_eq!(launch.session.phase, LaunchPhase::SessionActive);
+
+            // Foreground lost but the exact HWND still exists: not a close.
+            let cloaked = sim_obs(
+                processes.clone(),
+                &[(hwnd, pid, created)],
+                None,
+                &ids,
+                base + 2,
+            );
+            assert!(!was_ended(&advance(&mut launch, &cloaked)));
+            assert_eq!(launch.session.phase, LaunchPhase::SessionActive);
+
+            // Same PID, new creation time: detected as reuse and never adopted.
+            let recycled = sim_obs(
+                processes,
+                &[(hwnd, pid, created + 1)],
+                Some(hwnd),
+                &[(pid, created + 1)],
+                base + 3,
+            );
+            let _ = advance(&mut launch, &recycled);
+            assert!(launch.session.pid_reuse_detected, "iteration {iteration}");
+            assert!(
+                !launch.known_identities.values().any(|&value| value == created + 1),
+                "iteration {iteration}: a recycled instance must not become an owner"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

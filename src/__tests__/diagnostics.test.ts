@@ -3,6 +3,7 @@ import {
   exportDiagnosticsReport,
   getDiagnosticsSnapshot,
   previewDiagnosticsSnapshot,
+  sanitizeDiagnosticsText,
   type DiagnosticsSnapshot,
 } from "../services/diagnostics";
 
@@ -53,5 +54,33 @@ describe("System Intelligence diagnostics bridge", () => {
     expect(snapshot.displayAudio.policy.readOnly).toBe(true);
     expect(snapshot.displayAudio.policy.automaticModeChanges).toBe(false);
     expect(snapshot.launchRegistry.activeSessions).toBe(0);
+  });
+
+  it("redacts pairing codes, credentials and network identifiers", () => {
+    for (const text of [
+      "https://192.168.0.10:47862/#pair=123456&exp=1731000000",
+      "one-time code 123456",
+      "kod jednorazowy 123456",
+      "pair=123456",
+      "deviceId=0123456789abcdef",
+      "token=private",
+      "owner S-1-5-21-1234 contact milos@example.com",
+    ]) {
+      const sanitized = sanitizeDiagnosticsText(text);
+      expect(sanitized).toBe("<redacted-detail>");
+      expect(sanitized).not.toContain("123456");
+    }
+    expect(sanitizeDiagnosticsText("C:\\Users\\mil\\AppData\\Roaming\\VELORA\\x.json")).toBe(
+      "<redacted-path>",
+    );
+  });
+
+  it("bounds web preview text and never renders a secret in a preview snapshot", () => {
+    const long = sanitizeDiagnosticsText("a".repeat(5000));
+    expect(long.length).toBeLessThanOrEqual(1024);
+    const snapshot = previewDiagnosticsSnapshot("pair=123456 password=hunter2");
+    expect(JSON.stringify(snapshot)).not.toContain("123456");
+    expect(JSON.stringify(snapshot)).not.toContain("hunter2");
+    expect(snapshot.errors[0].message).toBe("<redacted-detail>");
   });
 });

@@ -6,7 +6,8 @@
 use crate::ds4::{Ds4Button, Ds4Dpad, Ds4Report};
 use crate::tv_navigation::{
     NavigationAction, NavigationActionReceipt, NavigationDiagnostics, NavigationMode,
-    NavigationTargetSession, SpatialNavigationDiagnostics, TvNavigationStatus, PROFILES,
+    NavigationTargetSession, SpatialFailureKind, SpatialNavigationDiagnostics, TvNavigationStatus,
+    PROFILES,
 };
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -96,7 +97,7 @@ struct RuntimeState {
     last_spatial_query_ms: Option<u64>,
     last_spatial_candidate_count: Option<usize>,
     last_spatial_diagnostics: Option<SpatialNavigationDiagnostics>,
-    last_fallback_reason: Option<String>,
+    last_fallback_reason: Option<SpatialFailureKind>,
     last_fallback_activated: Option<bool>,
     simulator_home_request_id: u64,
     simulator_home_ready_revision: Option<u64>,
@@ -186,8 +187,10 @@ struct ActionResult {
     spatial_query_ms: Option<u64>,
     spatial_candidate_count: Option<usize>,
     spatial_diagnostics: Option<SpatialNavigationDiagnostics>,
-    fallback_reason: Option<String>,
+    fallback_reason: Option<SpatialFailureKind>,
     fallback_activated: Option<bool>,
+    mode_changed_by_fallback: Option<bool>,
+    fallback_notice: Option<String>,
 }
 
 enum WorkerPacket {
@@ -518,6 +521,19 @@ fn scale_pointer_delta(delta: i32, client_extent: i32, reference_extent: i32) ->
     }
     let scale = (client_extent as f64 / reference_extent as f64).clamp(1.0, 2.0);
     ((f64::from(delta) * scale).round() as i32).clamp(-64, 64)
+}
+
+/// Bounded scaling reference derived from the owned window's measured client
+/// extent and its effective DPI (96 = 100%). The reference is the logical
+/// client extent, so `scale_pointer_delta` scales by the DPI ratio rather than
+/// by a hard-coded 1920/1080 desktop. Returns 0 for unusable geometry, which
+/// makes `scale_pointer_delta` leave the bounded delta unchanged.
+fn pointer_scale_reference(client_extent: i32, dpi: u32) -> i32 {
+    if client_extent <= 0 || dpi == 0 {
+        return 0;
+    }
+    let dpi = dpi.clamp(48, 384);
+    (i64::from(client_extent) * 96 / i64::from(dpi)).clamp(1, i64::from(i32::MAX)) as i32
 }
 
 impl StreamingControl {
@@ -1339,6 +1355,37 @@ fn activate_pointer_fallback(
     true
 }
 
+/// Pure fallback decision. Ownership/authorization/target failures are never
+/// fallback-eligible, Remote input is always excluded, and every guard must
+/// still hold at the moment of the decision.
+fn fallback_permitted(
+    source: ActionSource,
+    kind: Option<SpatialFailureKind>,
+    still_authorized: bool,
+    target_current: bool,
+) -> bool {
+    source != ActionSource::Remote
+        && kind.is_some_and(SpatialFailureKind::fallback_eligible)
+        && still_authorized
+        && target_current
+}
+
+/// Fixed, non-sensitive notice attached to the receipt when sticky fallback
+/// activates. The original action is never replayed as a pointer action.
+fn fallback_notice() -> &'static str {
+    "sticky pointer fallback enabled — original action was not repeated"
+}
+
+/// User-visible effect for an activated fallback, rendered from the typed
+/// failure's safe display label (never the raw native error string).
+fn fallback_effect(kind: Option<SpatialFailureKind>) -> String {
+    format!(
+        "Spatial provider did not confirm the action ({}). Pointer mode is active; the original action was not repeated. Inspect the page before using the pointer.",
+        kind.map(SpatialFailureKind::display_label)
+            .unwrap_or("provider unavailable")
+    )
+}
+
 /// Raw Input removal/arrival uses this bounded hook, never waits on the input
 /// worker. Old queued packets are invalid immediately; same-path reconnects
 /// must observe neutral before another controller action is permitted.
@@ -1578,6 +1625,8 @@ pub fn simulate_tv_navigation_action(
         spatial_diagnostics: result.spatial_diagnostics,
         fallback_reason: result.fallback_reason,
         fallback_activated: result.fallback_activated,
+        mode_changed_by_fallback: result.mode_changed_by_fallback,
+        fallback_notice: result.fallback_notice,
     })
 }
 
@@ -2209,10 +2258,13 @@ fn dispatch_normalized_action_inner(
                 });
             }
 
-            let may_switch_to_pointer = action.source != ActionSource::Remote
-                && outcome.pointer_fallback_recommended
-                && still_authorized()
-                && crate::edge_cinema::streaming_target_is_current(app, &target);
+            let failure_reason = outcome.failure_reason;
+            let may_switch_to_pointer = fallback_permitted(
+                action.source,
+                failure_reason,
+                still_authorized(),
+                crate::edge_cinema::streaming_target_is_current(app, &target),
+            );
             let switched_to_pointer = may_switch_to_pointer
                 && activate_pointer_fallback(
                     control,
@@ -2224,15 +2276,14 @@ fn dispatch_normalized_action_inner(
             if switched_to_pointer {
                 crate::pointer_indicator::update(target.hwnd, true);
             }
-            let failure_reason = outcome.failure_reason;
             let effect = if switched_to_pointer {
-                format!(
-                    "Spatial provider did not confirm the action ({}). Pointer mode is active; the action was not repeated. Inspect the page before moving or clicking.",
-                    failure_reason.as_deref().unwrap_or("provider unavailable")
-                )
+                fallback_effect(failure_reason)
             } else {
                 outcome.effect
             };
+            // A failed spatial action is returned as a rejected receipt. No
+            // pointer Move/Click is constructed on this path: switching mode is
+            // the only fallback effect and the original action is not replayed.
             return Ok(ActionResult {
                 accepted: Some(false),
                 effect,
@@ -2242,6 +2293,8 @@ fn dispatch_normalized_action_inner(
                 spatial_diagnostics: Some(outcome.diagnostics),
                 fallback_reason: failure_reason,
                 fallback_activated: Some(switched_to_pointer),
+                mode_changed_by_fallback: Some(switched_to_pointer),
+                fallback_notice: switched_to_pointer.then(|| fallback_notice().to_string()),
                 ..ActionResult::default()
             });
         }
@@ -2442,6 +2495,7 @@ mod native {
         fn GetAncestor(window: *mut c_void, flags: u32) -> *mut c_void;
         fn GetSystemMetrics(index: i32) -> i32;
         fn SetThreadDpiAwarenessContext(context: *mut c_void) -> *mut c_void;
+        fn GetDpiForWindow(window: *mut c_void) -> u32;
     }
     struct DpiContextGuard(*mut c_void);
     impl DpiContextGuard {
@@ -2700,8 +2754,13 @@ mod native {
                 };
                 let client_width = last.x.saturating_sub(first.x).saturating_add(1);
                 let client_height = last.y.saturating_sub(first.y).saturating_add(1);
-                let dx = scale_pointer_delta(dx, client_width, 1920);
-                let dy = scale_pointer_delta(dy, client_height, 1080);
+                // Reference comes from the owned window's measured client
+                // extent and its DPI, not a hard-coded 1920/1080 desktop.
+                let dpi = unsafe { GetDpiForWindow(target.hwnd as usize as *mut c_void) };
+                let reference_width = super::pointer_scale_reference(client_width, dpi);
+                let reference_height = super::pointer_scale_reference(client_height, dpi);
+                let dx = scale_pointer_delta(dx, client_width, reference_width);
+                let dy = scale_pointer_delta(dy, client_height, reference_height);
                 let point = Point {
                     x: cursor.x.saturating_add(dx).clamp(first.x, last.x),
                     y: cursor.y.saturating_add(dy).clamp(first.y, last.y),
@@ -3250,5 +3309,179 @@ mod tests {
         let a = normalize_pointer_coordinate(960, 0, 1921).unwrap();
         let b = normalize_pointer_coordinate(1920, 0, 3841).unwrap();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn pointer_reference_is_dpi_derived_and_negative_desktop_origins_normalize() {
+        assert_eq!(pointer_scale_reference(1920, 96), 1920);
+        assert_eq!(pointer_scale_reference(3840, 192), 1920);
+        assert_eq!(pointer_scale_reference(3840, 144), 2560);
+        assert_eq!(pointer_scale_reference(3840, 0), 0);
+        assert_eq!(pointer_scale_reference(0, 96), 0);
+        // Scale stays within [1.0, 2.0] and the delta within ±64.
+        assert_eq!(
+            scale_pointer_delta(32, 1920, pointer_scale_reference(1920, 96)),
+            32
+        );
+        assert_eq!(
+            scale_pointer_delta(32, 3840, pointer_scale_reference(3840, 192)),
+            64
+        );
+        assert_eq!(
+            scale_pointer_delta(-8, 3840, pointer_scale_reference(3840, 192)),
+            -16
+        );
+        assert_eq!(
+            scale_pointer_delta(100, 7680, pointer_scale_reference(7680, 192)),
+            64
+        );
+        // Virtual desktop spanning a monitor at a negative origin.
+        assert_eq!(normalize_pointer_coordinate(-2560, -2560, 5120), Some(0));
+        assert_eq!(
+            normalize_pointer_coordinate(-1920, -2560, 5120),
+            Some((i64::from(640) * 65535 / 5119).clamp(0, 65535) as i32)
+        );
+    }
+
+    #[test]
+    fn ownership_failures_never_activate_pointer_fallback() {
+        for kind in [
+            SpatialFailureKind::FocusOutsideOwnedWindow,
+            SpatialFailureKind::ScopeChanged,
+            SpatialFailureKind::AuthorizationRevoked,
+            SpatialFailureKind::TargetChanged,
+            SpatialFailureKind::UnsupportedPlatform,
+        ] {
+            assert!(
+                !fallback_permitted(ActionSource::Controller, Some(kind), true, true),
+                "{kind:?} must not activate fallback"
+            );
+        }
+        // A recoverable failure with all guards satisfied may switch modes.
+        assert!(fallback_permitted(
+            ActionSource::Controller,
+            Some(SpatialFailureKind::QueryBudgetExhausted),
+            true,
+            true
+        ));
+        // An unclassified (absent) failure never activates fallback.
+        assert!(!fallback_permitted(
+            ActionSource::Controller,
+            None,
+            true,
+            true
+        ));
+    }
+
+    #[test]
+    fn failed_spatial_confirm_is_not_replayed_as_a_pointer_click() {
+        // A failed spatial activation is recoverable, so the mode may switch —
+        // but the only product is a rejected receipt: no pointer Click is sent.
+        assert!(fallback_permitted(
+            ActionSource::Controller,
+            Some(SpatialFailureKind::NoCandidateInDirection),
+            true,
+            true
+        ));
+        let effect = fallback_effect(Some(SpatialFailureKind::NoCandidateInDirection));
+        assert!(effect.contains("was not repeated"));
+        assert!(effect.contains("no control in that direction"));
+        assert!(!effect.contains("click"));
+        assert_eq!(
+            fallback_notice(),
+            "sticky pointer fallback enabled — original action was not repeated"
+        );
+    }
+
+    #[test]
+    fn remote_source_and_stale_guards_never_fall_back() {
+        for kind in [
+            SpatialFailureKind::QueryBudgetExhausted,
+            SpatialFailureKind::ProviderUnavailable,
+            SpatialFailureKind::NoEligibleCandidates,
+        ] {
+            assert!(!fallback_permitted(
+                ActionSource::Remote,
+                Some(kind),
+                true,
+                true
+            ));
+        }
+        // Revoked authorization or a stale target blocks an otherwise
+        // recoverable controller failure.
+        assert!(!fallback_permitted(
+            ActionSource::Controller,
+            Some(SpatialFailureKind::QueryBudgetExhausted),
+            false,
+            true
+        ));
+        assert!(!fallback_permitted(
+            ActionSource::Controller,
+            Some(SpatialFailureKind::QueryBudgetExhausted),
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    fn activate_pointer_fallback_rejects_stale_generation_and_wrong_mode() {
+        let control = StreamingControl::default();
+        control.enabled.store(true, Ordering::Release);
+        control.generation.store(4, Ordering::Release);
+        control
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .mode = NavigationMode::Automatic;
+        // Stale generation is rejected before any mode change or epoch bump.
+        assert!(!activate_pointer_fallback(
+            &control,
+            NavigationMode::Automatic,
+            0,
+            0,
+            3
+        ));
+        assert_eq!(control.generation.load(Ordering::Acquire), 4);
+        assert_eq!(
+            control
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .mode,
+            NavigationMode::Automatic
+        );
+        // A mismatched expected mode is also rejected.
+        assert!(!activate_pointer_fallback(
+            &control,
+            NavigationMode::Spatial,
+            0,
+            0,
+            4
+        ));
+        assert_eq!(
+            control
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .mode,
+            NavigationMode::Automatic
+        );
+        // Correct epoch/generation and expected mode succeed and bump generation.
+        assert!(activate_pointer_fallback(
+            &control,
+            NavigationMode::Automatic,
+            0,
+            0,
+            4
+        ));
+        assert_eq!(control.generation.load(Ordering::Acquire), 5);
+        assert_eq!(
+            control
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .mode,
+            NavigationMode::Pointer
+        );
     }
 }

@@ -116,7 +116,9 @@ export function rememberControllerSimulationReceipts(receipts: readonly TvNaviga
     spatialQueryMs: value.spatialQueryMs as number | null, spatialCandidateCount: value.spatialCandidateCount as number | null,
     effectObservation: value.effectObservation as TvNavigationReceipt["effectObservation"],
     homeTransitionReady: typeof value.homeTransitionReady === "boolean" ? value.homeTransitionReady : undefined,
-    fallbackReason: value.fallbackReason as string | null, fallbackActivated: value.fallbackActivated === true,
+    fallbackReason: value.fallbackReason as TvNavigationReceipt["fallbackReason"], fallbackActivated: value.fallbackActivated === true,
+    modeChangedByFallback: value.modeChangedByFallback === true,
+    fallbackNotice: value.fallbackNoticePresent === true ? "sticky pointer fallback enabled — original action was not repeated" : null,
     spatialDiagnostics: value.spatialDiagnostics as TvNavigationReceipt["spatialDiagnostics"],
   }));
 }

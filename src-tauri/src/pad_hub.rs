@@ -588,6 +588,33 @@ mod runtime {
         next_subscription: std::sync::atomic::AtomicU64,
     }
 
+    /// Detects a change of the authoritative session revision so a fallback
+    /// chord held across two sessions is released and re-armed. Streaming
+    /// generation/epoch revocation is owned by the authoritative transition path
+    /// in `session_orchestrator` (exactly once per real transition).
+    /// The first revision only seeds the guard: startup has no held chord.
+    #[derive(Default)]
+    struct SessionRevisionGuard {
+        last_revision: Option<u64>,
+    }
+
+    impl SessionRevisionGuard {
+        /// True only when `revision` differs from the previously observed one.
+        fn observe_revision(&mut self, revision: u64) -> bool {
+            match self.last_revision {
+                Some(previous) if previous != revision => {
+                    self.last_revision = Some(revision);
+                    true
+                }
+                Some(_) => false,
+                None => {
+                    self.last_revision = Some(revision);
+                    false
+                }
+            }
+        }
+    }
+
     /// Held by the one consumer of forwarded reports. Dropping it unsubscribes.
     pub(crate) struct RawSubscription {
         pub(crate) receiver: Receiver<RawEnvelope>,
@@ -878,6 +905,7 @@ mod runtime {
         let _ = started.send(Ok(()));
 
         let mut core = HubCore::default();
+        let mut session_guard = SessionRevisionGuard::default();
         // device handle -> (path, revision). A handle is only resolved once per arrival.
         let mut devices: std::collections::HashMap<usize, DeviceEntry> =
             std::collections::HashMap::new();
@@ -941,8 +969,10 @@ mod runtime {
                 }
             }
             let at_ms = now_ms();
-            let session_gate_open = crate::session_orchestrator::current_snapshot(&app).current
-                != crate::session_orchestrator::SessionId::VeloraHome;
+            let session = crate::session_orchestrator::current_snapshot(&app);
+            let session_gate_open =
+                session.current != crate::session_orchestrator::SessionId::VeloraHome;
+            let session_changed = session_guard.observe_revision(session.revision);
             let streaming_silence_reset = {
                 let _policy = shared
                     .home_policy_gate
@@ -954,6 +984,11 @@ mod runtime {
                     .unwrap_or_else(PoisonError::into_inner);
                 supervisor.set_home_gate(effective_home_enabled(&shared));
                 supervisor.set_session_gate(session_gate_open);
+                if session_changed {
+                    // A chord held across two sessions must be released and
+                    // re-armed even when the gate boolean did not flip.
+                    supervisor.on_session_changed();
+                }
                 let reset_streaming = supervisor.tick(at_ms);
                 core.set_chord_sources(
                     session_home_override(&shared),
@@ -962,6 +997,10 @@ mod runtime {
                 core.set_primary_chord_suppressed(supervisor.suppress_primary_chord());
                 reset_streaming
             };
+            // Streaming generation/epoch revocation for a real session change is
+            // owned by the authoritative transition path in session_orchestrator
+            // (exactly once per transition, before restore). Here the revision
+            // change only forces the fallback chord to release and re-arm.
             if streaming_silence_reset {
                 crate::streaming_control::invalidate_controller_streaming(&app);
             }
@@ -1427,6 +1466,25 @@ mod runtime {
                 },
             );
             assert!(new.receiver.try_recv().is_ok());
+        }
+
+        #[test]
+        fn session_revision_change_is_detected_once_and_ignores_repeats() {
+            let mut guard = SessionRevisionGuard::default();
+            assert!(
+                !guard.observe_revision(2),
+                "the first revision only seeds the guard at startup"
+            );
+            assert!(!guard.observe_revision(2), "no change, no rearm");
+            assert!(
+                guard.observe_revision(3),
+                "a new session revision must force the fallback chord to re-arm"
+            );
+            assert!(!guard.observe_revision(3));
+            assert!(guard.observe_revision(4));
+            // A replayed/older revision is still a change from the current one,
+            // so it also re-arms rather than letting a held chord carry over.
+            assert!(guard.observe_revision(2));
         }
     }
 

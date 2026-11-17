@@ -99,4 +99,25 @@ describe("official streaming launcher", () => {
     expect(streamingServiceErrorMessage(new Error("Widevine DRM 4K HDR HDCP playback failed"), "Netflix"))
       .toMatch(/4K/);
   });
+
+  it("rejects a lookalike host before invoking the native launcher", async () => {
+    mocks.isTauri.mockReturnValue(true);
+    const netflix = streamingServices.find((service) => service.id === "netflix");
+    if (!netflix || netflix.kind !== "web") throw new Error("Netflix web launcher is missing");
+
+    await expect(
+      openStreamingService({ ...netflix, href: "https://www.netflix.com.evil.example/pl/" }),
+    ).rejects.toThrow(/zaufanych stron/);
+    expect(mocks.invoke).not.toHaveBeenCalled();
+  });
+
+  it("keeps protected-content and site-change notices honest and non-alarming", () => {
+    const protectedNotice = streamingServiceErrorMessage(new Error("protected content unavailable"), "Netflix");
+    expect(protectedNotice).toMatch(/nie omija zabezpieczeń/);
+    expect(protectedNotice).not.toMatch(/kompatybiln|sprawdzon/i);
+
+    const siteNotice = streamingServiceErrorMessage("Strona usługi zmieniła adres", "Prime Video");
+    expect(siteNotice).toMatch(/oficjalny adres/);
+    expect(siteNotice).not.toMatch(/kompatybiln|sprawdzon/i);
+  });
 });

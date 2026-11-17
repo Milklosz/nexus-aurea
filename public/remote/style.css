@@ -37,6 +37,8 @@ h1 { margin: 10px 0; font-size: clamp(2rem, 8vw, 3rem); font-weight: 450; letter
 .pairing-form input { width: 100%; min-height: 42px; padding: 9px 11px; border: 1px solid rgba(255,255,255,.18); border-radius: 9px; background: rgba(0,0,0,.3); color: var(--cream); font: inherit; }
 .pairing-form input:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 .pairing-title { margin: 0 0 4px; color: var(--gold); font-size: 11px; letter-spacing: .12em; }
+.pairing-hint { margin: 2px 0; color: var(--gold); font-size: 11px; line-height: 1.4; }
+.pairing-hint[hidden] { display: none; }
 .pairing-form button { min-height: 42px; margin-top: 3px; font-size: 12px; }
 .remote-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; width: min(100%, 280px); margin: 22px auto 15px; }
 .remote-pad button { aspect-ratio: 1.35; font-size: 24px; }

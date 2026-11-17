@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { disabledControlServiceStatus, getControlServiceStatus, type ControlServiceStatus } from "../services/controlService";
 import type { CinemaProfile } from "../services/cinemaMode";
 import type { AmbientSettings } from "../services/ambient";
@@ -40,6 +40,12 @@ import {
   type RemoteRecoveryMode,
   type RemoteRecoveryPlan,
 } from "../services/remoteAccess";
+import {
+  buildPairingBootstrapUrl,
+  encodeQrMatrix,
+  formatPairingCountdown,
+  pairingRemainingSeconds,
+} from "../services/remoteReliability";
 
 const STORE_STATE_LABELS: Record<string, string> = {
   unavailable: "niedostępny",
@@ -89,6 +95,23 @@ export type ControlPanelId = (typeof controlPanels)[number]["id"];
 
 function delayLabel(seconds: number): string {
   return Math.round(seconds / 60) + " min";
+}
+
+/** Renders the QR module matrix produced by the self-contained encoder. */
+function PairingQrCode({ modules, label }: { modules: boolean[][]; label: string }) {
+  const size = modules.length;
+  const quiet = 4;
+  const total = size + quiet * 2;
+  return (
+    <svg className="remote-pairing-qr" viewBox={`0 0 ${total} ${total}`}
+      width={152} height={152} role="img" aria-label={label}
+      style={{ width: 152, height: 152, background: "#fff", borderRadius: 8 }}>
+      <rect x={0} y={0} width={total} height={total} fill="#ffffff" />
+      {modules.map((row, y) => row.map((dark, x) => dark
+        ? <rect key={`${x}-${y}`} x={x + quiet} y={y + quiet} width={1} height={1} fill="#000000" />
+        : null))}
+    </svg>
+  );
 }
 
 /** Native session settings stay local-only; the paired remote cannot opt into input synthesis. */
@@ -220,6 +243,7 @@ export function ControlCenter(props: ControlCenterProps) {
   const controlStatusRequestInFlight = useRef(false);
   const [busy, setBusy] = useState(false);
   const [remoteStatus, setRemoteStatus] = useState<RemoteAccessStatus>(disabledRemoteAccessStatus);
+  const [pairingNowMs, setPairingNowMs] = useState(() => Date.now());
   const [remoteStatusReady, setRemoteStatusReady] = useState(false);
   const [remoteStatusLoading, setRemoteStatusLoading] = useState(true);
   const [remoteStatusError, setRemoteStatusError] = useState("");
@@ -362,6 +386,33 @@ export function ControlCenter(props: ControlCenterProps) {
       unlisten?.();
     };
   }, []);
+
+  // A real 1-second ticker only while a pairing code is live. No tight render
+  // loop: the interval is created once per expiry value and cleaned up on
+  // unmount / when the code is consumed or expires.
+  useEffect(() => {
+    const expiry = remoteStatus.pairingExpiresAtMs ?? 0;
+    if (!expiry || expiry <= Date.now()) return;
+    setPairingNowMs(Date.now());
+    const timer = window.setInterval(() => setPairingNowMs(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [remoteStatus.pairingExpiresAtMs]);
+
+  const pairingRemaining = pairingRemainingSeconds(remoteStatus.pairingExpiresAtMs ?? 0, pairingNowMs);
+  const pairingCountdown = formatPairingCountdown(pairingRemaining);
+  const pairingQr = useMemo(() => {
+    if (!remoteStatus.pairingCode || !remoteStatus.origin || !remoteStatus.pairingExpiresAtMs) return null;
+    try {
+      const url = buildPairingBootstrapUrl(
+        remoteStatus.origin,
+        remoteStatus.pairingCode,
+        remoteStatus.pairingExpiresAtMs,
+      );
+      return { url, modules: encodeQrMatrix(url) };
+    } catch {
+      return null;
+    }
+  }, [remoteStatus.pairingCode, remoteStatus.origin, remoteStatus.pairingExpiresAtMs]);
 
   const runRemoteAction = async (
     action: () => Promise<RemoteAccessStatus>,
@@ -618,7 +669,7 @@ export function ControlCenter(props: ControlCenterProps) {
             <li><span>Serwer LAN</span><strong>{remoteStatusReady ? remoteStatus.enabled ? "włączony" : "wyłączony" : "stan nieznany"}</strong></li>
             <li><span>HTTPS</span><strong>{remoteStatusReady ? remoteStatus.secureOriginAvailable ? "aktywny · wymaga zaufanego certyfikatu" : "wyłączony" : "stan nieznany"}</strong></li>
             <li><span>Parowanie</span><strong>{!remoteStatusReady ? "stan nieznany" : remoteStatus.pairingCode
-              ? `kod jednorazowy · ${remoteStatus.pairingExpiresInSeconds}s`
+              ? `kod jednorazowy · ${pairingCountdown}`
               : remoteStatus.pairingAvailable ? "gotowe po wygenerowaniu kodu" : "wyłączone"}</strong></li>
             <li><span>Sparowane urządzenia</span><strong>{remoteStatusReady ? remoteStatus.pairedDeviceCount : "?"}</strong></li>
           </ul>
@@ -674,7 +725,14 @@ export function ControlCenter(props: ControlCenterProps) {
               beginRemotePairing,
               "Kod jednorazowy wygasa po 60 sekundach.",
             )}>Wygeneruj kod parowania</button>
-            {remoteStatus.pairingCode && <p className="remote-pairing-code" role="status">Kod iPhone: {remoteStatus.pairingCode} · {remoteStatus.pairingExpiresInSeconds}s</p>}
+            {remoteStatus.pairingCode && <div className="remote-pairing-bootstrap">
+              <p className="remote-pairing-code" role="status">Kod iPhone: {remoteStatus.pairingCode} · {pairingCountdown}</p>
+              {pairingQr && <>
+                <PairingQrCode modules={pairingQr.modules} label="Kod QR jednorazowego parowania iPhone Remote" />
+                <p className="cc-card-note">Zeskanuj kod QR i otwórz dokładny adres HTTPS. Kod zawiera tylko jednorazowy numer, adres serwera i krótki czas ważności — bez żadnego sekretu, tokenu ani klucza.</p>
+              </>}
+              <p className="cc-card-note">Kod jednorazowy wygasa po 60 sekundach i nie może być użyty ponownie. Ręczne wpisanie kodu w PWA pozostaje zawsze dostępne.</p>
+            </div>}
             <button type="button" disabled={!remoteStatusReady || remoteBusy} onClick={() => void runRemoteAction(
               stopRemoteAccess,
               "Serwer LAN został wyłączony.",

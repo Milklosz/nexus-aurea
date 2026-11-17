@@ -60,6 +60,16 @@ const SESSION_STATES = [
 const GENERIC_LIFECYCLE_ERROR =
   "Nie udało się zrealizować operacji Edge Cinema. Spróbuj ponownie.";
 
+// Jasne, niealarmujące komunikaty o treściach chronionych i zmianach strony.
+// Nie obiecują sprawdzonej zgodności ani odtwarzania — to zależy od usługi,
+// konta i urządzenia, a VELORA nie ma na to wpływu.
+const PROTECTED_CONTENT_NOTICE =
+  "Ta treść może być chroniona i niedostępna w tym oknie. VELORA nie omija zabezpieczeń ani nie gwarantuje odtwarzania — dostęp zależy od usługi, konta i urządzenia.";
+const SITE_CHANGE_NOTICE =
+  "Usługa wyświetliła inny adres niż oficjalny zapisany w VELORA. VELORA otwiera wyłącznie oficjalny adres; jeśli strona się zmieniła, skorzystaj z niej bezpośrednio.";
+const NAVIGATION_FAILURE_NOTICE =
+  "Nie udało się przejść do strony usługi. Sprawdź połączenie i spróbuj ponownie — VELORA nie gwarantuje dostępności ani zgodności treści.";
+
 function extractMessage(cause: unknown): string {
   if (typeof cause === "string") return cause;
   if (cause instanceof Error) return cause.message;
@@ -138,6 +148,15 @@ export function edgeCinemaLifecycleErrorMessage(cause: unknown): string {
   }
   if (/tylko w natywnej aplikacji Windows/i.test(message)) {
     return "Edge Cinema jest dostępne tylko w natywnej aplikacji Windows.";
+  }
+  if (/chronion|protected|drm|widevine|playready|hdcp/i.test(message)) {
+    return PROTECTED_CONTENT_NOTICE;
+  }
+  if (/inna usługa|zmieni|przekier|site.{0,12}chang|redirect|nawigac/i.test(message)) {
+    return SITE_CHANGE_NOTICE;
+  }
+  if (/nie udało się przejść|nie (udało|można) (przejść|nawiązać)|navigation|failed to load|nie załadowa/i.test(message)) {
+    return NAVIGATION_FAILURE_NOTICE;
   }
   if (/nie uruchomił okna|spawn/i.test(message)) {
     return "Nie udało się uruchomić okna Edge Cinema. Spróbuj ponownie.";

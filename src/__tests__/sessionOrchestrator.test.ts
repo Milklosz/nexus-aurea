@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  applyBrowserTransition,
   cancelSessionOperation,
   getSessionOperations,
   getSessionState,
@@ -7,6 +8,7 @@ import {
   listenForSessionChange,
   requestSessionTransition,
   returnVeloraHome,
+  sessionRevisionToken,
   type SessionChangedEvent,
   type SessionOperation,
   type SessionSnapshot,
@@ -111,6 +113,36 @@ describe("Session Orchestrator native bridge", () => {
     await expect(getSessionOperations()).resolves.toEqual([]);
     await expect(cancelSessionOperation("op-1")).resolves.toBeNull();
     expect(mocks.invoke).not.toHaveBeenCalled();
+  });
+
+  it("binds a session revision token to the session, revision and launch identity", () => {
+    const token = sessionRevisionToken(snapshot);
+    expect(token).toBe("game|2|game-1");
+    expect(sessionRevisionToken({ ...snapshot, revision: 3 })).not.toBe(token);
+    expect(sessionRevisionToken({ ...snapshot, context: { launchId: "game-2" } })).not.toBe(token);
+  });
+
+  it("keeps a monotonic generation across repeated Home/session transitions", () => {
+    let state: SessionSnapshot = {
+      current: "veloraHome",
+      previous: null,
+      revision: 0,
+      transitionedAtMs: 0,
+      context: null,
+      allowedTargets: [],
+    };
+    const targets: SessionSnapshot["current"][] = [
+      "game", "veloraHome", "cinema", "veloraHome", "playnite", "veloraHome", "game",
+    ];
+    targets.forEach((target, index) => {
+      const next = applyBrowserTransition(state, { target, cause: "user" });
+      expect(next.current).toBe(target);
+      expect(next.revision).toBe(index + 1);
+      // Re-sending the same target is idempotent: no generation bump.
+      expect(applyBrowserTransition(next, { target, cause: "user" })).toBe(next);
+      state = next;
+    });
+    expect(state.revision).toBe(7);
   });
 
   it("forwards session and return-home events", async () => {
