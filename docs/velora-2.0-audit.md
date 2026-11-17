@@ -69,6 +69,12 @@ unchanged.
 - **B4. Hardware validation is outstanding.** The checklist in
   `NIGHT_BUILD_PROGRESS.md` (MSI install, DualSense reconnect, Playnite
   fullscreen handoff, return to VELORA) has not been run on hardware.
+- **B5. iPhone pairing is too manual.** Next sprint should design a Control
+  Center flow where the user scans a short-lived QR code and securely pairs
+  the phone. The QR may carry only a one-time bootstrap challenge; retain
+  HTTPS/TLS, strong device authentication, origin validation, replay and
+  rate-limit protections, and remote revocation. Do not put a reusable secret
+  in the QR or weaken transport/authentication to remove certificate setup.
 
 ## 4. Priorities for VELORA 2.0
 

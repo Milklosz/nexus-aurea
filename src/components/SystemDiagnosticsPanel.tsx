@@ -116,6 +116,19 @@ export function SystemDiagnosticsPanel() {
           : <ul>{snapshot.displayAudio.displays.map((display) => <li key={display.id}>
             {display.name}: {display.width}×{display.height} @ {display.refreshHz} Hz · HDR: {display.hdr === null ? "niedostępny" : display.hdr ? "tak" : "nie"} · {display.primary ? "główny" : "dodatkowy"}
             {display.hdrError ? ` · ${display.hdrError}` : ""}
+            {display.diagnostics && <span>
+              {` · pulpit ${display.diagnostics.desktopWidth}×${display.diagnostics.desktopHeight} px (${display.diagnostics.x}, ${display.diagnostics.y})`}
+              {display.diagnostics.dpiProvenance === "getDpiForMonitorPerMonitorProcess" && display.diagnostics.effectiveDpiX !== null && display.diagnostics.effectiveDpiY !== null
+                ? ` · ${display.diagnostics.effectiveDpiX}×${display.diagnostics.effectiveDpiY} DPI · efektywna skala ${Math.round(display.diagnostics.effectiveDpiX / 96 * 100)}%`
+                : " · efektywne DPI nieznane"}
+              {display.diagnostics.scalePercent !== null
+                ? ` · skala API ${display.diagnostics.scalePercent}% (DPI okna może się różnić)`
+                : " · skala API nieznana"}
+              {display.diagnostics.refreshMillihz !== null ? ` · ${(display.diagnostics.refreshMillihz / 1000).toLocaleString("pl-PL", { maximumFractionDigits: 3 })} Hz (DisplayConfig)` : ""}
+              {display.diagnostics.connectionType ? ` · ${display.diagnostics.connectionType}` : " · połączenie nieznane"}
+              {display.diagnostics.adapterName ? ` · ${display.diagnostics.adapterName}` : ""}
+              {display.diagnostics.identitySource === "mirroredSourceUnknown" ? " · cele lustrzane: identyfikacja niejednoznaczna" : ""}
+            </span>}
           </li>)}</ul>}
         {snapshot.displayAudio.audio.length === 0
           ? <p>Brak danych o urządzeniach audio.</p>
@@ -124,7 +137,7 @@ export function SystemDiagnosticsPanel() {
             {endpoint.volumePercent !== null ? ` · ${endpoint.volumePercent}%` : ""}
             {endpoint.muted ? " · wyciszone" : ""}
           </li>)}</ul>}
-        <p className="cc-card-note">Ten widok nie zmienia rozdzielczości, HDR, głośności ani domyślnego urządzenia audio.</p>
+        <p className="cc-card-note">Położenie pulpitu jest podane w fizycznych pikselach. Ten widok nie zmienia rozdzielczości, DPI, HDR, głośności ani domyślnego urządzenia audio.</p>
       </details>
       {snapshot.session.recovery && <p role="note">
         Ostatnie odzyskanie: {snapshot.session.recovery.message}

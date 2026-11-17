@@ -11,3 +11,8 @@
 .tv-simulator-receipt { display: grid; grid-template-columns: minmax(130px, 1fr) 2fr; gap: 8px 20px; }
 .tv-simulator-receipt dd { margin: 0; overflow-wrap: anywhere; }
 .tv-simulator textarea { display: block; width: 100%; margin-top: 16px; color: #e8f3ff; background: #090f19; }
+.tv-simulator-sequences { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 20px 0; padding: 16px; border: 1px solid #53677e; border-radius: 10px; }
+.tv-simulator-sequences p, .tv-simulator-sequences ol { flex-basis: 100%; margin: 4px 0; }
+.tv-simulator-sequences ol { max-height: 200px; overflow: auto; padding-left: 28px; }
+.tv-simulator input[type="number"] { width: 130px; min-height: 44px; padding: 8px; color: #f7fbff; background: #26364b; border: 1px solid #7c8da1; border-radius: 8px; font: inherit; }
+.tv-simulator input:focus-visible { outline: 3px solid #9de4ff; outline-offset: 3px; }

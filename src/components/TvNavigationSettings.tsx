@@ -66,7 +66,8 @@ export function TvNavigationSettings({ revision }: { revision: string }) {
     <button type="button" disabled={busy} onClick={() => void read()}>Odśwież tryb nawigacji TV</button>
     <p>Skróty odtwarzania uzbrajaj na ekranie odtwarzacza. Square: odtwórz/pauza; działanie strony pozostaje niepotwierdzone, dopóki nie widać efektu. Gest Home działa niezależnie.</p>
     {status?.mediaControlsArmed && <p>Uzbrojona sesja: {status.mediaControlSession?.label ?? "wybrana wcześniej sesja"}. Zablokuj skróty przed wybraniem innej sesji.</p>}
-    <p>Automatyczny wybór korzysta ze zgodnego profilu usługi. Tryb przestrzenny wymaga dostępnych kontrolek Windows UI Automation; po błędzie wybierz jawnie klawiaturę lub wskaźnik.</p>
+    <p>Tryb automatyczny sprawdza kierunki przez Windows UI Automation. Jeśli strona nie udostępnia użytecznych kontrolek, router może przełączyć się na wskaźnik i zatrzymać bieżącą akcję. Sprawdź ekran, przesuń wskaźnik prawym analogiem i dopiero wtedy zatwierdź. Triangle zmienia tryb; klawiaturę możesz wybrać ręcznie. Home działa niezależnie.</p>
+    {status?.lastResult && <p role="status">Ostatni wynik nawigacji: {status.lastResult}</p>}
     {error && <p role="alert">{error}</p>}
   </section>;
 }

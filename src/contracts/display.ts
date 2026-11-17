@@ -23,6 +23,25 @@ export type DisplayInfo = {
   primary: boolean;
   hdr: boolean | null;
   hdrError: string | null;
+  diagnostics?: {
+    /** Physical desktop pixels; negative origins are valid. */
+    x: number;
+    y: number;
+    desktopWidth: number;
+    desktopHeight: number;
+    /** GetScaleFactorForMonitor resource bucket; not the exact effective window DPI. */
+    scalePercent: number | null;
+    /** Exact effective monitor DPI only after per-monitor process-awareness verification. */
+    effectiveDpiX: number | null;
+    effectiveDpiY: number | null;
+    dpiProvenance: "getDpiForMonitorPerMonitorProcess" | null;
+    refreshMillihz: number | null;
+    connectionType: string | null;
+    adapterName: string | null;
+    edidManufacturerId: number | null;
+    edidProductCodeId: number | null;
+    identitySource: "displayConfig" | "gdiFallback" | "mirroredSourceUnknown" | "";
+  };
 };
 
 export type AudioEndpointInfo = {
