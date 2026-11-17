@@ -127,6 +127,40 @@ export type TransitionRequest = {
   issuedAtMs?: number;
 };
 
+/**
+ * Opaque token identifying exactly one authoritative session state. Readiness
+ * bound to this token cannot be reused after a different session or revision
+ * becomes current (for example after a remount or a queued launch).
+ */
+export type SessionRevisionToken = string;
+
+export function sessionRevisionToken(snapshot: SessionSnapshot): SessionRevisionToken {
+  const launchId = snapshot.context?.launchId ?? "";
+  return `${snapshot.current}|${snapshot.revision}|${launchId}`;
+}
+
+/**
+ * Browser-preview transition with the same optimistic shape as the native
+ * machine: a repeated target keeps the revision, a real transition bumps it
+ * exactly once and refreshes any launch context with that new revision.
+ */
+export function applyBrowserTransition(
+  snapshot: SessionSnapshot,
+  request: TransitionRequest,
+): SessionSnapshot {
+  if (snapshot.current === request.target) return snapshot;
+  const revision = snapshot.revision + 1;
+  return {
+    ...snapshot,
+    previous: snapshot.current,
+    current: request.target,
+    revision,
+    transitionedAtMs: request.issuedAtMs ?? snapshot.transitionedAtMs + 1,
+    context: request.context ? { ...request.context, sessionRevision: revision } : null,
+    recovery: null,
+  };
+}
+
 const browserSession: SessionSnapshot = {
   current: "veloraHome",
   previous: null,
@@ -143,7 +177,7 @@ export async function getSessionState(): Promise<SessionSnapshot> {
 
 export async function requestSessionTransition(request: TransitionRequest): Promise<SessionSnapshot> {
   if (!isTauri()) {
-    return { ...browserSession, current: request.target };
+    return applyBrowserTransition(browserSession, request);
   }
   return invoke<SessionSnapshot>("request_session_transition", { request });
 }
