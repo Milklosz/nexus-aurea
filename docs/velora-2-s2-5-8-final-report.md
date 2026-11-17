@@ -38,6 +38,16 @@ Computer Use action was performed.
 and remote credential-process probes), not failures. Integration evidence is in the security review
 appendix and the progress checkpoint.
 
+### CI (GitHub Actions, PR #65)
+
+- `Windows / Playnite extension (net462)`: **PASS** (35 s).
+- `macos-latest / React, Tauri, Rust`: **PASS** (3 m 20 s) — includes `pnpm test`, soak,
+  provenance, `cargo test --lib`, `pnpm build`, `git diff --check`, macOS Tauri build.
+- `windows-latest / React, Tauri, Rust`: all test steps passed (including the new soak gate,
+  Rust unit tests, `pnpm build`, `git diff --check`, locked MSVC check). The NSIS installer and
+  provenance packaging steps were still running at report time; their result is not claimed here.
+- Local `cargo check --locked --target x86_64-pc-windows-msvc`: PASS (pre-existing warnings only).
+
 ## What remains unverified (NOT TESTED — no claim made)
 
 - **Automated test PASS** is established for logic, typed contracts, receipts, UI rendering and
