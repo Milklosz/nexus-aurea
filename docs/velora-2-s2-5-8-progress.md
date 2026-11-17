@@ -1,0 +1,65 @@
+# VELORA 2.0 — Operation Autonomous Evolution: progress checkpoint
+
+Live checkpoint for resuming this engineering session. Evidence labels: **AUTOMATED**, **SOURCE**, **HARDWARE (not tested)**, **BLOCKED**.
+
+## Baseline verification (Phase 0) — done
+
+| Item | Value | Evidence |
+|---|---|---|
+| Repository | `C:/Users/milos/velora-hy4` | `git rev-parse --show-toplevel` |
+| Branch | `feat/hy4-s2-5` | SOURCE |
+| HEAD | `7878b838226464fe31eccfe7066db4fe5775466c` | SOURCE |
+| Upstream | `origin/integration/velora-2-s2-3-s2-4` | SOURCE |
+| Working tree | clean at start | SOURCE |
+| Version | `0.12.0-rc.1` | `package.json` / `Cargo.toml` |
+| Node / pnpm(installed via npx) | v26.13.1 / 11.25.0 | tool probe |
+| Rust / cargo | 1.100.0 | tool probe |
+| GitHub auth | `Milklosz`, scopes repo/workflow | `gh auth status` |
+| PR #64 | OPEN, head `integration/velora-2-s2-3-s2-4`, base `codex/velora-grand-living-room-validation` | `gh pr view 64` |
+
+Frontend baseline: `npx pnpm@11.25.0 test` → **109 files / 980 tests PASS**.
+Rust baseline: `cargo test --lib` (src-tauri) → **450 passed / 0 failed / 3 ignored**.
+Dependencies installed with `npx pnpm@11.25.0 install --frozen-lockfile`.
+
+## Authorization boundary (unchanged)
+
+No merge to `main`; no merge/close of PR #62/#63/#64 unless explicitly re-authorized later in this program (the program text forbids it — treat as BLOCKED). No force-push. No installer execution, no Windows setting changes, no desktop focus/Computer Use, no hardware claims.
+
+## Worktree / branch plan
+
+| Branch | Worktree | Owner | Scope | Status |
+|---|---|---|---|---|
+| `feat/hy4-s2-5` | (main) | Lead | integration baseline + final integration | active |
+| `work/s2-5-a-typed-fallback` | `C:\Users\milos\velora-wt-s25a` | Agent A | S2.5-A typed diagnostics + S2.5-B fallback + pointer scaling | in progress |
+| `work/s2-5-c-home-continuity` | `C:\Users\milos\velora-wt-s25c` | Agent C | S2.5-C Home/session continuity | in progress |
+| `work/s2-5-d-geometry` | `C:\Users\milos\velora-wt-s25d` | Agent D | S2.5-D 4K geometry | in progress |
+| `work/s2-6-iphone-remote-3` | `C:\Users\milos\velora-wt-s26` | Agent E | S2.6 iPhone Remote 3.0 | in progress |
+
+Shared Cargo target dir `C:\Users\milos\velora-hy4\src-tauri\target` is used by all agents to avoid triple dependency compilation. Sprints S2.7 (Cinema) and S2.8 (Reliability/Release) are queued. Do not exceed ~4 concurrent heavy agents.
+
+## S2.5 — Controller Intelligence (in progress)
+
+Key insight from baseline audit: S2.4 already shipped sticky pointer fallback scaffolding and DisplayInfo DPI diagnostics. S2.5 hardens/typifies rather than re-implements.
+
+- S2.5-A: replace `error.contains(...)` string classification in `spatial_navigation.rs::failure_reason()` with typed `SpatialFailureKind`; thread through `tv_navigation.rs`, `streaming_control.rs`, TS contracts.
+- S2.5-B: fallback eligibility derived from typed kind (ownership/authorization/target failures never fall back); persistent user-visible mode feedback; never replay failed click; Remote excluded.
+- S2.5-C: session-revision-bound Home readiness; stale-input rejection across session/gate changes; repeated transition tests.
+- S2.5-D: deterministic display signature; owned-window geometry/DPI helpers with unknown-value handling; frontend divergence warnings; pointer scaling no longer hard-coded to 1920×1080.
+
+Acceptance evidence and exact test counts to be filled after agent integration. Physical pointer accuracy and Panasonic 4K behavior: **HARDWARE NOT TESTED**.
+
+## S2.6 — iPhone Remote 3.0 (in progress)
+
+QR bootstrap carries only a short-lived single-use code (no secrets); prefill with manual fallback; live countdown; signed verification reusing existing device HMAC (no new key distribution); Wi-Fi recovery with no command replay; SW cache bump to `command-9`; attempt limits (5) and device cap (8) preserved. Real-iPhone TLS trust: **HARDWARE NOT TESTED**.
+
+## S2.7 / S2.8 — queued
+
+S2.7: improve edge_cinema/launch_registry/window_broker transitions, focus restoration, crash handling; preserve five streaming profiles and the `edge_cinema` public API consumed by `streaming_control.rs`; no DRM bypass; no compatibility claims without real validation.
+
+S2.8: CI stability (`ci.yml`), deterministic build signature, provenance preview, diagnostics sanitization, startup/shutdown and long-running transition tests; engineering release candidate only — no install, no stable publish, no Windows config changes.
+
+## Resumption notes
+
+- After each agent commits: review its diff (`git show --stat <branch>`), run targeted tests, merge sequentially into `feat/hy4-s2-5`, then run the full matrix once per sprint (not per edit).
+- If a branch is incomplete, keep it as a Draft PR / local branch; do not force integration.
+- Update this file with exact commit SHAs, test counts and CI results after each milestone.

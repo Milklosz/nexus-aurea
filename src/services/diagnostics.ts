@@ -91,7 +91,69 @@ export type DiagnosticsExport = {
   reportJson: string;
 };
 
+/**
+ * Browser-only mirror of the native diagnostics sanitizer (defense in depth).
+ * The web preview never talks to the remote service, but free-form text can
+ * still be rendered in the System Intelligence panel. Bound and redact it so a
+ * caller cannot surface credentials, one-time pairing codes or local paths.
+ * Not a universal secret detector — the native report is the real boundary.
+ */
+const SENSITIVE_DIAGNOSTICS_MARKERS = [
+  "token=",
+  "secret=",
+  "password=",
+  "authorization",
+  "bearer ",
+  "https://",
+  "http://",
+  "pair=",
+  "pairing",
+  "bootstrap",
+  "otp=",
+  "pin=",
+  "qr=",
+  "qrcode",
+  "one-time code",
+  "kod jednorazowy",
+  "deviceid",
+  "device_id",
+  "hmac",
+  "signature",
+  "nonce",
+  "credential",
+  "private key",
+  "cert=",
+];
+
+export function sanitizeDiagnosticsText(input: string): string {
+  return input
+    .slice(0, 2048)
+    .split(/\r?\n/)
+    .slice(0, 4)
+    .map((line) => {
+      const lower = line.toLowerCase();
+      if (
+        /[\\/](users|home|appdata)[\\/]/i.test(line) ||
+        lower.includes("documents and settings")
+      ) {
+        return "<redacted-path>";
+      }
+      if (
+        SENSITIVE_DIAGNOSTICS_MARKERS.some((marker) => lower.includes(marker)) ||
+        /\b(?:\d{1,3}\.){3}\d{1,3}\b/.test(line) ||
+        /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i.test(line) ||
+        /\b(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\b/i.test(line)
+      ) {
+        return "<redacted-detail>";
+      }
+      return line.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 256);
+    })
+    .join(" ")
+    .slice(0, 1024);
+}
+
 export function previewDiagnosticsSnapshot(message: string): DiagnosticsSnapshot {
+  const safeMessage = sanitizeDiagnosticsText(message);
   return {
     generatedAtMs: Date.now(),
     build: {
@@ -165,12 +227,12 @@ export function previewDiagnosticsSnapshot(message: string): DiagnosticsSnapshot
         automaticModeChanges: false,
         notes: ["Diagnostyka wymaga natywnej aplikacji Windows."],
       },
-      limitations: [message],
+      limitations: [safeMessage],
       displaySignature: "",
       capturedAtMs: Date.now(),
     },
-    errors: [{ source: "diagnostics", message }],
-    limitations: [message],
+    errors: [{ source: "diagnostics", message: safeMessage }],
+    limitations: [safeMessage],
   };
 }
 
