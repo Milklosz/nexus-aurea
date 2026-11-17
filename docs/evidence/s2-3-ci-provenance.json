@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 2,
+  "app": {
+    "name": "VELORA",
+    "version": "0.11.0-rc.1"
+  },
+  "source": {
+    "sourceSha": "cc24affd970b3f4fb478f58f1dceb218708f7753",
+    "checkoutSha": "7cf56b3a54133c5795b414af8cb7d68660c73a98",
+    "branch": null,
+    "headBranch": "feature/velora-2-s2-3-native-tv-experience",
+    "ref": "refs/pull/62/merge",
+    "dirty": false,
+    "clean": true,
+    "event": "pull_request",
+    "pullRequest": {
+      "headSha": "cc24affd970b3f4fb478f58f1dceb218708f7753",
+      "baseSha": "a7c53b3034fe00b6fa0c76ff6d4fe5f332c0c5ea",
+      "syntheticMergeSha": "7cf56b3a54133c5795b414af8cb7d68660c73a98"
+    }
+  },
+  "build": {
+    "generatedAt": "2026-11-17T09:21:40.041Z",
+    "target": "x86_64-pc-windows-msvc",
+    "profile": "release",
+    "runnerOs": "Windows",
+    "runId": "44054094533",
+    "runAttempt": "1"
+  },
+  "tools": {
+    "node": "v22.23.4",
+    "pnpm": "11.25.0",
+    "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+    "cargo": "cargo 1.100.0 (3acc79c0c 2026-11-05)",
+    "tauriCli": "tauri-cli 2.12.4",
+    "msvc": "14.51.36231",
+    "windowsSdk": "10.0.26100.0"
+  },
+  "artifacts": {
+    "installer": {
+      "name": "VELORA_0.11.0-rc.1_x64-setup.exe",
+      "sizeBytes": 4584876,
+      "sha256": "27f138faaa3ba2d9b155c6d0a3941a41f8979617a97d7db7c28578636ea60012"
+    },
+    "builtExe": {
+      "name": "nexus-aurea.exe",
+      "sizeBytes": 17533952,
+      "sha256": "eceada81c9ec4159ca192593b0f4ad1d6962332d4c1a76c52edc346aa22c54a9"
+    },
+    "packagedExe": {
+      "name": "nexus-aurea.exe",
+      "sizeBytes": 17533952,
+      "sha256": "61d9cdb280e3070cd4296b51c4f8c8ce1594d8785963f33c95dd80cbd32ff1cc"
+    },
+    "payloadRelation": {
+      "policy": "tauri-cli-2.12.4-nsis-unsigned",
+      "transformation": "__TAURI_BUNDLE_TYPE_VAR_UNK->__TAURI_BUNDLE_TYPE_VAR_NSS",
+      "markerOffset": 13922824
+    }
+  }
+}

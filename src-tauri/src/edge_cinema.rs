@@ -189,6 +189,7 @@ fn streaming_identity_matches(
     identities: &[crate::process_table::ProcessIdentity],
 ) -> bool {
     launch.phase.is_active()
+        && !launch.pid_reuse_detected
         && launch.kind == LaunchKind::Cinema
         && service_for_launch(launch).is_some()
         && launch.window_id == Some(window)
@@ -199,6 +200,35 @@ fn streaming_identity_matches(
         && identities.iter().any(|identity| {
             identity.process_id == process_id && identity.created_at_100ns == created_at
         })
+}
+
+/// Resolve only a registry-owned service launch. This does not activate a
+/// window or authorize dispatch; the caller must revalidate foreground after
+/// an explicit owned-window recovery. IPC never supplies HWNDs or process IDs.
+pub(crate) fn streaming_target_for_session(
+    app: &AppHandle,
+    session_id: &str,
+) -> Option<StreamingWindowTarget> {
+    let launch = launch_registry::launch_by_id(app, session_id)?;
+    let service = service_for_launch(&launch)?;
+    let hwnd = launch.window_id?;
+    let process_id = crate::window_broker::window_process_id(hwnd)?;
+    let identity = crate::process_table::identity(process_id)?;
+    let owners = launch_registry::owned_process_identities_for_launch(app, &launch.id);
+    streaming_identity_matches(
+        &launch,
+        hwnd,
+        process_id,
+        identity.created_at_100ns,
+        &owners,
+    )
+    .then_some(StreamingWindowTarget {
+        service_id: service.id,
+        launch_id: launch.id,
+        hwnd,
+        process_id,
+        process_created_at_100ns: identity.created_at_100ns,
+    })
 }
 
 /// No title matching, generic browser adoption, or process enumeration: only
@@ -1281,6 +1311,11 @@ mod tests {
         assert!(!super::streaming_identity_matches(
             &session, 70, 43, 999, &owners
         ));
+        session.pid_reuse_detected = true;
+        assert!(!super::streaming_identity_matches(
+            &session, 70, 42, 999, &owners
+        ));
+        session.pid_reuse_detected = false;
         session.phase = LaunchPhase::Ended;
         assert!(!super::streaming_identity_matches(
             &session, 70, 42, 999, &owners

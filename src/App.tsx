@@ -655,8 +655,8 @@ export default function App() {
         void windowMode(event.key === "Escape" ? false : undefined)
           .catch(() => showToast("Nie udało się zmienić trybu okna. Uruchom z --windowed."));
       }
-      if (event.key === "F2") showMenu();
-      if (event.key === "F3") openControlCenterAt();
+      if (event.key === "F2") { event.preventDefault(); showMenu(); }
+      if (event.key === "F3") { event.preventDefault(); openControlCenterAt(); }
     };
     const restore = () => {
       // Window focus returns while an overlay may be open; the dock must not take the highlight under it.
