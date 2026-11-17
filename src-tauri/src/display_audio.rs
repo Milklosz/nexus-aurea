@@ -8,6 +8,10 @@ pub(crate) const AUDIO_CHANGED_EVENT: &str = "velora-audio-changed";
 
 const MAX_DISPLAYS: usize = 16;
 
+/// Provenance reported only after per-monitor process-awareness verification.
+/// An unconfirmed value is never presented as a fact, and 96 is not a fallback.
+pub(crate) const DPI_PROVENANCE_PER_MONITOR: &str = "getDpiForMonitorPerMonitorProcess";
+
 /// Geometry uses physical desktop pixels, including negative monitor origins.
 /// Scale is observational and never used to rescale UIA's physical rectangles.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,14 +171,122 @@ fn display_state() -> (Vec<DisplayInfo>, Option<String>, String) {
     }
 }
 
+/// Append an optional numeric field with an unambiguous "unknown" marker.
+fn write_optional_u32(out: &mut String, value: Option<u32>) {
+    use std::fmt::Write as _;
+    match value {
+        Some(value) => {
+            let _ = write!(out, "{value}");
+        }
+        None => out.push('-'),
+    }
+}
+
+/// Convert a physical-pixel RECT to a logical size using an *explicitly
+/// confirmed* effective DPI. Returns `None` when provenance is not confirmed
+/// rather than assuming 96 and silently misreporting geometry.
+/// Pure and hardware-free so owned-window consumers can reuse and test it.
+#[allow(dead_code)]
+pub(crate) fn physical_rect_to_logical_size(
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+    effective_dpi_x: Option<u32>,
+    effective_dpi_y: Option<u32>,
+    dpi_provenance: Option<&str>,
+) -> Option<(f64, f64)> {
+    if dpi_provenance != Some(DPI_PROVENANCE_PER_MONITOR) {
+        return None;
+    }
+    let (Some(dpi_x), Some(dpi_y)) = (effective_dpi_x, effective_dpi_y) else {
+        return None;
+    };
+    if dpi_x == 0 || dpi_y == 0 {
+        return None;
+    }
+    let width_px = i64::from(right) - i64::from(left);
+    let height_px = i64::from(bottom) - i64::from(top);
+    if width_px <= 0 || height_px <= 0 {
+        return None;
+    }
+    Some((
+        width_px as f64 * 96.0 / f64::from(dpi_x),
+        height_px as f64 * 96.0 / f64::from(dpi_y),
+    ))
+}
+
+/// True when any monitor origin is negative (desktop extended left and/or up).
+#[allow(dead_code)]
+pub(crate) fn has_negative_origin(points: &[(i32, i32)]) -> bool {
+    points.iter().any(|&(x, y)| x < 0 || y < 0)
+}
+
+/// Axis-aligned union of monitor physical rects, used to keep owned windows
+/// inside the virtual desktop even when its origin is negative.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct VirtualDesktop {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+#[allow(dead_code)]
+impl VirtualDesktop {
+    /// Build the virtual desktop from `(x, y, width, height)` monitor rects.
+    /// Returns `None` when no monitor has a usable size.
+    pub(crate) fn from_monitors(monitors: &[(i32, i32, u32, u32)]) -> Option<Self> {
+        let mut usable = monitors
+            .iter()
+            .filter(|(_, _, width, height)| *width > 0 && *height > 0);
+        let &(x, y, width, height) = usable.next()?;
+        let mut bounds = Self {
+            left: x,
+            top: y,
+            right: x.saturating_add(width as i32),
+            bottom: y.saturating_add(height as i32),
+        };
+        for &(x, y, width, height) in usable {
+            bounds.left = bounds.left.min(x);
+            bounds.top = bounds.top.min(y);
+            bounds.right = bounds.right.max(x.saturating_add(width as i32));
+            bounds.bottom = bounds.bottom.max(y.saturating_add(height as i32));
+        }
+        Some(bounds)
+    }
+
+    /// Clamp a point into the virtual desktop (bounds are inclusive).
+    pub(crate) fn clamp_point(&self, x: i32, y: i32) -> (i32, i32) {
+        (
+            x.clamp(self.left, self.right),
+            y.clamp(self.top, self.bottom),
+        )
+    }
+
+    /// Shift a physical point into zero-based virtual desktop coordinates.
+    pub(crate) fn normalize_point(&self, x: i32, y: i32) -> (i64, i64) {
+        (
+            i64::from(x) - i64::from(self.left),
+            i64::from(y) - i64::from(self.top),
+        )
+    }
+}
+
+/// Deterministic, ordered serialization of only the fields geometry consumers
+/// actually recover. Observational labels (adapter name, connection type, EDID
+/// ids, identity source, HDR explanations) must not spuriously invalidate a
+/// cached window layout, so they are intentionally excluded.
 pub(crate) fn display_signature(displays: &[DisplayInfo]) -> String {
     let mut ordered: Vec<&DisplayInfo> = displays.iter().collect();
     ordered.sort_by(|left, right| left.id.cmp(&right.id));
     ordered.truncate(MAX_DISPLAYS);
 
-    let mut normalized = String::with_capacity(ordered.len() * 48);
+    let mut normalized = String::with_capacity(ordered.len() * 96);
     for display in ordered {
         use std::fmt::Write as _;
+        let diagnostics = &display.diagnostics;
         let hdr = match display.hdr {
             Some(true) => "1",
             Some(false) => "0",
@@ -182,17 +294,30 @@ pub(crate) fn display_signature(displays: &[DisplayInfo]) -> String {
         };
         let _ = write!(
             &mut normalized,
-            "{}:{}x{}@{}/{}/{};",
+            "{}|{}x{}|{}|{}|{}|{}|{}|{}|",
             display.id,
             display.width,
             display.height,
             display.refresh_hz,
             display.bits_per_pixel,
-            if display.primary { "1" } else { "0" }
+            if display.primary { "1" } else { "0" },
+            hdr,
+            diagnostics.x,
+            diagnostics.y,
         );
-        let _ = write!(&mut normalized, "{hdr};");
-        // A scaling or topology change also invalidates geometry consumers.
-        let _ = write!(&mut normalized, "{:?};", display.diagnostics);
+        write_optional_u32(&mut normalized, diagnostics.refresh_millihz);
+        normalized.push('|');
+        write_optional_u32(&mut normalized, diagnostics.effective_dpi_x);
+        normalized.push('|');
+        write_optional_u32(&mut normalized, diagnostics.effective_dpi_y);
+        normalized.push('|');
+        let _ = write!(
+            &mut normalized,
+            "{}|",
+            diagnostics.dpi_provenance.as_deref().unwrap_or("-")
+        );
+        write_optional_u32(&mut normalized, diagnostics.scale_percent);
+        normalized.push('|');
     }
     short_hash(&normalized)
 }
@@ -803,7 +928,7 @@ mod windows_native {
                     effective_dpi_y: monitor.effective_dpi_y,
                     dpi_provenance: monitor
                         .effective_dpi_x
-                        .map(|_| "getDpiForMonitorPerMonitorProcess".into()),
+                        .map(|_| super::DPI_PROVENANCE_PER_MONITOR.into()),
                     refresh_millihz: entry.and_then(|item| item.refresh_millihz),
                     connection_type: entry
                         .and_then(|item| item.connection_type)
@@ -1504,6 +1629,168 @@ mod tests {
         let mut scaled = original;
         scaled.diagnostics.scale_percent = Some(150);
         assert_ne!(signature, display_signature(&[scaled]));
+    }
+
+    #[test]
+    fn signature_ignores_observational_labels_but_tracks_geometry_and_dpi() {
+        let mut base = display("tv", 3840, 2160, 60, false);
+        base.diagnostics = DisplayDiagnostics {
+            x: -3840,
+            y: 0,
+            desktop_width: 3840,
+            desktop_height: 2160,
+            scale_percent: Some(140),
+            effective_dpi_x: Some(144),
+            effective_dpi_y: Some(144),
+            dpi_provenance: Some(DPI_PROVENANCE_PER_MONITOR.into()),
+            refresh_millihz: Some(59_940),
+            connection_type: Some("HDMI".into()),
+            adapter_name: Some("NVIDIA GeForce RTX 3070".into()),
+            edid_manufacturer_id: Some(0x1234),
+            edid_product_code_id: Some(0x5678),
+            identity_source: "displayConfig".into(),
+        };
+        let signature = display_signature(&[base.clone()]);
+
+        // Labels only: no geometry consumer can recover these, so no invalidation.
+        let mut relabeled = base.clone();
+        relabeled.diagnostics.adapter_name = Some("Intel(R) UHD Graphics".into());
+        relabeled.diagnostics.connection_type = Some("DisplayPort".into());
+        relabeled.diagnostics.edid_manufacturer_id = Some(0xabcd);
+        relabeled.diagnostics.edid_product_code_id = Some(0xef01);
+        relabeled.diagnostics.identity_source = "gdiFallback".into();
+        relabeled.hdr_error = Some("Windows nie udostępnił informacji o HDR.".into());
+        assert_eq!(signature, display_signature(&[relabeled]));
+
+        // Position, effective DPI and fractional refresh do require recovery.
+        let mut moved = base.clone();
+        moved.diagnostics.x = -7680;
+        assert_ne!(signature, display_signature(&[moved]));
+
+        let mut dpi_changed = base.clone();
+        dpi_changed.diagnostics.effective_dpi_x = Some(192);
+        assert_ne!(signature, display_signature(&[dpi_changed]));
+
+        let mut refresh_changed = base;
+        refresh_changed.diagnostics.refresh_millihz = Some(60_000);
+        assert_ne!(signature, display_signature(&[refresh_changed]));
+    }
+
+    #[test]
+    fn physical_rect_uses_only_confirmed_effective_dpi() {
+        // Known real measurement: API bucket 140% but effective DPI 144 (150%).
+        assert_eq!(
+            physical_rect_to_logical_size(
+                -3840,
+                0,
+                0,
+                2160,
+                Some(144),
+                Some(144),
+                Some(DPI_PROVENANCE_PER_MONITOR),
+            ),
+            Some((2560.0, 1440.0))
+        );
+
+        // An unconfirmed 96 must stay unknown; never presented as a fact.
+        assert_eq!(
+            physical_rect_to_logical_size(0, 0, 1920, 1080, Some(96), Some(96), None),
+            None
+        );
+        assert_eq!(
+            physical_rect_to_logical_size(0, 0, 1920, 1080, Some(144), Some(144), Some("other")),
+            None
+        );
+        assert_eq!(
+            physical_rect_to_logical_size(
+                0,
+                0,
+                1920,
+                1080,
+                None,
+                Some(144),
+                Some(DPI_PROVENANCE_PER_MONITOR),
+            ),
+            None
+        );
+        assert_eq!(
+            physical_rect_to_logical_size(
+                0,
+                0,
+                1920,
+                1080,
+                Some(0),
+                Some(144),
+                Some(DPI_PROVENANCE_PER_MONITOR),
+            ),
+            None
+        );
+        assert_eq!(
+            physical_rect_to_logical_size(
+                10,
+                10,
+                0,
+                0,
+                Some(144),
+                Some(144),
+                Some(DPI_PROVENANCE_PER_MONITOR),
+            ),
+            None
+        );
+
+        for (dpi, expected_width) in [
+            (96, 1920.0),
+            (120, 1536.0),
+            (144, 1280.0),
+            (192, 960.0),
+            (240, 768.0),
+        ] {
+            assert_eq!(
+                physical_rect_to_logical_size(
+                    0,
+                    0,
+                    1920,
+                    1080,
+                    Some(dpi),
+                    Some(dpi),
+                    Some(DPI_PROVENANCE_PER_MONITOR),
+                ),
+                Some((expected_width, 1080.0 * 96.0 / f64::from(dpi)))
+            );
+        }
+    }
+
+    #[test]
+    fn virtual_desktop_handles_negative_origins_and_clamps_points() {
+        assert!(!has_negative_origin(&[]));
+        assert!(!has_negative_origin(&[(0, 0), (1920, 0)]));
+        assert!(has_negative_origin(&[(-3840, 0), (0, 0)]));
+        assert!(has_negative_origin(&[(0, -1080)]));
+
+        let monitors: [(i32, i32, u32, u32); 2] = [(-3840, 0, 3840, 2160), (0, 0, 1920, 1080)];
+        let desktop = VirtualDesktop::from_monitors(&monitors).expect("granice pulpitu");
+        assert_eq!(
+            desktop,
+            VirtualDesktop {
+                left: -3840,
+                top: 0,
+                right: 1920,
+                bottom: 2160,
+            }
+        );
+        assert_eq!(desktop.clamp_point(-9999, 5000), (-3840, 2160));
+        assert_eq!(desktop.clamp_point(100, 100), (100, 100));
+        assert_eq!(desktop.normalize_point(-3840, 0), (0, 0));
+        assert_eq!(desktop.normalize_point(0, 1080), (3840, 1080));
+
+        let upper_left =
+            VirtualDesktop::from_monitors(&[(-1920, -1080, 1920, 1080)]).expect("granice pulpitu");
+        let clamped = upper_left.clamp_point(-4000, -4000);
+        assert_eq!(clamped, (-1920, -1080));
+        assert_eq!(upper_left.normalize_point(clamped.0, clamped.1), (0, 0));
+
+        assert_eq!(VirtualDesktop::from_monitors(&[]), None);
+        assert_eq!(VirtualDesktop::from_monitors(&[(0, 0, 0, 1080)]), None);
     }
 
     #[test]

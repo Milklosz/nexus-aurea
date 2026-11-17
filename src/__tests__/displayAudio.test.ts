@@ -1,11 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  CONFIRMED_DPI_PROVENANCE,
   DISPLAY_CHANGED_EVENT,
   disabledDisplayAudioStatus,
+  displayGeometryFlags,
+  effectiveScalePercent,
   getDisplayAudioStatus,
+  hasNegativeOrigin,
   listenForDisplayChange,
+  scaleDivergencePoints,
   type DisplayAudioSnapshot,
   type DisplayChangedEvent,
+  type DisplayInfo,
 } from "../services/displayAudio";
 
 const mocks = vi.hoisted(() => ({
@@ -126,5 +132,84 @@ describe("Display and audio native bridge", () => {
     expect(disabledDisplayAudioStatus.policy.automaticModeChanges).toBe(false);
     expect(disabledDisplayAudioStatus.policy.notes.length).toBeGreaterThan(0);
     expect(disabledDisplayAudioStatus.limitations.length).toBeGreaterThan(0);
+  });
+});
+
+describe("Display geometry helpers (physical pixels, DPI honesty)", () => {
+  type Diagnostics = DisplayInfo["diagnostics"];
+  const diagnostics = (overrides: Partial<NonNullable<Diagnostics>> = {}): Diagnostics => ({
+    x: 0,
+    y: 0,
+    desktopWidth: 3840,
+    desktopHeight: 2160,
+    scalePercent: 140,
+    effectiveDpiX: 144,
+    effectiveDpiY: 144,
+    dpiProvenance: CONFIRMED_DPI_PROVENANCE,
+    refreshMillihz: 59_940,
+    connectionType: null,
+    adapterName: null,
+    edidManufacturerId: null,
+    edidProductCodeId: null,
+    identitySource: "displayConfig",
+    ...overrides,
+  });
+
+  it("derives the effective scale only from confirmed DPI", () => {
+    // Known real measurement: API bucket 140% but effective DPI 144 (150%).
+    expect(effectiveScalePercent(diagnostics())).toBe(150);
+    expect(effectiveScalePercent(diagnostics({ effectiveDpiX: 192 }))).toBe(200);
+    expect(effectiveScalePercent(diagnostics({ effectiveDpiX: 134 }))).toBe(140);
+    // An unverified 96 is never reported as the effective scale.
+    expect(effectiveScalePercent(diagnostics({
+      effectiveDpiX: 96, effectiveDpiY: 96, dpiProvenance: null,
+    }))).toBeNull();
+    expect(effectiveScalePercent(diagnostics({
+      effectiveDpiX: 144, dpiProvenance: "other" as NonNullable<Diagnostics>["dpiProvenance"],
+    }))).toBeNull();
+    expect(effectiveScalePercent(diagnostics({ effectiveDpiX: null }))).toBeNull();
+    expect(effectiveScalePercent(diagnostics({ effectiveDpiX: 0 }))).toBeNull();
+    expect(effectiveScalePercent(undefined)).toBeNull();
+  });
+
+  it("measures scale divergence only when both scales are knowable", () => {
+    expect(scaleDivergencePoints(diagnostics())).toBe(10);
+    expect(scaleDivergencePoints(diagnostics({ scalePercent: 150 }))).toBe(0);
+    expect(scaleDivergencePoints(diagnostics({ scalePercent: 134, effectiveDpiX: 134 }))).toBe(6);
+    expect(scaleDivergencePoints(diagnostics({ scalePercent: null }))).toBeNull();
+    expect(scaleDivergencePoints(diagnostics({
+      effectiveDpiX: 96, dpiProvenance: null,
+    }))).toBeNull();
+  });
+
+  it("detects negative origins from either axis", () => {
+    expect(hasNegativeOrigin(undefined)).toBe(false);
+    expect(hasNegativeOrigin(diagnostics())).toBe(false);
+    expect(hasNegativeOrigin(diagnostics({ x: -3840 }))).toBe(true);
+    expect(hasNegativeOrigin(diagnostics({ y: -1080 }))).toBe(true);
+    expect(hasNegativeOrigin(diagnostics({ x: -3840, y: -1080 }))).toBe(true);
+  });
+
+  it("gates both warnings on confirmed provenance", () => {
+    const divergent = displayGeometryFlags(diagnostics({ x: -3840, y: 1080 }));
+    expect(divergent).toEqual({
+      effectiveScalePercent: 150,
+      scaleDivergencePoints: 10,
+      scaleDiverges: true,
+      negativeOrigin: true,
+    });
+
+    const unconfirmed = displayGeometryFlags(diagnostics({
+      x: 0, y: 0, effectiveDpiX: 96, effectiveDpiY: 96, dpiProvenance: null,
+    }));
+    expect(unconfirmed.effectiveScalePercent).toBeNull();
+    expect(unconfirmed.scaleDivergencePoints).toBeNull();
+    expect(unconfirmed.scaleDiverges).toBe(false);
+    expect(unconfirmed.negativeOrigin).toBe(false);
+
+    const aligned = displayGeometryFlags(diagnostics({
+      effectiveDpiX: 134, scalePercent: 140,
+    }));
+    expect(aligned.scaleDiverges).toBe(false);
   });
 });
