@@ -51,8 +51,21 @@ Engineering candidate `0.12.0-rc.1`. Evidence labels: **AUTOMATED**, **SOURCE**,
 **UNVERIFIED:** live UIA provider behavior, real pointer motion, 4K accuracy and physical DS4.
 
 ## S2.6 — iPhone Remote 3.0
+- Short-lived QR-assisted pairing from Control Center: the QR carries only the HTTPS origin, a
+  one-time 6-digit code and a client-side expiry hint in the URL **fragment** — no token,
+  certificate or persistent secret. The native monotonic TTL remains authoritative.
+- PWA reads the fragment, prefills the code, clears the hash and keeps manual 6-digit entry fully
+  functional. One-time-code notes and a live 1-second countdown with interval cleanup were added.
+- Signed paired-state verification reuses the existing paired device's HMAC key: authenticated
+  `POST /api/hello` under the Host/Origin and body-limit middleware, with a bounded hello rate
+  limit and a fresh nonce/epoch acknowledgement. No new key distribution or certificate change.
+- Wi-Fi recovery re-verifies status before presenting a trusted state, fails closed on 401 and
+  never replays a queued command. Service-worker cache bumped to `command-9` with update tests.
+- All attempt limits (5), device cap (8), HMAC, monotonic sequence, revoke individual/all and TLS
+  requirements are preserved; `/api/status` remains anonymous booleans/counts only.
 
-Status: in progress on `work/s2-6-iphone-remote-3`; changelog to be appended after integration.
+**UNVERIFIED:** real iPhone camera QR scanning, iOS trust-profile/TLS acceptance, Safari HTTPS
+round trip of the signed hello, real Wi-Fi interruptions. No compatibility or trust claim.
 
 ## S2.7 — Cinema & Streaming Experience
 - Deterministic, index-derived soak tests (64 iterations each) for repeated

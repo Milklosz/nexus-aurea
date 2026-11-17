@@ -124,5 +124,27 @@ separate, unmet gates and are explicitly **not** claimed: real iPhone LAN/TLS tr
 foreground/UIPI behavior, physical DualShock 4 operation, Panasonic 4K pointer accuracy, DRM and
 streaming-service compatibility, installer upgrade/rollback execution.
 
-_Integration evidence (commit SHAs, test counts, CI results) is appended in the final engineering
-report and the progress checkpoint; it is intentionally not pre-filled here._
+## 7. Integration evidence appendix (final candidate)
+
+All five workstreams were integrated sequentially into `feat/hy4-s2-5` and reviewed with a final
+diff/secret scan. Evidence labels: **AUTOMATED** / **SOURCE**.
+
+| Check | Result |
+|---|---|
+| `pnpm test` (full Vitest suite) | **110 files / 1031 tests PASS** (baseline 109/980) |
+| `pnpm test:soak` (3000-transition deterministic soak) | **3 PASS** |
+| `pnpm build` (`tsc -b` + `vite build`) | PASS |
+| `pnpm test:provenance` | PASS (0 failures) |
+| `pnpm test:claude-usage` | PASS (0 failures) |
+| `cargo test --lib` (final candidate) | **481 passed / 0 failed / 3 ignored** (baseline 450) |
+| `git diff --check 7878b83..HEAD` | exit 0 |
+| Secret-pattern scan of the full diff | no credential/token/private-key patterns found |
+
+Sprint commits: S2.5-A/B `88ef04a`, S2.5-C `f6307b7`, S2.5-D `3dd1238`, S2.6 `4542d94`,
+S2.7 `22e0b3c`; S2.8 reliability `1ff333b`, `95b7251`. Integration merges: `06daedb`, `12495fd`,
+`494ce9f`, `3260dc6`, `b56b0ea`. Draft PR **#65** tracks the integrated candidate.
+
+**Final determination:** SOURCE REVIEW PASS for this engineering candidate. Controller and
+session ownership protections, remote pairing protections and diagnostics boundaries were
+reviewed and automated-tested. The hardware/TLS/DRM gates in section 6 and in
+`velora-2-s2-5-8-hardware-gates.md` remain unmet and are explicitly not claimed.
