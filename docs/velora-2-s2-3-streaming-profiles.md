@@ -27,3 +27,7 @@ Official references examined during S2.3:
 The [YouTube supported-device guidance](https://support.google.com/youtube/answer/7582560) distinguishes computer viewing from TV devices. It does not establish `youtube.com/tv` as a supported native-TV interface on this Windows candidate. VELORA retains desktop YouTube without user-agent spoofing, browser modification or undocumented endpoint assumptions. The similarly named paid YouTube TV product is not a substitute for YouTube's television interface.
 
 Authentication uses the service's ordinary existing browser session. No private account contents or credentials are collected. No profile changes DRM or protected playback behavior. Physical DS4 compatibility remains unverified until the MSI/laptop acceptance test.
+
+## Observed candidate environment
+
+Clean debug source cc24aff on Windows 10.0.26200.0, Edge 157.0.4341.60, 1920×1080, 2026-11-17: all five public landing pages opened. Netflix, Disney+, Max and Prime protected catalogs were unavailable without authentication; Max also exposed a browser-profile modal, whose settings were not changed. YouTube preroll fullscreen and pause/resume were observed through simulator commands; public search/title setup used normal CUA. UIA directional navigation failed safely on YouTube. The matrix records each action separately; there is no five-service verified profile flag. The static registry's empty tested-environment list does not fabricate these runtime observations into broad compatibility metadata.
