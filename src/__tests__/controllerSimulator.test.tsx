@@ -261,6 +261,50 @@ describe("Controller Simulator", () => {
     expect(screen.getByText(/niepotwierdzone — odśwież status/)).toBeTruthy();
     expect((screen.getByRole("combobox", { name: "Sesja docelowa" }) as HTMLSelectElement).value).toBe("");
   });
+  it.each([
+    { outcome: "accepted", accepted: true },
+    { outcome: "rejected", accepted: false },
+  ])("reconciles a late $outcome Home reply when diagnostics reopen before dispatch returns", async ({ accepted }) => {
+    const beforeHome = render(<ControllerSimulator />); await flush(); await selectTarget();
+    const steps = [{ action: "home", delayMs: 100 }, { action: "right", delayMs: 100, serviceId: "youtube" }];
+    fireEvent.change(screen.getByRole("textbox", { name: "Import sekwencji JSON" }), { target: { value: JSON.stringify({ schemaVersion: 1, steps }) } });
+    fireEvent.click(screen.getByRole("button", { name: "Wczytaj sekwencję do przeglądu" }));
+    let finishHome = () => {};
+    mocks.simulate.mockImplementationOnce(input => new Promise((resolve, reject) => {
+      finishHome = () => {
+        if (accepted) resolve({ accepted: true, effect: "commandAccepted", sequence: input.sequence, generation: 4,
+          mode: "keyboard", activeStrategy: "keyboard", targetSession: input.targetSession, lastResult: null });
+        else reject(new Error("Native Home dispatch rejected"));
+      };
+    }));
+    fireEvent.click(screen.getByRole("button", { name: "Odtwórz nagranie" }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    expect(mocks.simulate).toHaveBeenCalledTimes(1);
+    beforeHome.unmount();
+
+    render(<ControllerSimulator />); await flush();
+    const resume = screen.getByRole("button", { name: "Wznów pozostałe kroki po Home" }) as HTMLButtonElement;
+    expect(resume.disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Home · VELORA" }) as HTMLButtonElement).disabled).toBe(true);
+    mocks.status = { ...mocks.status, simulatorHomeReady: false, lastSimulatorSequence: 1, generation: 4 };
+    await act(async () => { finishHome(); });
+    expect(mocks.simulate).toHaveBeenCalledTimes(1);
+    expect(mocks.cancel).not.toHaveBeenCalled();
+    expect((screen.getByRole("button", { name: "Home · VELORA" }) as HTMLButtonElement).disabled).toBe(false);
+    if (!accepted) {
+      expect(screen.queryByRole("button", { name: "Wznów pozostałe kroki po Home" })).toBeNull();
+      return;
+    }
+    expect(screen.getByText(/Przyjęcie Home: potwierdzone/)).toBeTruthy();
+    expect(resume.disabled).toBe(true);
+    mocks.status = { ...mocks.status, simulatorHomeReady: true };
+    fireEvent.click(screen.getByRole("button", { name: "Odśwież sesje symulatora" })); await flush();
+    expect(screen.getByText("potwierdzone przez status natywny")).toBeTruthy();
+    expect(resume.disabled).toBe(false);
+    fireEvent.click(resume);
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    expect(mocks.simulate).toHaveBeenLastCalledWith(expect.objectContaining({ action: "right", sequence: 2, generation: 4 }));
+  });
 });
 
 it("offers direct session and mode buttons without a native select popup", async () => {

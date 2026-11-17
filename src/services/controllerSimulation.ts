@@ -93,6 +93,7 @@ interface SimulationMemory {
   homeBoundary: SimulationHomeBoundary | null;
 }
 let simulationMemory: SimulationMemory = { recorded: [], receipts: [], homeBoundary: null };
+const homeBoundaryListeners = new Set<() => void>();
 const portableSteps = (steps: readonly SimulationStep[]) => steps.length ? parseSimulationSequence(simulationSequenceJson(steps)) : [];
 
 /** Bounded, sanitized process memory only. No runner, timer, session ID or persistent storage. */
@@ -119,8 +120,22 @@ export function rememberControllerSimulationReceipts(receipts: readonly TvNaviga
     spatialDiagnostics: value.spatialDiagnostics as TvNavigationReceipt["spatialDiagnostics"],
   }));
 }
-export function rememberControllerSimulationHomeBoundary(boundary: SimulationHomeBoundary | null): void {
-  simulationMemory.homeBoundary = boundary ? { accepted: boundary.accepted, remaining: portableSteps(boundary.remaining.slice(0, MAX_SIMULATION_STEPS)) } : null;
+export function rememberControllerSimulationHomeBoundary(boundary: SimulationHomeBoundary | null): SimulationHomeBoundary | null {
+  const next = boundary ? { accepted: boundary.accepted, remaining: portableSteps(boundary.remaining.slice(0, MAX_SIMULATION_STEPS)) } : null;
+  simulationMemory.homeBoundary = next;
+  for (const listener of homeBoundaryListeners) listener();
+  return next;
+}
+
+export function settleControllerSimulationHomeBoundary(pending: SimulationHomeBoundary, accepted: boolean): void {
+  if (simulationMemory.homeBoundary === pending) {
+    rememberControllerSimulationHomeBoundary(accepted ? { ...pending, accepted: true } : null);
+  }
+}
+
+export function subscribeControllerSimulationHomeBoundary(listener: () => void): () => void {
+  homeBoundaryListeners.add(listener);
+  return () => { homeBoundaryListeners.delete(listener); };
 }
 export function clearControllerSimulationMemory(): void {
   simulationMemory = { recorded: [], receipts: [], homeBoundary: null };

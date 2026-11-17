@@ -8,7 +8,12 @@ import {
   type TvNavigationAction, type TvNavigationMode, type TvNavigationReceipt, type TvNavigationStatus,
 } from "../services/tvNavigation";
 import "./ControllerSimulator.css";
-import { MAX_SIMULATION_STEPS, needsSimulationReview, parseSimulationSequence, readControllerSimulationMemory, rememberControllerSimulationHomeBoundary, rememberControllerSimulationReceipts, rememberControllerSimulationRecording, simulationAnalog, simulationHold, simulationSequenceJson, simulationService, type SimulationHomeBoundary, type SimulationStep } from "../services/controllerSimulation";
+import {
+  MAX_SIMULATION_STEPS, needsSimulationReview, parseSimulationSequence, readControllerSimulationMemory,
+  rememberControllerSimulationHomeBoundary, rememberControllerSimulationReceipts, rememberControllerSimulationRecording,
+  settleControllerSimulationHomeBoundary, simulationAnalog, simulationHold, simulationSequenceJson, simulationService,
+  subscribeControllerSimulationHomeBoundary, type SimulationHomeBoundary, type SimulationStep,
+} from "../services/controllerSimulation";
 
 const services = streamingServices.filter((service): service is WebStreamingService => service.kind === "web");
 const controls: Array<{ label: string; action: TvNavigationAction; deltaX?: number; deltaY?: number }> = [
@@ -45,7 +50,7 @@ export function ControllerSimulator() {
   const [targetSession, setTargetSession] = useState("");
   const [serviceId, setServiceId] = useState("youtube");
   const [mode, setMode] = useState<TvNavigationMode>("automatic");
-  const [busy, setBusy] = useState(false);
+  const [operationBusy, setBusy] = useState(false);
   const [running, setRunning] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -54,6 +59,7 @@ export function ControllerSimulator() {
   const [recording, setRecording] = useState(false);
   const [recorded, setRecorded] = useState<SimulationStep[]>(() => readControllerSimulationMemory().recorded);
   const [homeBoundary, setHomeBoundary] = useState<SimulationHomeBoundary | null>(() => readControllerSimulationMemory().homeBoundary);
+  const busy = operationBusy || homeBoundary?.accepted === null;
   const [sequenceReport, setSequenceReport] = useState("");
   const [sequenceImport, setSequenceImport] = useState("");
   const [checkpoint, setCheckpoint] = useState<string | null>(null);
@@ -67,16 +73,18 @@ export function ControllerSimulator() {
   const sequence = useRef(0);
   const busyRef = useRef(false);
   const activeRun = useRef(false);
-  const cancelledLease = useRef(-1);
   const cancellation = useRef<Promise<void> | null>(null);
   const mounted = useRef(true);
+  const refreshSequence = useRef(0);
   const pendingDelay = useRef<{ timer: number; resolve: (value: boolean) => void } | null>(null);
   const pendingReview = useRef<((accepted: boolean) => void) | null>(null);
-  useEffect(() => { rememberControllerSimulationRecording(recorded); }, [recorded]);
-  useEffect(() => { rememberControllerSimulationReceipts(receipts); }, [receipts]);
-  const retainHomeBoundary = (boundary: SimulationHomeBoundary | null) => {
-    rememberControllerSimulationHomeBoundary(boundary);
-    if (mounted.current) setHomeBoundary(boundary);
+  const retainRecording = (steps: SimulationStep[]) => {
+    rememberControllerSimulationRecording(steps);
+    if (mounted.current) setRecorded(steps);
+  };
+  const retainReceipts = (next: TvNavigationReceipt[]) => {
+    rememberControllerSimulationReceipts(next);
+    if (mounted.current) setReceipts(next);
   };
 
   const cancelDelay = () => {
@@ -91,8 +99,9 @@ export function ControllerSimulator() {
     pendingDelay.current = { timer, resolve };
   });
   const refresh = async () => {
+    const request = ++refreshSequence.current;
     const next = await getTvNavigationStatus();
-    if (!mounted.current) return;
+    if (!mounted.current || request !== refreshSequence.current) return;
     setStatus(next);
     setMode(next.mode);
     sequence.current = Math.max(sequence.current, next.lastSimulatorSequence ?? 0);
@@ -104,20 +113,37 @@ export function ControllerSimulator() {
         if (!foundHome && receipt.action === "home") { foundHome = true; return { ...receipt, homeTransitionReady: true }; }
         return receipt;
       }).reverse();
-      rememberControllerSimulationReceipts(updated);
-      setReceipts(updated);
+      retainReceipts(updated);
     }
-    setHomeBoundary(memory.homeBoundary);
     if (next.simulatorAvailable) {
       const snapshot = await getManagedSessions();
-      if (!mounted.current) return;
+      if (!mounted.current || request !== refreshSequence.current) return;
       setSessions(snapshot.sessions.filter(session => session.applicationType === "cinema" && session.canResume));
     }
   };
   useEffect(() => {
     mounted.current = true;
-    void refresh().catch(() => { if (mounted.current) setError("Nie udało się odczytać dostępności symulatora."); });
+    const refreshOnEntry = () => {
+      void refresh().catch(() => { if (mounted.current) setError("Nie udało się odczytać dostępności symulatora."); });
+    };
+    let waitingForHome = homeBoundary?.accepted === null;
+    const reconcileHome = () => {
+      const memory = readControllerSimulationMemory();
+      const pending = memory.homeBoundary?.accepted === null;
+      if (waitingForHome && !pending && !busyRef.current) {
+        // A previous panel received this Home reply after the current panel opened.
+        setRecorded(memory.recorded);
+        setStatus(previous => previous ? { ...previous, simulatorHomeReady: false } : previous);
+        refreshOnEntry();
+      }
+      waitingForHome = pending;
+      setHomeBoundary(memory.homeBoundary);
+    };
+    const unsubscribe = subscribeControllerSimulationHomeBoundary(reconcileHome);
+    reconcileHome();
+    refreshOnEntry();
     return () => {
+      unsubscribe();
       mounted.current = false; lease.current++; cancelDelay();
       pendingReview.current?.(false); pendingReview.current = null;
       if (activeRun.current) void cancelTvNavigationSimulation().catch(() => {});
@@ -142,7 +168,7 @@ export function ControllerSimulator() {
   };
 
   const run = async (steps: SimulationStep[], replay = false) => {
-    if (busyRef.current || !status?.simulatorAvailable || !status.enabled) return;
+    if (busyRef.current || readControllerSimulationMemory().homeBoundary?.accepted === null || !status?.simulatorAvailable || !status.enabled) return;
     if (steps.some(step => step.action !== "home" && step.action !== "openControlCenter" && !(replay && step.serviceId)) && !targetSession) {
       setError("Wybierz własną sesję streamingową. Najpierw otwórz usługę i odśwież sesje.");
       return;
@@ -152,10 +178,11 @@ export function ControllerSimulator() {
     setBusy(true);
     setRunning(true);
     setError("");
-    retainHomeBoundary(null);
+    rememberControllerSimulationHomeBoundary(null);
     const currentLease = ++lease.current;
     let dispatchGeneration = status.generation;
     let selectedSession = targetSession;
+    let pendingHome: SimulationHomeBoundary | null = null;
     try {
       for (const [index, step] of steps.slice(0, MAX_SIMULATION_STEPS).entries()) {
         if (replay && step.serviceId && step.action !== "home" && step.action !== "openControlCenter") {
@@ -182,7 +209,7 @@ export function ControllerSimulator() {
         if (!await delay(waitMs) || lease.current !== currentLease || !mounted.current) break;
         if (step.action === "home") {
           // Real Home closes diagnostics. Retain only a reviewed continuation; no hidden runner.
-          retainHomeBoundary({ remaining: steps.slice(index + 1, MAX_SIMULATION_STEPS), accepted: null });
+          pendingHome = rememberControllerSimulationHomeBoundary({ remaining: steps.slice(index + 1, MAX_SIMULATION_STEPS), accepted: null });
           activeRun.current = false;
         }
         const receipt = await simulateTvNavigationAction({
@@ -191,15 +218,13 @@ export function ControllerSimulator() {
         });
         const selectedService = simulationService(sessions.find(session => session.sessionId === selectedSession)?.appId) ?? status.targetSession?.serviceId;
         const nextReceipts = [...readControllerSimulationMemory().receipts.slice(-63), { ...receipt, action: step.action, serviceId: selectedService }];
-        rememberControllerSimulationReceipts(nextReceipts);
-        if (mounted.current) setReceipts(nextReceipts);
+        retainReceipts(nextReceipts);
         if (recording && !replay && receipt.accepted) {
           const previous = readControllerSimulationMemory().recorded;
           const nextRecorded = previous.length >= MAX_SIMULATION_STEPS ? previous : [...previous, { ...step, delayMs: waitMs, serviceId: simulationService(selectedService) }];
-          rememberControllerSimulationRecording(nextRecorded);
-          if (mounted.current) setRecorded(nextRecorded);
+          retainRecording(nextRecorded);
         }
-        if (step.action === "home") retainHomeBoundary(receipt.accepted && cancelledLease.current !== currentLease ? { remaining: steps.slice(index + 1, MAX_SIMULATION_STEPS), accepted: true } : null);
+        if (pendingHome) settleControllerSimulationHomeBoundary(pendingHome, receipt.accepted);
         if (!mounted.current) break;
         if (lease.current !== currentLease) break;
         dispatchGeneration = receipt.generation;
@@ -223,7 +248,10 @@ export function ControllerSimulator() {
           break;
         }
       }
-    } catch (cause) { retainHomeBoundary(null); if (mounted.current) setError(errorMessage(cause)); }
+    } catch (cause) {
+      if (pendingHome) settleControllerSimulationHomeBoundary(pendingHome, false);
+      if (mounted.current) setError(errorMessage(cause));
+    }
     finally {
       if (cancellation.current) await cancellation.current;
       busyRef.current = false; activeRun.current = false;
@@ -232,12 +260,11 @@ export function ControllerSimulator() {
   };
   const cancel = () => {
     if (cancellation.current) return;
-    cancelledLease.current = lease.current;
     lease.current++;
     cancelDelay();
     pendingReview.current?.(false); pendingReview.current = null; setCheckpoint(null);
     setRunning(false);
-    retainHomeBoundary(null);
+    rememberControllerSimulationHomeBoundary(null);
     setNotice("Anulowano niewysłane akcje. Wysłane polecenie mogło już zostać przyjęte przez Windows.");
     const pending = cancelTvNavigationSimulation().then(next => {
       sequence.current = Math.max(sequence.current, next.lastSimulatorSequence ?? 0);
@@ -335,21 +362,21 @@ export function ControllerSimulator() {
       <button type="button" disabled={busy || !targetSession} onClick={() => void run(scenario.map(action => ({ action })))}>Scenariusz: ↓ → Wstecz Home</button>
       <div className="tv-simulator-sequences" role="group" aria-label="Nagrywanie sekwencji">
         <button type="button" disabled={busy} aria-pressed={recording} onClick={() => setRecording(value => !value)}>{recording ? "Zatrzymaj nagrywanie" : "Nagrywaj akcje symulatora"}</button>
-        <button type="button" disabled={busy || recorded.length === 0} onClick={() => { setRecorded([]); setSequenceReport(""); }}>Wyczyść nagranie</button>
+        <button type="button" disabled={busy || recorded.length === 0} onClick={() => { retainRecording([]); setSequenceReport(""); }}>Wyczyść nagranie</button>
         <button type="button" disabled={busy || recorded.length === 0 || !targetSession} onClick={() => void run(recorded, true)}>Odtwórz nagranie</button>
         <button type="button" disabled={recorded.length === 0} onClick={() => setSequenceReport(simulationSequenceJson(recorded))}>Eksportuj sekwencję · JSON</button>
         <p>Zapisano {recorded.length}/{MAX_SIMULATION_STEPS} przyjętych akcji. Ograniczony zapis pozostaje w pamięci procesu po zamknięciu diagnostyki; nie jest zapisywany na dysku. Home kończy bieżący segment. Dalsze kroki wymagają jawnego wznowienia. Odtwarzanie zatrzymuje się też przed zatwierdzeniem treści lub skrótem odtwarzania.</p>
         <ol>{recorded.map((step, index) => <li key={index}>{step.serviceId ?? "bieżąca sesja"} · {step.action} · {step.delayMs ?? 600} ms{needsSimulationReview(step.action) ? " · przegląd ekranu" : ""}</li>)}</ol>
         <label>Import sekwencji JSON <textarea maxLength={32768} rows={4} disabled={busy} value={sequenceImport} onChange={event => setSequenceImport(event.target.value)} /></label>
         <button type="button" disabled={busy || !sequenceImport.trim()} onClick={() => {
-          try { const steps = parseSimulationSequence(sequenceImport); setRecorded(steps); setRecording(false); setError(""); setSequenceReport(""); setNotice("Wczytano sekwencję do przeglądu. Żadna akcja nie została wysłana."); }
+          try { const steps = parseSimulationSequence(sequenceImport); retainRecording(steps); setRecording(false); setError(""); setSequenceReport(""); setNotice("Wczytano sekwencję do przeglądu. Żadna akcja nie została wysłana."); }
           catch (cause) { setError(errorMessage(cause)); }
         }}>Wczytaj sekwencję do przeglądu</button>
       </div>
       {homeBoundary && <div role="group" aria-label="Wznowienie po Home" className="tv-simulator-sequences">
         <p>Home jest granicą segmentu. Pozostało {homeBoundary.remaining.length} kroków. Przyjęcie Home: {homeBoundary.accepted === true ? "potwierdzone" : "oczekiwanie na wynik"}. Zakończenie i fokus VELORA: {status.simulatorHomeReady === true ? "potwierdzone natywnie" : "niepotwierdzone — odśwież status po powrocie"}. Automatyczna sekwencja między usługami pozostaje częściowa.</p>
         <button type="button" disabled={busy || homeBoundary.accepted !== true || status.simulatorHomeReady !== true || homeBoundary.remaining.length === 0} onClick={() => void run(homeBoundary.remaining, true)}>Wznów pozostałe kroki po Home</button>
-        <button type="button" disabled={busy} onClick={() => retainHomeBoundary(null)}>Usuń pozostałe kroki</button>
+        <button type="button" disabled={busy} onClick={() => rememberControllerSimulationHomeBoundary(null)}>Usuń pozostałe kroki</button>
       </div>}
       <button type="button" disabled={!running} onClick={cancel}>Anuluj sekwencję</button>
       {checkpoint && <div role="alert"><p>{checkpoint}</p><button type="button" onClick={() => { pendingReview.current?.(true); pendingReview.current = null; }}>Wykonaj sprawdzony krok</button></div>}
@@ -377,7 +404,7 @@ export function ControllerSimulator() {
     {last && <div role="group" aria-label="Ocena zaobserwowanego efektu">
       <p>Po sprawdzeniu ekranu oceń ostatnią akcję. To ręczna obserwacja operatora, niezależna od przyjęcia polecenia przez Windows.</p>
       {([['observed', 'Efekt widoczny'], ['notObserved', 'Brak widocznego efektu'], ['notChecked', 'Efekt niesprawdzony']] as const).map(([value, label]) =>
-        <button type="button" key={value} disabled={busy} aria-pressed={(last.effectObservation ?? "notChecked") === value} onClick={() => setReceipts(previous => previous.map((receipt, index) => index === previous.length - 1 ? { ...receipt, effectObservation: value } : receipt))}>{label}</button>)}
+        <button type="button" key={value} disabled={busy} aria-pressed={(last.effectObservation ?? "notChecked") === value} onClick={() => retainReceipts(receipts.map((receipt, index) => index === receipts.length - 1 ? { ...receipt, effectObservation: value } : receipt))}>{label}</button>)}
     </div>}
     <button type="button" disabled={receipts.length === 0} onClick={() => setReport(navigationEvidenceJson(receipts))}>Eksportuj zgodność TV · JSON</button>
     {report && <textarea aria-label="Bezpieczny raport zgodności TV JSON" readOnly rows={10} value={report} />}
