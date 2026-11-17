@@ -26,7 +26,17 @@ Engineering candidate `0.12.0-rc.1`. Evidence labels: **AUTOMATED**, **SOURCE**,
   persistent, non-alarming banner.
 
 ### S2.5-C — Home and session continuity
-- Pending integration.
+- Home completion reuse now requires full session identity (current session, revision, transition
+  time and launch id), not revision + focus alone.
+- Every authoritative real transition (`apply_transition`, `apply_transition_command`,
+  `finish_launch_session_inner`) calls `streaming_control::invalidate_controller_streaming` exactly
+  once, gated by the session-changed event; deduplicated, idempotent and rejected commands do not
+  revoke streaming input.
+- `controller_supervisor::on_session_changed()` forces neutral rearm; `pad_hub` detects real
+  revision changes and no longer double-fires streaming invalidation on every tick.
+- Frontend: monotonic browser-preview revision, `sessionRevisionToken`, explicit
+  `establishControllerHomeReadiness` / `isControllerHomeReady` helpers, bounded native status
+  reads with epoch invalidation. Remounted diagnostics cannot silently inherit readiness.
 
 ### S2.5-D — Panasonic 4K geometry
 - `display_signature()` now serializes explicit ordered geometry fields; observational labels
@@ -45,8 +55,24 @@ Engineering candidate `0.12.0-rc.1`. Evidence labels: **AUTOMATED**, **SOURCE**,
 Status: in progress on `work/s2-6-iphone-remote-3`; changelog to be appended after integration.
 
 ## S2.7 — Cinema & Streaming Experience
+- Deterministic, index-derived soak tests (64 iterations each) for repeated
+  Home → launch → close/crash → restore → Home cycles. They assert exactly one `Ended` event per
+  session (the single driver of one focus restoration), no resurrection after terminal, duplicate
+  same-service launches collapsed into one group, recycled PIDs never adopted, cloaked windows
+  never end a live session, and stale markers/HWNDs/foreign processes rejected.
+- No production Rust hardening was needed: the soaks exposed no real gap, and the existing guard
+  order already holds. An intentional `close_target_is_owned` behavior (process-identity based,
+  revalidated by `window_broker`) was preserved rather than narrowed.
+- Calm, honest error mappings for protected content, site changes and navigation failure in both
+  TS adapters, explicitly stating that VELORA does not bypass DRM and does not guarantee service
+  availability or compatibility.
+- Tests pin exactly five official HTTPS-only web services and reject lookalike/untrusted URLs
+  before launch. Lifecycle tests cover tampered→idle normalization, no duplicate launch,
+  restoration predicates across repeated transitions and the absence of a second focus path.
 
-Status: in progress on `work/s2-7-cinema-streaming`; changelog to be appended after integration.
+**UNVERIFIED:** live Edge/app-mode windows, real close/crash, DRM/Widevine/PlayReady/HDCP,
+site-specific navigation, authenticated YouTube, TV/HDMI/CEC and controller hardware. No
+compatibility is claimed for any streaming service.
 
 ## S2.8 — Reliability & Release Engineering
 
