@@ -307,6 +307,9 @@ export function ControllerSimulator() {
 
   if (!status?.simulatorAvailable) return error ? <p role="status">{error}</p> : null;
   const last = receipts[receipts.length - 1];
+  const fallbackSticky = last?.fallbackActivated === true
+    || last?.modeChangedByFallback === true
+    || status.diagnostics?.lastFallbackActivated === true;
   return <section className="tv-simulator" aria-label="Controller Simulator" data-remote-admin="">
     <h3>Controller Simulator · TV Navigation Engine</h3>
     <p>Tryb diagnostyczny Windows. Każda akcja przechodzi przez natywny router kontrolera. Test fizycznego DS4 pozostaje niewykonany; symulacja Home nie dowodzi dostarczenia PS przez Bluetooth.</p>
@@ -314,6 +317,7 @@ export function ControllerSimulator() {
       {status.enabled ? "Wyłącz symulator" : "Włącz symulator diagnostyczny"}
     </button>
     <p role="status">Symulator: {status.enabled ? "włączony" : "wyłączony"} · strategia: {status.activeStrategy} · generacja: {status.generation}</p>
+    {fallbackSticky && <p role="status" data-fallback-notice="" className="tv-simulator-fallback-notice">sticky pointer fallback enabled — original action was not repeated · Tryb wskaźnika pozostaje włączony; pierwotnej akcji nie powtórzono.</p>}
     {status.enabled && <>
       <div className="tv-simulator-setup">
         <label>Usługa <select value={serviceId} disabled={busy} onChange={event => setServiceId(event.target.value)}>
@@ -400,6 +404,7 @@ export function ControllerSimulator() {
         <dt>Odrzucone kontrolki</dt><dd>wyłączone {last.spatialDiagnostics.rejected.disabled} · poza ekranem {last.spatialDiagnostics.rejected.offscreen} · hasło {last.spatialDiagnostics.rejected.password} · brak fokusu {last.spatialDiagnostics.rejected.notKeyboardFocusable} · geometria {last.spatialDiagnostics.rejected.invalidBounds} · poza zakresem {last.spatialDiagnostics.rejected.outsideScope} · niedostępne właściwości {last.spatialDiagnostics.rejected.propertyUnavailable}</dd>
       </>}
       {last.fallbackReason && <><dt>Ścieżka zastępcza</dt><dd>{last.fallbackActivated ? "włączono stały tryb wskaźnika · pierwotnej akcji nie powtórzono" : "nie przełączono trybu ani nie powtórzono polecenia"} · {last.fallbackReason}</dd></>}
+      {last.modeChangedByFallback === true && <><dt>Zmiana trybu przez ścieżkę zastępczą</dt><dd>tak · {last.fallbackNotice ?? "sticky pointer fallback enabled — original action was not repeated"}</dd></>}
     </dl>}
     {last && <div role="group" aria-label="Ocena zaobserwowanego efektu">
       <p>Po sprawdzeniu ekranu oceń ostatnią akcję. To ręczna obserwacja operatora, niezależna od przyjęcia polecenia przez Windows.</p>

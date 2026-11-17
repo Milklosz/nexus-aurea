@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { configureTvNavigation, getTvNavigationStatus, navigationEvidenceJson, simulateTvNavigationAction, type TvNavigationReceipt } from "../services/tvNavigation";
+import { configureTvNavigation, getTvNavigationStatus, navigationEvidenceJson, simulateTvNavigationAction, SPATIAL_FAILURE_KINDS, type TvNavigationReceipt } from "../services/tvNavigation";
 const mocks = vi.hoisted(() => ({ tauri: false, invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => mocks.tauri, invoke: mocks.invoke }));
 beforeEach(() => { mocks.tauri = false; vi.clearAllMocks(); });
@@ -48,9 +48,38 @@ describe("TV navigation contract", () => {
       spatialDiagnostics: { visitedCount: 128, candidateCount: 0, rejected: { offscreen: 2, propertyUnavailable: null } } });
     expect(JSON.parse(navigationEvidenceJson([{ ...receipt, fallbackReason: "focusNotCandidate" }])).actions[0].fallbackReason).toBe("focusNotCandidate");
     expect(JSON.parse(navigationEvidenceJson([{ ...receipt, activeStrategy: "spatial-pointer-hybrid" }])).actions[0].strategy).toBe("spatial-pointer-hybrid");
-    const malicious = JSON.parse(navigationEvidenceJson([{ ...receipt, fallbackReason: "private-page-content" }]));
+    const malicious = JSON.parse(navigationEvidenceJson([{ ...receipt, fallbackReason: "private-page-content" as TvNavigationReceipt["fallbackReason"] }]));
     expect(malicious.actions[0].fallbackReason).toBe("redacted");
     expect(JSON.stringify(malicious)).not.toContain("private-page-content");
     expect(navigationEvidenceJson([receipt])).not.toContain("private page error");
+  });
+  it("mirrors the complete native failure contract in one shared allowlist", () => {
+    expect(SPATIAL_FAILURE_KINDS).toHaveLength(16);
+    expect(new Set(SPATIAL_FAILURE_KINDS).size).toBe(SPATIAL_FAILURE_KINDS.length);
+    const base: TvNavigationReceipt = { action: "down", sequence: 1, generation: 7, targetSession: "owned",
+      accepted: false, mode: "spatial", activeStrategy: "spatial", effect: "unverified", lastResult: null };
+    for (const reason of SPATIAL_FAILURE_KINDS) {
+      const exported = JSON.parse(navigationEvidenceJson([{ ...base, fallbackReason: reason }]));
+      expect(exported.actions[0].fallbackReason).toBe(reason);
+    }
+    // Ownership/authorization/target codes are exportable as codes but are
+    // never a frontend decision to activate fallback.
+    for (const reason of ["focusOutsideOwnedWindow", "scopeChanged", "authorizationRevoked", "targetChanged", "unsupportedPlatform"] as const) {
+      const exported = JSON.parse(navigationEvidenceJson([{ ...base, fallbackReason: reason, fallbackActivated: true }]));
+      expect(exported.actions[0].fallbackReason).toBe(reason);
+    }
+  });
+  it("exports typed fallback feedback without leaking arbitrary notice text", () => {
+    const receipt: TvNavigationReceipt = { action: "confirm", sequence: 1, generation: 7, targetSession: "owned",
+      accepted: false, mode: "spatial", activeStrategy: "spatial", effect: "unverified", lastResult: "private error",
+      fallbackReason: "queryBudgetExhausted", fallbackActivated: true, modeChangedByFallback: true,
+      fallbackNotice: "sticky pointer fallback enabled — original action was not repeated" };
+    const raw = navigationEvidenceJson([receipt]);
+    const exported = JSON.parse(raw);
+    expect(exported.actions[0]).toMatchObject({ modeChangedByFallback: true, fallbackNoticePresent: true, fallbackReason: "queryBudgetExhausted" });
+    expect(raw).not.toContain("private error");
+    expect(raw).not.toContain("original action was not repeated");
+    const without = JSON.parse(navigationEvidenceJson([{ ...receipt, modeChangedByFallback: false, fallbackNotice: null }]));
+    expect(without.actions[0]).toMatchObject({ modeChangedByFallback: false, fallbackNoticePresent: false });
   });
 });

@@ -1,6 +1,17 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 
 export type TvNavigationMode = "automatic" | "keyboard" | "spatial" | "pointer";
+
+/** Single source of truth mirroring the native SpatialFailureKind enum. */
+export const SPATIAL_FAILURE_KINDS = [
+  "queryBudgetExhausted", "noEligibleCandidates", "noCandidateInDirection", "focusNotCandidate",
+  "focusOutsideOwnedWindow", "focusAncestryTooDeep", "actionBudgetExceeded", "invokeUnsupported",
+  "candidateInvalidated", "focusNotObserved", "scopeChanged", "authorizationRevoked", "targetChanged",
+  "providerUnavailable", "providerCallFailed", "unsupportedPlatform",
+] as const;
+export type SpatialFailureKind = (typeof SPATIAL_FAILURE_KINDS)[number];
+const spatialFailureCodes: ReadonlySet<string> = new Set<string>(SPATIAL_FAILURE_KINDS);
+
 export type TvNavigationAction =
   | "up" | "down" | "left" | "right"
   | "confirm" | "back" | "home" | "openControlCenter"
@@ -39,8 +50,12 @@ export interface TvNavigationReceipt {
   spatialQueryMs?: number | null;
   spatialCandidateCount?: number | null;
   spatialDiagnostics?: SpatialDiagnostics | null;
-  fallbackReason?: string | null;
+  fallbackReason?: SpatialFailureKind | null;
   fallbackActivated?: boolean;
+  /** True when sticky pointer fallback actually changed the navigation mode. */
+  modeChangedByFallback?: boolean | null;
+  /** Fixed, non-sensitive notice shown when fallback fires. */
+  fallbackNotice?: string | null;
   /** Explicit local operator annotation; independent of the native dispatch receipt. */
   effectObservation?: "notChecked" | "observed" | "notObserved";
   /** Native status confirmed completed Home and focused trusted main, after dispatch. */
@@ -60,6 +75,11 @@ export interface TvNavigationStatus {
   targetSession?: { sessionId: string; serviceId: string; label: string } | null;
   mediaControlSession?: { sessionId: string; serviceId: string; label: string } | null;
   lastResult: string | null;
+  /** Content-free native navigation telemetry; no page text or element names. */
+  diagnostics?: {
+    lastFallbackActivated?: boolean | null;
+    lastFallbackReason?: SpatialFailureKind | null;
+  } | null;
 }
 
 export const unavailableTvNavigation: TvNavigationStatus = {
@@ -134,9 +154,6 @@ export function navigationEvidenceJson(receipts: readonly TvNavigationReceipt[])
   ]);
   const safeCode = (value: string) => codes.has(value) ? value : "redacted";
   const serviceIds = new Set(["netflix", "disney", "max", "prime", "youtube"]);
-  const fallbackReasons = new Set(["providerUnavailable", "focusOutsideOwnedWindow", "focusAncestryTooDeep", "noEligibleCandidates",
-    "queryBudgetExhausted", "noCandidateInDirection", "actionBudgetExceeded", "scopeChanged", "candidateInvalidated", "focusNotObserved",
-    "invokeUnsupported", "providerCallFailed", "authorizationRevoked", "targetChanged", "unsupportedPlatform", "focusNotCandidate"]);
   const count = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
   const diagnostics = (value?: SpatialDiagnostics | null) => value ? {
     providerAvailable: value.providerAvailable === true,
@@ -169,8 +186,10 @@ export function navigationEvidenceJson(receipts: readonly TvNavigationReceipt[])
       spatialQueryMs: Number.isFinite(receipt.spatialQueryMs) ? receipt.spatialQueryMs : null,
       spatialCandidateCount: Number.isSafeInteger(receipt.spatialCandidateCount) ? receipt.spatialCandidateCount : null,
       spatialDiagnostics: diagnostics(receipt.spatialDiagnostics),
-      fallbackReason: receipt.fallbackReason ? fallbackReasons.has(receipt.fallbackReason) ? receipt.fallbackReason : "redacted" : null,
+      fallbackReason: receipt.fallbackReason ? spatialFailureCodes.has(receipt.fallbackReason) ? receipt.fallbackReason : "redacted" : null,
       fallbackActivated: receipt.fallbackActivated === true,
+      modeChangedByFallback: receipt.modeChangedByFallback === true,
+      fallbackNoticePresent: typeof receipt.fallbackNotice === "string" && receipt.fallbackNotice.length > 0,
     })),
   }, null, 2);
 }

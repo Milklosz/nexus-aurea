@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { needsSimulationReview, parseSimulationSequence, simulationAnalog, simulationHold, simulationSequenceJson, simulationService } from "../services/controllerSimulation";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { clearControllerSimulationMemory, needsSimulationReview, parseSimulationSequence, readControllerSimulationMemory, rememberControllerSimulationReceipts, simulationAnalog, simulationHold, simulationSequenceJson, simulationService } from "../services/controllerSimulation";
+import type { TvNavigationReceipt } from "../services/tvNavigation";
+beforeEach(() => clearControllerSimulationMemory());
+afterEach(() => clearControllerSimulationMemory());
 
 describe("bounded semantic controller simulation", () => {
   it("uses a stable analog dead zone, clamps movement, and reduces precision steps", () => {
@@ -48,5 +51,24 @@ describe("bounded semantic controller simulation", () => {
     expect(() => parse([{ action: "pointerMove", delayMs: 100, deltaX: 33, deltaY: 0 }])).toThrow();
     expect(() => parse(Array.from({ length: 65 }, () => ({ action: "down", delayMs: 100 })))).toThrow();
     expect(() => parseSimulationSequence("x".repeat(32769))).toThrow();
+  });
+  it("keeps typed fallback reasons and no-replay feedback in sanitized memory", () => {
+    const receipt: TvNavigationReceipt = { action: "confirm", sequence: 1, generation: 4, targetSession: "managed",
+      accepted: false, mode: "spatial", activeStrategy: "spatial", effect: "unverified", lastResult: null,
+      fallbackReason: "authorizationRevoked", fallbackActivated: false, modeChangedByFallback: false, fallbackNotice: null };
+    rememberControllerSimulationReceipts([receipt]);
+    const [stored] = readControllerSimulationMemory().receipts;
+    expect(stored.fallbackReason).toBe("authorizationRevoked");
+    expect(stored.fallbackActivated).toBe(false);
+    expect(stored.modeChangedByFallback).toBe(false);
+    expect(stored.fallbackNotice).toBeNull();
+
+    rememberControllerSimulationReceipts([{ ...receipt, fallbackReason: "queryBudgetExhausted",
+      fallbackActivated: true, modeChangedByFallback: true,
+      fallbackNotice: "sticky pointer fallback enabled — original action was not repeated" }]);
+    const [active] = readControllerSimulationMemory().receipts;
+    expect(active.fallbackReason).toBe("queryBudgetExhausted");
+    expect(active.modeChangedByFallback).toBe(true);
+    expect(active.fallbackNotice).toBe("sticky pointer fallback enabled — original action was not repeated");
   });
 });

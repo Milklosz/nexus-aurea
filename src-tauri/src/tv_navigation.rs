@@ -4,7 +4,7 @@
 //! reports that the OS accepted the bounded command; it does not prove that a
 //! streaming page changed playback state.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -102,6 +102,70 @@ impl NavigationAction {
             "pointerToggle" => Ok(Self::PointerToggle),
             "openControlCenter" => Ok(Self::OpenControlCenter),
             _ => Err("Nieznana akcja symulatora.".into()),
+        }
+    }
+}
+
+/// Closed set of spatial-navigation failure codes. This is the single typed
+/// contract shared by the native classifier and the diagnostic receipt/UI.
+/// Variants never carry element names, page text, URLs or other page data.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SpatialFailureKind {
+    QueryBudgetExhausted,
+    NoEligibleCandidates,
+    NoCandidateInDirection,
+    FocusNotCandidate,
+    FocusOutsideOwnedWindow,
+    FocusAncestryTooDeep,
+    ActionBudgetExceeded,
+    InvokeUnsupported,
+    CandidateInvalidated,
+    FocusNotObserved,
+    ScopeChanged,
+    AuthorizationRevoked,
+    TargetChanged,
+    ProviderUnavailable,
+    ProviderCallFailed,
+    UnsupportedPlatform,
+}
+
+impl SpatialFailureKind {
+    /// Ownership/authorization/target failures must NEVER become permissive
+    /// pointer fallback: they mean the safe target is no longer owned or the
+    /// operator revoked consent. Only recoverable spatial/provider failures
+    /// may switch modes.
+    pub fn fallback_eligible(self) -> bool {
+        !matches!(
+            self,
+            Self::FocusOutsideOwnedWindow
+                | Self::ScopeChanged
+                | Self::AuthorizationRevoked
+                | Self::TargetChanged
+                | Self::UnsupportedPlatform
+        )
+    }
+
+    /// Short, non-sensitive, user-facing description of the failure. Never
+    /// includes element names, page text or native error strings.
+    pub fn display_label(self) -> &'static str {
+        match self {
+            Self::QueryBudgetExhausted => "spatial search budget exhausted",
+            Self::NoEligibleCandidates => "no eligible controls found",
+            Self::NoCandidateInDirection => "no control in that direction",
+            Self::FocusNotCandidate => "focused control is not actionable",
+            Self::FocusOutsideOwnedWindow => "focus outside the owned window",
+            Self::FocusAncestryTooDeep => "focus ancestry too deep",
+            Self::ActionBudgetExceeded => "spatial action timed out",
+            Self::InvokeUnsupported => "control has no supported activation",
+            Self::CandidateInvalidated => "control changed before activation",
+            Self::FocusNotObserved => "focus was not confirmed",
+            Self::ScopeChanged => "dialog scope changed",
+            Self::AuthorizationRevoked => "authorization was revoked",
+            Self::TargetChanged => "streaming target changed",
+            Self::ProviderUnavailable => "accessibility provider unavailable",
+            Self::ProviderCallFailed => "accessibility provider call failed",
+            Self::UnsupportedPlatform => "platform not supported",
         }
     }
 }
@@ -259,7 +323,7 @@ pub struct NavigationDiagnostics {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_spatial_diagnostics: Option<SpatialNavigationDiagnostics>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_fallback_reason: Option<String>,
+    pub last_fallback_reason: Option<SpatialFailureKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_fallback_activated: Option<bool>,
 }
@@ -329,14 +393,20 @@ pub struct NavigationActionReceipt {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spatial_diagnostics: Option<SpatialNavigationDiagnostics>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fallback_reason: Option<String>,
+    pub fallback_reason: Option<SpatialFailureKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fallback_activated: Option<bool>,
+    /// True when sticky pointer fallback actually changed the navigation mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode_changed_by_fallback: Option<bool>,
+    /// Fixed, non-sensitive notice shown to the operator when fallback fires.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_notice: Option<String>,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{profile, NavigationAction, NavigationMode, PROFILES};
+    use super::{profile, NavigationAction, NavigationMode, SpatialFailureKind, PROFILES};
 
     #[test]
     fn mode_parser_is_a_closed_allowlist() {
@@ -378,5 +448,67 @@ mod tests {
             assert!(!service.limitations.is_empty());
         }
         assert!(profile("arbitrary.example").is_none());
+    }
+
+    #[test]
+    fn ownership_and_target_failures_are_never_fallback_eligible() {
+        for kind in [
+            SpatialFailureKind::FocusOutsideOwnedWindow,
+            SpatialFailureKind::ScopeChanged,
+            SpatialFailureKind::AuthorizationRevoked,
+            SpatialFailureKind::TargetChanged,
+            SpatialFailureKind::UnsupportedPlatform,
+        ] {
+            assert!(!kind.fallback_eligible(), "{kind:?} must not enable fallback");
+        }
+        for kind in [
+            SpatialFailureKind::QueryBudgetExhausted,
+            SpatialFailureKind::NoEligibleCandidates,
+            SpatialFailureKind::NoCandidateInDirection,
+            SpatialFailureKind::FocusNotCandidate,
+            SpatialFailureKind::FocusAncestryTooDeep,
+            SpatialFailureKind::ActionBudgetExceeded,
+            SpatialFailureKind::InvokeUnsupported,
+            SpatialFailureKind::CandidateInvalidated,
+            SpatialFailureKind::FocusNotObserved,
+            SpatialFailureKind::ProviderUnavailable,
+            SpatialFailureKind::ProviderCallFailed,
+        ] {
+            assert!(kind.fallback_eligible(), "{kind:?} should allow fallback");
+        }
+    }
+
+    #[test]
+    fn every_failure_kind_has_a_non_sensitive_display_label_and_camel_case_code() {
+        let kinds = [
+            SpatialFailureKind::QueryBudgetExhausted,
+            SpatialFailureKind::NoEligibleCandidates,
+            SpatialFailureKind::NoCandidateInDirection,
+            SpatialFailureKind::FocusNotCandidate,
+            SpatialFailureKind::FocusOutsideOwnedWindow,
+            SpatialFailureKind::FocusAncestryTooDeep,
+            SpatialFailureKind::ActionBudgetExceeded,
+            SpatialFailureKind::InvokeUnsupported,
+            SpatialFailureKind::CandidateInvalidated,
+            SpatialFailureKind::FocusNotObserved,
+            SpatialFailureKind::ScopeChanged,
+            SpatialFailureKind::AuthorizationRevoked,
+            SpatialFailureKind::TargetChanged,
+            SpatialFailureKind::ProviderUnavailable,
+            SpatialFailureKind::ProviderCallFailed,
+            SpatialFailureKind::UnsupportedPlatform,
+        ];
+        for kind in kinds {
+            let label = kind.display_label();
+            assert!(!label.is_empty());
+            assert!(!label.contains("Spatial:"));
+            let json = serde_json::to_string(&kind).unwrap();
+            assert!(json.starts_with('"') && json.ends_with('"'));
+            assert_eq!(serde_json::from_str::<SpatialFailureKind>(&json).unwrap(), kind);
+        }
+        assert_eq!(
+            serde_json::to_string(&SpatialFailureKind::QueryBudgetExhausted).unwrap(),
+            "\"queryBudgetExhausted\""
+        );
     }
 }
