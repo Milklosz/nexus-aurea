@@ -41,6 +41,8 @@
           pattern="[0-9]{6}" minlength="6" maxlength="6" required>
         <label for="device-name">Nazwa urządzenia</label>
         <input id="device-name" name="name" type="text" maxlength="32" value="iPhone" required>
+        <p class="pairing-hint">Kod jest jednorazowy, ważny tylko przez 60 sekund. Wpisz go ręcznie lub zeskanuj kod QR z Control Center.</p>
+        <p class="pairing-hint" id="pairing-fragment-note" hidden>Kod z kodu QR został wpisany automatycznie. Jeśli wygasł, wygeneruj nowy w Control Center.</p>
         <button type="submit" id="pair-button" disabled>Sparuj iPhone'a</button>
       </form>
 

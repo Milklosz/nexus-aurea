@@ -20,6 +20,8 @@ export type RemoteAccessStatus = {
   trustProfilePath: string | null;
   pairingCode: string | null;
   pairingExpiresInSeconds: number;
+  /** Wall-clock expiry (Unix ms) of the one-time code; local UI only. */
+  pairingExpiresAtMs?: number;
   /** State of the system credential store, distinct from "no paired devices". */
   storeState?: RemoteStoreState;
   storeMessage?: string | null;
@@ -64,6 +66,7 @@ export const disabledRemoteAccessStatus: RemoteAccessStatus = {
   trustProfilePath: null,
   pairingCode: null,
   pairingExpiresInSeconds: 0,
+  pairingExpiresAtMs: 0,
   storeState: "unknown",
   storeMessage: null,
   recoveryRequired: false,
@@ -147,3 +150,15 @@ export async function listenForRemoteCommand(
     if (remoteCommands.has(event.payload)) callback(event.payload as RemoteCommand);
   });
 }
+
+// Pure QR / countdown helpers live in remoteReliability.ts (no Tauri import so
+// they can be used from any UI module and from node tests). Re-exported here
+// for callers that already import from this service.
+export {
+  buildPairingBootstrapUrl,
+  encodeQrMatrix,
+  formatPairingCountdown,
+  pairingRemainingSeconds,
+  parsePairingBootstrapUrl,
+} from "./remoteReliability";
+export type { PairingBootstrap } from "./remoteReliability";
