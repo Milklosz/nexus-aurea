@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { CrossSourceGate } from "../services/crossSourceGate";
-import type { ControllerAction, ControllerSample, ControllerSourceName } from "../services/controllerEngine";
+import { CrossSourceGate, type ControllerSourceName } from "../services/crossSourceGate";
+import type { ControllerAction, ControllerSample } from "../services/controllerEngine";
 
 /**
  * Bounded high-iteration controller transition soak (S2.8).
