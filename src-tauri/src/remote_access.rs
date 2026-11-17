@@ -25,6 +25,9 @@ const PAIRING_WINDOW: Duration = Duration::from_secs(300);
 const PAIRING_ATTEMPTS: u32 = 5;
 const COMMAND_WINDOW: Duration = Duration::from_secs(1);
 const COMMANDS_PER_WINDOW: u32 = 20;
+/// Authenticated status/hello probes are rate-limited before any store read.
+const HELLO_WINDOW: Duration = Duration::from_secs(10);
+const HELLO_PER_WINDOW: u32 = 20;
 const MAX_PAIRED_DEVICES: usize = 8;
 #[cfg(windows)]
 const MAX_REQUEST_BYTES: usize = 4096;
@@ -97,6 +100,11 @@ pub struct RemoteAccessStatus {
     pub trust_profile_path: Option<String>,
     pub pairing_code: Option<String>,
     pub pairing_expires_in_seconds: u64,
+    /// Wall-clock expiry (Unix milliseconds) of the current one-time pairing
+    /// code. Local UI only — never sent on the unauthenticated LAN status
+    /// endpoint. The bootstrapping QR may carry this as a short `exp` hint; the
+    /// server itself always re-checks its own bounded `Instant` TTL.
+    pub pairing_expires_at_ms: u64,
     /// `unknown`, `ok`, `unavailable`, `locked`, `damaged`, `rolled-back` or
     /// `recovery-pending`. Distinguishes an unreadable or damaged credential
     /// store from simply having no paired devices.
@@ -119,6 +127,7 @@ impl Default for RemoteAccessStatus {
             trust_profile_path: None,
             pairing_code: None,
             pairing_expires_in_seconds: 0,
+            pairing_expires_at_ms: 0,
             store_state: "unknown".into(),
             store_message: None,
             recovery_required: false,
@@ -342,6 +351,9 @@ struct RemoteInner {
     recovery_confirmation: Mutex<Option<(String, Instant)>>,
     pair_attempts: Mutex<HashMap<IpAddr, RateBucket>>,
     command_attempts: Mutex<HashMap<String, RateBucket>>,
+    /// Bounds unauthenticated-looking hello probes before any credential-store
+    /// read. Keyed by device id, so a flood of unknown ids cannot exhaust it.
+    hello_attempts: Mutex<HashMap<String, RateBucket>>,
     /// Successful command receipts for exact duplicate acknowledgement. Bounded
     /// and in-memory; never contains a token or signature.
     command_receipts: Mutex<CommandReceiptLog>,
@@ -370,6 +382,7 @@ impl RemoteInner {
             recovery_confirmation: Mutex::new(None),
             pair_attempts: Mutex::new(HashMap::new()),
             command_attempts: Mutex::new(HashMap::new()),
+            hello_attempts: Mutex::new(HashMap::new()),
             command_receipts: Mutex::new(CommandReceiptLog::default()),
             command_gate: Mutex::new(()),
         }
@@ -400,6 +413,7 @@ impl Default for RemoteInner {
             pairing: Mutex::new(None),
             pair_attempts: Mutex::new(HashMap::new()),
             command_attempts: Mutex::new(HashMap::new()),
+            hello_attempts: Mutex::new(HashMap::new()),
             command_receipts: Mutex::new(CommandReceiptLog::default()),
         }
     }
@@ -414,6 +428,15 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Bounded wall-clock stamp used only for the local UI's pairing countdown and
+/// the short-lived QR `exp` hint. Security decisions use the monotonic
+/// `Instant` TTL, never this value.
+fn unix_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64)
 }
 
 fn remote_command_payload(device_id: &str, sequence: u64, command: &RemoteCommand) -> String {
@@ -460,6 +483,44 @@ fn verify_command_signature(
     };
     mac.update(remote_command_payload(device_id, sequence, command).as_bytes());
     mac.verify_slice(signature).is_ok()
+}
+
+/// Authenticated "hello" request. It reuses the paired device's EXISTING HMAC
+/// key and SHA-256 primitive — there is no second key, no certificate change
+/// and no new key distribution. The PWA generates a fresh `nonce` per check so
+/// a captured acknowledgment cannot be replayed in a later session.
+fn remote_hello_payload(device_id: &str, nonce: &str) -> String {
+    format!("NEXUS-AUREA-REMOTE-V1\n{device_id}\nhello\n{nonce}")
+}
+
+/// Signed acknowledgment. Binds only non-sensitive fields: device id, a server
+/// epoch, the paired-device count and the client's fresh nonce. The signature
+/// is not a bearer credential — it cannot authorize any command because the
+/// command payload format is different.
+fn remote_hello_ack_payload(
+    device_id: &str,
+    epoch: u64,
+    paired_device_count: usize,
+    nonce: &str,
+) -> String {
+    format!(
+        "NEXUS-AUREA-REMOTE-V1\n{device_id}\nhello-ack\n{epoch}\n{paired_device_count}\n{nonce}"
+    )
+}
+
+fn compute_hmac(token: &[u8], payload: &str) -> Option<Vec<u8>> {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(token) else {
+        return None;
+    };
+    mac.update(payload.as_bytes());
+    Some(mac.finalize().into_bytes().to_vec())
+}
+
+fn is_valid_nonce(nonce: &str) -> bool {
+    nonce.len() == 32 && nonce.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn is_allowed_request(
@@ -539,13 +600,16 @@ impl RemoteAccess {
             if let Some(remaining) = pairing.expires_at.checked_duration_since(Instant::now()) {
                 status.pairing_code = Some(pairing.value.clone());
                 status.pairing_expires_in_seconds = remaining.as_secs().saturating_add(1);
+                status.pairing_expires_at_ms = unix_now_ms().saturating_add(remaining.as_millis() as u64);
             } else {
                 status.pairing_code = None;
                 status.pairing_expires_in_seconds = 0;
+                status.pairing_expires_at_ms = 0;
             }
         } else {
             status.pairing_code = None;
             status.pairing_expires_in_seconds = 0;
+            status.pairing_expires_at_ms = 0;
         }
         status
     }
@@ -808,6 +872,7 @@ impl RemoteAccess {
             .route("/sw.js", get(remote_service_worker))
             .route("/icon.svg", get(remote_icon))
             .route("/api/status", get(remote_status))
+            .route("/api/hello", post(hello_device))
             .route("/api/pair", post(pair_device))
             .route("/api/command", post(send_command))
             .layer(axum::extract::DefaultBodyLimit::max(MAX_REQUEST_BYTES))
@@ -1118,6 +1183,61 @@ impl RemoteAccess {
         *pairing_slot = None;
         self.publish(&vault);
         Ok(())
+    }
+
+    /// Authenticated "hello": proves to the PWA that the LAN server still
+    /// holds this device's pairing and answers bound to a fresh client nonce.
+    /// It reuses the command HMAC key/primitive (no new key distribution), is
+    /// read-only, and returns only non-sensitive fields. A revoked device or a
+    /// damaged store is refused; there is no unauthenticated control surface.
+    #[cfg(windows)]
+    fn verify_hello(
+        &self,
+        device_id: &str,
+        nonce: &str,
+        signature: &[u8],
+    ) -> Result<(u64, usize, Vec<u8>), StatusCode> {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+
+        if !lock(&self.inner.status).enabled || !is_valid_device_id(device_id) || !is_valid_nonce(nonce) {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+        if !allow_rate(
+            &mut lock(&self.inner.hello_attempts),
+            device_id.to_string(),
+            HELLO_WINDOW,
+            HELLO_PER_WINDOW,
+            MAX_PAIRED_DEVICES,
+        ) {
+            return Err(StatusCode::TOO_MANY_REQUESTS);
+        }
+        // Re-read under the cross-process lock. A revoked device or a stale
+        // cache can never produce a "paired & trusted" acknowledgment.
+        let (_guard, vault) = self
+            .locked_fresh(COMMAND_LOCK_WAIT)
+            .map_err(|error| error.status())?;
+        let device = vault
+            .devices
+            .iter()
+            .find(|device| device.id == device_id)
+            .ok_or(StatusCode::UNAUTHORIZED)?;
+        let token = URL_SAFE_NO_PAD
+            .decode(&device.token)
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        // Constant-time comparison via the HMAC crate's verifier.
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        let mut verifier = Hmac::<Sha256>::new_from_slice(&token)
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        verifier.update(remote_hello_payload(device_id, nonce).as_bytes());
+        if verifier.verify_slice(signature).is_err() {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+        let epoch = unix_now_ms() / 1000;
+        let count = vault.devices.len();
+        let ack = compute_hmac(&token, &remote_hello_ack_payload(device_id, epoch, count, nonce))
+            .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+        Ok((epoch, count, ack))
     }
 
     #[cfg(windows)]
@@ -2096,6 +2216,31 @@ struct PairRequest {
 
 #[cfg(windows)]
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HelloRequest {
+    device_id: String,
+    /// Fresh 16-byte hex nonce generated by the PWA for this verification.
+    nonce: String,
+    /// HMAC-SHA256 over `remote_hello_payload`, using the paired device token.
+    signature: String,
+}
+
+#[cfg(windows)]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HelloResponse {
+    /// Echoed so the PWA binds the acknowledgment to the request it sent.
+    nonce: String,
+    /// Seconds since the Unix epoch on the server; not a secret.
+    server_epoch: u64,
+    /// Non-sensitive count only — no device names, ids or tokens.
+    paired_device_count: usize,
+    /// HMAC over `remote_hello_ack_payload` with the paired device token.
+    signature: String,
+}
+
+#[cfg(windows)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CommandRequest {
     device_id: String,
@@ -2244,6 +2389,41 @@ async fn remote_status(
         enabled: status.enabled,
         paired_device_count: status.paired_device_count,
     })
+}
+
+/// Authenticated, read-only status verification. Reuses the paired device's
+/// command HMAC key; it is NOT a new control endpoint and exposes only counts.
+#[cfg(windows)]
+async fn hello_device(
+    axum::extract::State(context): axum::extract::State<ServerContext>,
+    axum::Json(request): axum::Json<HelloRequest>,
+) -> axum::response::Response {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+
+    let signature = match URL_SAFE_NO_PAD.decode(&request.signature) {
+        Ok(signature) => signature,
+        Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
+    };
+    let nonce = request.nonce.clone();
+    // Verification re-reads the credential store under the cross-process lock,
+    // so it must not run on an async executor thread.
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        context.remote.verify_hello(&request.device_id, &request.nonce, &signature)
+    })
+    .await
+    .unwrap_or(Err(StatusCode::SERVICE_UNAVAILABLE));
+    match result {
+        Ok((server_epoch, paired_device_count, ack)) => axum::Json(HelloResponse {
+            nonce,
+            server_epoch,
+            paired_device_count,
+            signature: URL_SAFE_NO_PAD.encode(ack),
+        })
+        .into_response(),
+        Err(status) => status.into_response(),
+    }
 }
 
 #[cfg(windows)]
@@ -2503,6 +2683,41 @@ mod tests {
             assert_eq!(serde_json::from_str::<RemoteCommand>(&format!("\"{wire}\"")).unwrap(), command);
             assert_eq!(command.as_str(), wire);
         }
+    }
+
+    #[test]
+    fn hello_payloads_bind_device_nonce_epoch_and_count() {
+        let request = remote_hello_payload("0123456789abcdef0123456789abcdef", "aabbccdd");
+        assert!(request.starts_with("NEXUS-AUREA-REMOTE-V1\n"));
+        assert!(request.contains("\nhello\n"));
+        assert_ne!(
+            request,
+            remote_hello_payload("ffffffffffffffffffffffffffffffff", "aabbccdd")
+        );
+        assert_ne!(request, remote_hello_payload("0123456789abcdef0123456789abcdef", "different"));
+        let ack = remote_hello_ack_payload("0123456789abcdef0123456789abcdef", 1_700_000_000, 3, "aabbccdd");
+        assert_ne!(ack, request, "an ack can never be replayed as a request");
+        assert_ne!(ack, remote_hello_ack_payload("0123456789abcdef0123456789abcdef", 1_700_000_001, 3, "aabbccdd"));
+        assert_ne!(ack, remote_hello_ack_payload("0123456789abcdef0123456789abcdef", 1_700_000_000, 4, "aabbccdd"));
+        // The signed fields are non-sensitive: no token or device secret.
+        assert!(!ack.contains("token"));
+    }
+
+    #[test]
+    fn hello_ack_signature_verifies_only_for_the_bound_fields() {
+        let token = [9_u8; 32];
+        let nonce = "00112233445566778899aabbccddeeff";
+        let payload = remote_hello_ack_payload("0123456789abcdef0123456789abcdef", 123, 2, nonce);
+        let signature = compute_hmac(&token, &payload).expect("HMAC");
+        assert_eq!(signature, compute_hmac(&token, &payload).expect("HMAC again"));
+        assert_ne!(
+            signature,
+            compute_hmac(&token, &remote_hello_ack_payload("0123456789abcdef0123456789abcdef", 123, 3, nonce)).expect("other count")
+        );
+        assert_ne!(signature, compute_hmac(&[8_u8; 32], &payload).expect("other key"));
+        assert!(is_valid_nonce(nonce));
+        assert!(!is_valid_nonce("short"));
+        assert!(!is_valid_nonce("zz112233445566778899aabbccddeeff"));
     }
 }
 
@@ -3067,6 +3282,7 @@ mod windows_tests {
             "/sw.js",
             "/icon.svg",
             "/api/status",
+            "/api/hello",
             "/api/pair",
             "/api/command",
         ];
@@ -4123,5 +4339,88 @@ mod windows_tests {
         remote.run_recovery("revoke-all-devices", &plan.confirmation).unwrap();
         assert!(lock(&remote.inner.pairing).is_none());
         assert!(!lock(&remote.inner.status).enabled);
+    }
+
+    #[test]
+    fn pairing_bootstrap_code_is_consumed_on_success_and_never_reused_after_expiry() {
+        let env = TestEnv::new("bootstrap-single-use");
+        let remote = seeded(&env, 0);
+        let code = "123456";
+        *lock(&remote.inner.pairing) = Some(PairingCode {
+            value: code.into(),
+            expires_at: Instant::now() + PAIRING_TTL,
+        });
+        let address = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1));
+        assert!(remote
+            .pair(address, code, &device_id(1), "iPhone", &device_token(1))
+            .is_ok());
+        assert!(lock(&remote.inner.pairing).is_none(), "the one-time code is consumed");
+        assert_eq!(remote.status().pairing_code, None);
+        // Even before the original TTL passes, a consumed code cannot pair again.
+        assert_eq!(
+            remote.pair(address, code, &device_id(2), "iPhone 2", &device_token(2)),
+            Err(StatusCode::UNAUTHORIZED)
+        );
+        assert_eq!(stored(env.store.as_ref()).devices.len(), 1);
+        // A fresh code that has already expired is also refused.
+        *lock(&remote.inner.pairing) = Some(PairingCode {
+            value: "654321".into(),
+            expires_at: Instant::now()
+                .checked_sub(Duration::from_secs(1))
+                .unwrap_or_else(Instant::now),
+        });
+        assert_eq!(
+            remote.pair(address, "654321", &device_id(3), "iPhone 3", &device_token(3)),
+            Err(StatusCode::UNAUTHORIZED)
+        );
+        assert_eq!(stored(env.store.as_ref()).devices.len(), 1);
+    }
+
+    #[test]
+    fn signed_hello_reuses_the_device_hmac_and_fails_closed_for_unpaired_or_tampered_requests() {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+
+        let env = TestEnv::new("signed-hello");
+        let remote = seeded(&env, 1);
+        let device = device_id(1);
+        let nonce = "00112233445566778899aabbccddeeff";
+        let token = URL_SAFE_NO_PAD.decode(device_token(1)).expect("token");
+        let signature = compute_hmac(&token, &remote_hello_payload(&device, nonce)).expect("sign");
+        let (epoch, count, ack) = remote.verify_hello(&device, nonce, &signature).expect("hello");
+        assert!(epoch > 0);
+        assert_eq!(count, 1);
+        assert_eq!(
+            ack,
+            compute_hmac(&token, &remote_hello_ack_payload(&device, epoch, count, nonce)).expect("ack")
+        );
+        // A tampered nonce, an unknown device and a bad signature all fail closed.
+        assert_eq!(
+            remote.verify_hello(&device, "ffffffffffffffffffffffffffffffff", &signature),
+            Err(StatusCode::UNAUTHORIZED)
+        );
+        assert_eq!(
+            remote.verify_hello(&device_id(2), nonce, &signature),
+            Err(StatusCode::UNAUTHORIZED)
+        );
+        assert_eq!(
+            remote.verify_hello(&device, nonce, &[0_u8; 32]),
+            Err(StatusCode::UNAUTHORIZED)
+        );
+        // The device cap and revocation protection are unchanged by hello.
+        for index in 2..=MAX_PAIRED_DEVICES as u64 {
+            pair_test_device(&remote, index, "Synthetic Remote").expect("pair within cap");
+        }
+        assert_eq!(
+            pair_test_device(&remote, 9, "Ninth Device"),
+            Err(StatusCode::CONFLICT),
+            "eight-device cap unchanged"
+        );
+        let (_, count, _) = remote.verify_hello(&device, nonce, &signature).expect("still paired");
+        assert_eq!(count, MAX_PAIRED_DEVICES);
+        remote.revoke_device(&device).expect("revoke");
+        assert_eq!(
+            remote.verify_hello(&device, nonce, &signature),
+            Err(StatusCode::UNAUTHORIZED)
+        );
     }
 }

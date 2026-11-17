@@ -9,11 +9,14 @@
     inFlight: false,
     statusInFlight: false,
     hasConnected: false,
+    verified: false,
+    verificationInFlight: false,
     authorizationRejected: false,
     rejectedRecord: null,
     record: null,
     rejectedUnconfirmedRecord: false,
   };
+  const RECONNECT_MAX_ATTEMPTS = 8;
   let statusRequestId = 0;
   let commandRequestId = 0;
   const connection = document.getElementById("connection-state");
@@ -81,6 +84,45 @@
     } finally {
       if (timer !== null) clearTimeout(timer);
     }
+  }
+
+  // A desktop QR may hand us a ONE-TIME code as a short-lived URL fragment.
+  // The fragment is never sent in any fetch (no '#...' reaches the server or an
+  // access log) and is cleared immediately after reading. It is only a prefill
+  // hint: the server's own <=60s TTL and single-use rule remain the authority.
+  function readPairingFragment() {
+    let raw = "";
+    try { raw = String(window.location.hash || ""); } catch { return null; }
+    const match = /^#pair=(\d{6})&exp=(\d{1,12})$/.exec(raw);
+    if (!match) return null;
+    const exp = Number(match[2]);
+    if (!Number.isFinite(exp) || exp * 1000 <= Date.now()) return null;
+    return { code: match[1], exp };
+  }
+
+  function clearPairingFragment() {
+    try {
+      if (typeof history !== "undefined" && history.replaceState) {
+        history.replaceState(null, "", (window.location.pathname || "/") + (window.location.search || ""));
+      } else {
+        window.location.hash = "";
+      }
+    } catch { /* the code is never written to durable storage */ }
+  }
+
+  function base64UrlToBytes(value) {
+    if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) return null;
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+    let bits = "";
+    for (const character of normalized) {
+      const index = alphabet.indexOf(character);
+      if (index < 0) return null;
+      bits += index.toString(2).padStart(6, "0");
+    }
+    const bytes = [];
+    for (let index = 0; index + 8 <= bits.length; index += 8) bytes.push(parseInt(bits.slice(index, index + 8), 2));
+    return new Uint8Array(bytes);
   }
 
   function updateControls() {
@@ -201,6 +243,101 @@
         } : undefined);
       } catch { /* authorizationRejected still fails closed for this key in this page */ }
     }
+  }
+
+  // Authenticated "hello": reuses the SAME non-exportable device HMAC key that
+  // signs commands (no new key distribution). The server returns an ack bound
+  // to our fresh nonce, a server epoch and the paired-device count; we accept
+  // it only after recomputing the MAC ourselves. Fail closed on anything else.
+  async function verifyPairedState() {
+    const record = state.record;
+    if (!record || !record.key || !state.paired || state.verificationInFlight) return false;
+    state.verificationInFlight = true;
+    try {
+      const nonce = randomHex(16);
+      const requestPayload = ["NEXUS-AUREA-REMOTE-V1", record.deviceId, "hello", nonce].join("\n");
+      const requestSignature = await crypto.subtle.sign("HMAC", record.key, new TextEncoder().encode(requestPayload));
+      let response;
+      try {
+        response = await fetchWithTimeout("./api/hello", {
+          method: "POST",
+          cache: "no-store",
+          credentials: "omit",
+          referrerPolicy: "no-referrer",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            deviceId: record.deviceId,
+            nonce,
+            signature: bytesToBase64Url(new Uint8Array(requestSignature)),
+          }),
+        });
+      } catch { return false; }
+      if (!response.ok) return false;
+      let ack;
+      try { ack = await response.json(); } catch { return false; }
+      if (!ack || ack.nonce !== nonce
+        || !Number.isSafeInteger(ack.serverEpoch) || ack.serverEpoch <= 0
+        || !Number.isSafeInteger(ack.pairedDeviceCount) || ack.pairedDeviceCount < 1) return false;
+      const ackPayload = [
+        "NEXUS-AUREA-REMOTE-V1", record.deviceId, "hello-ack",
+        String(ack.serverEpoch), String(ack.pairedDeviceCount), nonce,
+      ].join("\n");
+      const expected = new Uint8Array(await crypto.subtle.sign("HMAC", record.key, new TextEncoder().encode(ackPayload)));
+      const received = base64UrlToBytes(ack.signature);
+      if (!received || received.length !== expected.length) return false;
+      let diff = 0;
+      for (let index = 0; index < expected.length; index += 1) diff |= expected[index] ^ received[index];
+      return diff === 0;
+    } catch {
+      return false;
+    } finally {
+      state.verificationInFlight = false;
+    }
+  }
+
+  // Wi-Fi reconnect (app resumed to the foreground): bounded exponential
+  // backoff, then a FRESH signed status verification. No queued command is ever
+  // replayed (sendCommand is only ever called by a direct user action).
+  function reconnectDelayMs(attempt) {
+    if (attempt >= RECONNECT_MAX_ATTEMPTS) return 0;
+    return Math.min(400 * 2 ** attempt, 10_000);
+  }
+
+  async function reconnectStep(attempt, requirePriorVerification) {
+    if (!state.secure || !navigator.onLine || !state.hasConnected) return;
+    await refreshStatus();
+    if (!state.serverReady) {
+      if (attempt + 1 < RECONNECT_MAX_ATTEMPTS) {
+        setTimeout(() => { void reconnectStep(attempt + 1, requirePriorVerification); }, reconnectDelayMs(attempt));
+      }
+      return;
+    }
+    // A fresh foreground session always re-verifies; a plain `online` event
+    // only re-verifies a session that was already verified (first load keeps
+    // the existing server-confirmed-record behaviour).
+    if (state.paired && state.record && (!requirePriorVerification || state.verified)) {
+      const ok = await verifyPairedState();
+      state.verified = ok;
+      if (!ok) {
+        state.paired = false;
+        pairingForm.hidden = false;
+        pairingState.textContent = "wymagane ponowne parowanie";
+        setConnectionState("wymagane parowanie", "needs-pairing");
+        showMessage("Nie udało się zweryfikować sparowanego stanu podpisem urządzenia. Sparuj iPhone'a ponownie.", true);
+      } else {
+        pairingState.textContent = "sparowane · zweryfikowane";
+        showMessage("Stan sparowania zweryfikowany podpisem urządzenia.");
+      }
+      updateControls();
+    }
+  }
+
+  function onReconnect(requirePriorVerification = false) {
+    if (!state.secure || !navigator.onLine || !state.hasConnected) {
+      void refreshStatus();
+      return;
+    }
+    void reconnectStep(0, requirePriorVerification);
   }
 
   async function refreshStatus() {
@@ -409,9 +546,12 @@
       }
       state.record = record;
       state.paired = true;
+      state.verified = true;
       state.rejectedUnconfirmedRecord = false;
       state.authorizationRejected = false;
       state.rejectedRecord = null;
+      const codeInput = document.getElementById("pairing-code");
+      if (codeInput) codeInput.value = "";
       pairingForm.hidden = true;
       pairedCount.textContent = String(Number(pairedCount.textContent || "0") + 1);
       pairingState.textContent = "sparowane";
@@ -495,6 +635,7 @@
       if (requestId !== commandRequestId) return;
       if (response.status === 401) {
         state.authorizationRejected = true;
+        state.verified = false;
         state.rejectedRecord = { deviceId: record.deviceId, credentialGeneration: record.credentialGeneration };
         state.record = null;
         state.paired = false;
@@ -568,6 +709,12 @@
     }
   });
 
+  // Read and clear the short-lived fragment once, on every load. The value is
+  // a transient prefill hint only; clearing prevents a later navigation from
+  // reusing the code.
+  const fragmentPairing = readPairingFragment();
+  clearPairingFragment();
+
   if (!state.secure || !window.crypto?.subtle || !window.indexedDB) {
     state.secure = false;
     showMessage("Ten iPhone nie udostępnia bezpiecznego HTTPS, WebCrypto i IndexedDB. Pilot pozostaje wyłączony.", true);
@@ -575,6 +722,12 @@
     pairingForm.addEventListener("submit", pair);
     for (const button of commandButtons) {
       button.addEventListener("click", () => void sendCommand(button.dataset.command));
+    }
+    if (fragmentPairing) {
+      const codeInput = document.getElementById("pairing-code");
+      if (codeInput) codeInput.value = fragmentPairing.code;
+      const fragmentNote = document.getElementById("pairing-fragment-note");
+      if (fragmentNote) fragmentNote.hidden = false;
     }
     void refreshStatus();
     if ("serviceWorker" in navigator) {
@@ -589,9 +742,9 @@
     commandRequestId += 1;
     showOfflineStatus();
   });
-    window.addEventListener("online", () => void refreshStatus());
+    window.addEventListener("online", () => onReconnect(true));
     retryButton?.addEventListener("click", () => void refreshStatus());
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") void refreshStatus();
+    if (document.visibilityState === "visible") void onReconnect();
   });
 })();

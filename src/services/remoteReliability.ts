@@ -369,3 +369,378 @@ export function createRemoteTransportAdapter(deps: RemoteTransportDeps): RemoteT
 export function safePairingReset(): { clearStoredRecord: boolean; requireReverify: boolean } {
   return { clearStoredRecord: true, requireReverify: true };
 }
+
+/* ------------------------------------------------------------------------- *
+ * Signed paired-state verification ("hello")
+ *
+ * Why reuse the device HMAC: the paired iPhone already holds one non-exportable
+ * WebCrypto HMAC key (the same one that signs commands). A "hello" request and
+ * its acknowledgment are MACs over fresh, non-sensitive fields using THAT key.
+ * There is no second key, no certificate change and no key distribution step —
+ * only a fresh client nonce per check. The LAN `/api/status` stays anonymous
+ * (booleans/counts); `/api/hello` is authenticated and read-only.
+ * ------------------------------------------------------------------------- */
+
+export interface SignedHelloStatus {
+  nonce: string;
+  serverEpoch: number;
+  pairedDeviceCount: number;
+  /** base64url HMAC over the ack payload, made with the paired device token. */
+  signature: string;
+}
+
+export interface SignedHelloVerification {
+  deviceId: string;
+  nonce: string;
+  status: SignedHelloStatus;
+  /** Computes HMAC-SHA256 over a payload with the paired device key. */
+  computeMac: (payload: string) => Promise<Uint8Array>;
+}
+
+export function helloRequestPayload(deviceId: string, nonce: string): string {
+  return `NEXUS-AUREA-REMOTE-V1\n${deviceId}\nhello\n${nonce}`;
+}
+
+export function helloAckPayload(
+  deviceId: string,
+  serverEpoch: number,
+  pairedDeviceCount: number,
+  nonce: string,
+): string {
+  return `NEXUS-AUREA-REMOTE-V1\n${deviceId}\nhello-ack\n${serverEpoch}\n${pairedDeviceCount}\n${nonce}`;
+}
+
+function decodeBase64Url(value: string): Uint8Array | null {
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) return null;
+  try {
+    const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+
+function constantTimeEquals(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let index = 0; index < a.length; index += 1) diff |= a[index] ^ b[index];
+  return diff === 0;
+}
+
+/**
+ * Verifies a signed hello acknowledgment. FAILS CLOSED: the nonce must match
+ * the one we sent, the epoch/count must be sane, and the MAC must cover exactly
+ * the fields we bound. `computeMac` is injected (WebCrypto sign in the PWA).
+ */
+export async function verifySignedHello(input: SignedHelloVerification): Promise<boolean> {
+  const { deviceId, nonce, status, computeMac } = input;
+  if (!/^[0-9a-f]{32}$/.test(nonce) || status.nonce !== nonce) return false;
+  if (!Number.isSafeInteger(status.serverEpoch) || status.serverEpoch <= 0) return false;
+  if (!Number.isSafeInteger(status.pairedDeviceCount) || status.pairedDeviceCount < 1) return false;
+  const received = decodeBase64Url(status.signature);
+  if (!received || received.length !== 32) return false;
+  const expected = await computeMac(
+    helloAckPayload(deviceId, status.serverEpoch, status.pairedDeviceCount, nonce),
+  );
+  return constantTimeEquals(expected, received);
+}
+
+/** Bounded exponential backoff schedule for reconnect verification. */
+export interface ReconnectVerificationResult {
+  statusVerified: boolean;
+  pairedVerified: boolean;
+  attempts: number;
+}
+
+/**
+ * Drives a reconnect: re-fetch status with bounded exponential backoff, then
+ * re-verify the paired state with a FRESH signed hello (`verifyPaired` is
+ * injected — the PWA supplies the real WebCrypto MAC over a fresh nonce).
+ * The anonymous LAN status alone never marks a device "paired & trusted".
+ *
+ * NEVER replays a queued command: this driver has no command sink at all and
+ * `shouldReplayOnReconnect` stays false. A 401 fails closed immediately.
+ */
+export async function verifyReconnect(deps: {
+  maxAttempts: number;
+  fetchStatus: () => Promise<{
+    ok: boolean;
+    status: number;
+    json: () => Promise<{ enabled: boolean; pairedDeviceCount: number }>;
+  }>;
+  verifyPaired: () => Promise<boolean>;
+  delayMs: (attempt: number) => number;
+  wait: (ms: number) => Promise<void>;
+}): Promise<ReconnectVerificationResult> {
+  const maxAttempts = Math.max(1, Math.min(8, Math.floor(deps.maxAttempts)));
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (attempt > 0) await deps.wait(deps.delayMs(attempt));
+    try {
+      const response = await deps.fetchStatus();
+      if (response.status === 401) {
+        return { statusVerified: false, pairedVerified: false, attempts: attempt + 1 };
+      }
+      if (!response.ok) continue;
+      const body = await response.json();
+      if (body.enabled !== true) continue;
+      // Paired state is trusted ONLY after a separate authenticated verification.
+      const pairedVerified = await deps.verifyPaired();
+      return { statusVerified: true, pairedVerified, attempts: attempt + 1 };
+    } catch {
+      // Bounded retry with fail-closed semantics.
+    }
+  }
+  return { statusVerified: false, pairedVerified: false, attempts: maxAttempts };
+}
+
+/* ------------------------------------------------------------------------- *
+ * QR-assisted short-lived pairing
+ *
+ * The QR carries ONLY the HTTPS origin, the one-time 6-digit code and a short
+ * `exp` hint — placed in the URL FRAGMENT so a browser never sends it in an
+ * HTTP request and the server never writes it to an access log. No device id,
+ * device token, CA key, signature or other credential is ever encoded here.
+ * The server remains the sole authority on the code's bounded (<=60s),
+ * single-use validity; `exp` is only a client-side prefill hint.
+ * ------------------------------------------------------------------------- */
+
+export type PairingBootstrap = {
+  origin: string;
+  code: string;
+  /** Unix seconds (client-side hint only). */
+  exp: number;
+};
+
+export function buildPairingBootstrapUrl(
+  origin: string,
+  code: string,
+  expiresAtMs: number,
+): string {
+  const cleanOrigin = origin.replace(/\/+$/, "");
+  const exp = Math.floor(expiresAtMs / 1000);
+  return `${cleanOrigin}/#pair=${code}&exp=${exp}`;
+}
+
+/** Parses ONLY the strict `https://host/#pair=NNNNNN&exp=UNIX` shape. */
+export function parsePairingBootstrapUrl(value: string): PairingBootstrap | null {
+  const match = /^(https:\/\/[^\/#]+)\/#pair=(\d{6})&exp=(\d{1,12})$/.exec(value);
+  if (!match) return null;
+  return { origin: match[1], code: match[2], exp: Number(match[3]) };
+}
+
+/** Seconds left on the one-time code, never negative. */
+export function pairingRemainingSeconds(expiresAtMs: number, nowMs: number): number {
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= 0 || !Number.isFinite(nowMs)) return 0;
+  return Math.max(0, Math.ceil((expiresAtMs - nowMs) / 1000));
+}
+
+export function formatPairingCountdown(seconds: number): string {
+  return `${Math.max(0, Math.floor(seconds))}s`;
+}
+
+/* Minimal, self-contained QR encoder: byte mode, ECC level L, versions 1-6.
+ * No dependency and no network/storage access — the input is the short
+ * bootstrap URL built above. Kept small so it stays auditable. */
+
+const QR_RAW_CODEWORDS: Readonly<Record<number, number>> = { 1: 26, 2: 44, 3: 70, 4: 100, 5: 134, 6: 172 };
+const QR_ECC_PER_BLOCK: Readonly<Record<number, number>> = { 1: 7, 2: 10, 3: 15, 4: 20, 5: 26, 6: 18 };
+const QR_NUM_BLOCKS: Readonly<Record<number, number>> = { 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 2 };
+const QR_ALIGNMENT: Readonly<Record<number, readonly number[]>> = {
+  1: [], 2: [6, 18], 3: [6, 22], 4: [6, 26], 5: [6, 30], 6: [6, 34],
+};
+
+function gfMultiply(x: number, y: number): number {
+  let z = 0;
+  for (let i = 7; i >= 0; i -= 1) {
+    z = ((z << 1) ^ ((z >>> 7) * 0x11d)) & 0xff;
+    z ^= ((y >>> i) & 1) * x;
+  }
+  return z & 0xff;
+}
+
+function rsDivisor(degree: number): number[] {
+  const result = new Array<number>(degree).fill(0);
+  result[degree - 1] = 1;
+  let root = 1;
+  for (let i = 0; i < degree; i += 1) {
+    for (let j = 0; j < degree; j += 1) {
+      result[j] = gfMultiply(result[j], root);
+      if (j + 1 < degree) result[j] ^= result[j + 1];
+    }
+    root = gfMultiply(root, 0x02);
+  }
+  return result;
+}
+
+function rsRemainder(data: number[], divisor: number[]): number[] {
+  const result = new Array<number>(divisor.length).fill(0);
+  for (const byte of data) {
+    const factor = byte ^ result[0];
+    result.shift();
+    result.push(0);
+    for (let i = 0; i < result.length; i += 1) result[i] ^= gfMultiply(divisor[i], factor);
+  }
+  return result;
+}
+
+function toUtf8Bytes(text: string): number[] {
+  const bytes: number[] = [];
+  for (let i = 0; i < text.length; i += 1) {
+    let code = text.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length) {
+      const low = text.charCodeAt(i + 1);
+      if (low >= 0xdc00 && low <= 0xdfff) {
+        code = 0x10000 + ((code - 0xd800) << 10) + (low - 0xdc00);
+        i += 1;
+      }
+    }
+    if (code < 0x80) bytes.push(code);
+    else if (code < 0x800) bytes.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
+    else if (code < 0x10000) bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+    else bytes.push(0xf0 | (code >> 18), 0x80 | ((code >> 12) & 0x3f), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+  }
+  return bytes;
+}
+
+function qrCodewords(version: number, bytes: number[]): number[] {
+  const raw = QR_RAW_CODEWORDS[version];
+  const ecc = QR_ECC_PER_BLOCK[version];
+  const blocks = QR_NUM_BLOCKS[version];
+  const dataCapacity = raw - ecc * blocks;
+  const bits: number[] = [];
+  const append = (value: number, length: number): void => {
+    for (let i = length - 1; i >= 0; i -= 1) bits.push((value >>> i) & 1);
+  };
+  append(0b0100, 4); // byte mode
+  append(bytes.length, 8);
+  for (const byte of bytes) append(byte, 8);
+  append(0, Math.min(4, dataCapacity * 8 - bits.length));
+  while (bits.length % 8 !== 0) bits.push(0);
+  const data: number[] = [];
+  for (let i = 0; i < bits.length; i += 8) {
+    let byte = 0;
+    for (let j = 0; j < 8; j += 1) byte = (byte << 1) | bits[i + j];
+    data.push(byte);
+  }
+  for (let i = 0; data.length < dataCapacity; i += 1) data.push(i % 2 === 0 ? 0xec : 0x11);
+
+  const shortBlocks = blocks - (raw % blocks);
+  const shortLen = Math.floor(raw / blocks);
+  const divisor = rsDivisor(ecc);
+  const blockList: number[][] = [];
+  let offset = 0;
+  for (let i = 0; i < blocks; i += 1) {
+    const dataLen = shortLen - ecc + (i < shortBlocks ? 0 : 1);
+    const blockData = data.slice(offset, offset + dataLen);
+    offset += dataLen;
+    const cell = blockData.slice();
+    if (i < shortBlocks) cell.push(0); // alignment placeholder, skipped when interleaving
+    cell.push(...rsRemainder(blockData, divisor));
+    blockList.push(cell);
+  }
+  const result: number[] = [];
+  for (let i = 0; i < blockList[0].length; i += 1) {
+    for (let j = 0; j < blocks; j += 1) {
+      if (i !== shortLen - ecc || j >= shortBlocks) result.push(blockList[j][i]);
+    }
+  }
+  return result;
+}
+
+function qrMatrix(version: number, codewords: number[]): boolean[][] {
+  const size = version * 4 + 17;
+  const modules: boolean[][] = Array.from({ length: size }, () => new Array<boolean>(size).fill(false));
+  const isFunction: boolean[][] = Array.from({ length: size }, () => new Array<boolean>(size).fill(false));
+  const setFunction = (x: number, y: number, dark: boolean): void => {
+    if (x < 0 || y < 0 || x >= size || y >= size) return;
+    modules[y][x] = dark;
+    isFunction[y][x] = true;
+  };
+
+  for (let i = 0; i < size; i += 1) {
+    setFunction(6, i, i % 2 === 0);
+    setFunction(i, 6, i % 2 === 0);
+  }
+  const drawFinder = (cx: number, cy: number): void => {
+    for (let dy = -4; dy <= 4; dy += 1) {
+      for (let dx = -4; dx <= 4; dx += 1) {
+        const dist = Math.max(Math.abs(dx), Math.abs(dy));
+        setFunction(cx + dx, cy + dy, dist !== 2 && dist !== 4);
+      }
+    }
+  };
+  drawFinder(3, 3);
+  drawFinder(size - 4, 3);
+  drawFinder(3, size - 4);
+
+  const positions = QR_ALIGNMENT[version];
+  for (const y of positions) {
+    for (const x of positions) {
+      if ((x === 6 && y === 6) || (x === 6 && y === size - 7) || (x === size - 7 && y === 6)) continue;
+      for (let dy = -2; dy <= 2; dy += 1) {
+        for (let dx = -2; dx <= 2; dx += 1) {
+          setFunction(x + dx, y + dy, Math.max(Math.abs(dx), Math.abs(dy)) !== 1);
+        }
+      }
+    }
+  }
+
+  // Format bits for ECC level L (format id 1) with fixed mask 0. A fixed,
+  // declared mask is a valid QR code: decoders read the format info to undo it.
+  const formatData = (1 << 3) | 0;
+  let rem = formatData;
+  for (let i = 0; i < 10; i += 1) rem = (rem << 1) ^ ((rem >>> 9) * 0x537);
+  const formatBits = (((formatData << 10) | rem) ^ 0x5412) & 0x7fff;
+  const formatBit = (index: number): boolean => ((formatBits >>> index) & 1) !== 0;
+  for (let i = 0; i <= 5; i += 1) setFunction(8, i, formatBit(i));
+  setFunction(8, 7, formatBit(6));
+  setFunction(8, 8, formatBit(7));
+  setFunction(7, 8, formatBit(8));
+  for (let i = 9; i < 15; i += 1) setFunction(14 - i, 8, formatBit(i));
+  for (let i = 0; i < 8; i += 1) setFunction(size - 1 - i, 8, formatBit(i));
+  for (let i = 8; i < 15; i += 1) setFunction(8, size - 15 + i, formatBit(i));
+  setFunction(8, size - 8, true);
+
+  let index = 0;
+  let right = size - 1;
+  while (right >= 1) {
+    if (right === 6) right = 5;
+    for (let vert = 0; vert < size; vert += 1) {
+      for (let j = 0; j < 2; j += 1) {
+        const x = right - j;
+        const upward = ((right + 1) & 2) === 0;
+        const y = upward ? size - 1 - vert : vert;
+        if (!isFunction[y][x] && index < codewords.length * 8) {
+          modules[y][x] = ((codewords[index >>> 3] >>> (7 - (index & 7))) & 1) !== 0;
+          index += 1;
+        }
+      }
+    }
+    right -= 2;
+  }
+
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      if (!isFunction[y][x] && (x + y) % 2 === 0) modules[y][x] = !modules[y][x];
+    }
+  }
+  return modules;
+}
+
+/** Encodes text into a boolean QR module matrix (true = dark). */
+export function encodeQrMatrix(text: string): boolean[][] {
+  const bytes = toUtf8Bytes(text);
+  let version = 1;
+  for (let v = 1; v <= 6; v += 1) {
+    version = v;
+    const capacity = QR_RAW_CODEWORDS[v] - QR_ECC_PER_BLOCK[v] * QR_NUM_BLOCKS[v];
+    if (bytes.length + 2 <= capacity) break;
+  }
+  const capacity = QR_RAW_CODEWORDS[version] - QR_ECC_PER_BLOCK[version] * QR_NUM_BLOCKS[version];
+  if (bytes.length + 2 > capacity) throw new Error("QR payload too large for the supported versions.");
+  return qrMatrix(version, qrCodewords(version, bytes));
+}
