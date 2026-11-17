@@ -34,8 +34,22 @@ No merge to `main`; no merge/close of PR #62/#63/#64 unless explicitly re-author
 | `work/s2-5-c-home-continuity` | `C:\Users\milos\velora-wt-s25c` | Agent C | S2.5-C Home/session continuity | in progress |
 | `work/s2-5-d-geometry` | `C:\Users\milos\velora-wt-s25d` | Agent D | S2.5-D 4K geometry | in progress |
 | `work/s2-6-iphone-remote-3` | `C:\Users\milos\velora-wt-s26` | Agent E | S2.6 iPhone Remote 3.0 | in progress |
+| `work/s2-7-cinema-streaming` | `C:\Users\milos\velora-wt-s27` | Agent F | S2.7 Cinema/streaming lifecycle | in progress |
 
-Shared Cargo target dir `C:\Users\milos\velora-hy4\src-tauri\target` is used by all agents to avoid triple dependency compilation. Sprints S2.7 (Cinema) and S2.8 (Reliability/Release) are queued. Do not exceed ~4 concurrent heavy agents.
+Shared Cargo target dir `C:\Users\milos\velora-hy4\src-tauri\target` is used by all agents to avoid triple dependency compilation. Do not exceed ~4 concurrent heavy agents.
+
+## Integrated evidence so far (main branch `feat/hy4-s2-5`)
+
+| Check | Result |
+|---|---|
+| Frontend full suite (`pnpm test`) | **110 files / 991 tests PASS** (baseline 109/980) |
+| Frontend build (`pnpm build` = tsc -b + vite build) | PASS |
+| Rust full suite (`cargo test --lib`, src-tauri) | **455 passed / 0 failed / 3 ignored** (baseline 450) |
+| Rust S2.5-D slice | `display_audio` 13 PASS + 1 ignored live probe; `tv_mode` 3 PASS |
+| Rust diagnostics slice | 9 PASS |
+| Draft PR | **#65** `feat/hy4-s2-5` → `integration/velora-2-s2-3-s2-4` (DRAFT, open) |
+
+Commits on `feat/hy4-s2-5`: `1ff333b` (diagnostics redaction), `06daedb` (merge S2.5-D `3dd1238`), `95b7251` (CI soak), `10e35d9` (soak import fix), `d658778` (security review doc). Agent branches A/C/E/F had not committed at this checkpoint.
 
 ## S2.5 — Controller Intelligence (in progress)
 
