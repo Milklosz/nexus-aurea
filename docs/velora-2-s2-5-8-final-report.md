@@ -43,10 +43,14 @@ appendix and the progress checkpoint.
 - `Windows / Playnite extension (net462)`: **PASS** (35 s).
 - `macos-latest / React, Tauri, Rust`: **PASS** (3 m 20 s) — includes `pnpm test`, soak,
   provenance, `cargo test --lib`, `pnpm build`, `git diff --check`, macOS Tauri build.
-- `windows-latest / React, Tauri, Rust`: all test steps passed (including the new soak gate,
-  Rust unit tests, `pnpm build`, `git diff --check`, locked MSVC check). The NSIS installer and
-  provenance packaging steps were still running at report time; their result is not claimed here.
+- `windows-latest / React, Tauri, Rust`: **PASS (5 m 53 s)** — all test steps including the new
+  soak gate, Rust unit tests, `pnpm build`, `git diff --check` and locked MSVC check, plus the
+  Windows x64 NSIS installer build, provenance write/verify/release preview and installer artifact
+  upload.
 - Local `cargo check --locked --target x86_64-pc-windows-msvc`: PASS (pre-existing warnings only).
+- CI run `44191168364` (PR event) and `44191154859` (push event) both passed the test jobs; the
+  Windows packaging result above is from the PR run. CI is an integrity/automation gate, not a
+  digital signature or hardware acceptance.
 
 ## What remains unverified (NOT TESTED — no claim made)
 
