@@ -4,6 +4,7 @@ import { NativeControllerStatus } from "./NativeControllerStatus";
 import type { FocusOwner } from "../services/focusOwnership";
 import { ControlServicePanel } from "./ControlServicePanel";
 import { SystemDiagnosticsPanel } from "./SystemDiagnosticsPanel";
+import { ControllerSimulator } from "./ControllerSimulator";
 import { AppManagerPanel } from "./AppManagerPanel";
 import { CinemaPanel } from "./CinemaPanel";
 import { MusicPanel } from "./MusicPanel";
@@ -89,6 +90,7 @@ export function GamepadDiagnostics({
     <p>Naciśnij przycisk pada, gdy VELORA ma fokus. Windows może wykrywać urządzenie, zanim udostępni je Gamepad API.</p>
     <p>← / → lub lewy analog porusza fokusem. ✕ wybiera, ◯ wraca, Options otwiera Control Center. F2 otwiera diagnostykę. Przytrzymanie kierunku powtarza ruch.</p>
     <NativeControllerStatus gamepadApiPadCount={pads.length} getFocusOwner={getFocusOwner} returnTo={focusReturnTo} />
+    <ControllerSimulator />
     <button type="button" data-remote-allow="" onClick={cycleProfile}>Mapowanie: {profileLabels[profile]} · zmień</button>
     {pads.map(pad => {
       const resolvedProfile = resolveControllerProfile(pad, profile);
