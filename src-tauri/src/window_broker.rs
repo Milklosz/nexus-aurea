@@ -2230,4 +2230,84 @@ mod handoff_and_session_end_tests {
         assert_eq!(value["granted"], 1);
         assert_eq!(value["notForeground"], false);
     }
+
+    /// Repeated session ends: automatic focus recovery is allowed only for the
+    /// desktop, VELORA, Playnite, or the exact process that just ended. An
+    /// unrelated app in front — including a recycled PID — always wins, so
+    /// VELORA never steals focus after a Cinema close/crash.
+    #[test]
+    fn soak_repeated_session_ends_restore_only_for_safe_foreground() {
+        for iteration in 0..64u32 {
+            let own_pid = OWN_PID + iteration;
+            let ended_pid = STEAM_PID + iteration;
+            let created = STEAM_CREATED + iteration as u64;
+            let ended = owners(&[(ended_pid, created)]);
+            let none = HashSet::new();
+
+            // Desktop / own process / Playnite → Allowed.
+            assert_eq!(
+                decide(&foreground(None, None), None, &ended, &none),
+                RestoreDecision::Allow,
+                "iteration {iteration}: empty foreground is safe"
+            );
+            assert_eq!(
+                decide(
+                    &foreground(Some(own_pid), Some("velora.exe")),
+                    None,
+                    &ended,
+                    &none
+                ),
+                RestoreDecision::Allow,
+                "iteration {iteration}: own process is safe"
+            );
+
+            // The exact ended owner (matching creation time) may keep focus.
+            assert_eq!(
+                decide(
+                    &foreground(Some(ended_pid), Some("msedge.exe")),
+                    Some(created),
+                    &ended,
+                    &none
+                ),
+                RestoreDecision::Allow,
+                "iteration {iteration}: the ended session's own process is safe"
+            );
+
+            // An unrelated app, or the same PID recycled with a new creation
+            // time, is never allowed to be taken over.
+            assert_eq!(
+                decide(
+                    &foreground(Some(ended_pid + 1), Some("chrome.exe")),
+                    Some(created + 1),
+                    &ended,
+                    &none
+                ),
+                RestoreDecision::Blocked(RestoreOutcome::BlockedUnsafeForeground),
+                "iteration {iteration}: unrelated foreground must win"
+            );
+            assert_eq!(
+                decide(
+                    &foreground(Some(ended_pid), Some("chrome.exe")),
+                    Some(created + 1),
+                    &ended,
+                    &none
+                ),
+                RestoreDecision::Blocked(RestoreOutcome::BlockedUnsafeForeground),
+                "iteration {iteration}: a recycled PID must not inherit the grant"
+            );
+
+            // A tracked process belonging to a different live launch is still
+            // not a reason to pull focus to VELORA after this session ended.
+            assert_eq!(
+                decide(
+                    &foreground(Some(ended_pid + 2), Some("chrome.exe")),
+                    Some(created),
+                    &ended,
+                    &HashSet::from([ended_pid + 2])
+                ),
+                RestoreDecision::Blocked(RestoreOutcome::BlockedUnsafeForeground),
+                "iteration {iteration}: another launch's process stays untouched"
+            );
+        }
+    }
 }
