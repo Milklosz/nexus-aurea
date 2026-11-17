@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { IDLE_CINEMA_SESSION, VELORA_EVENTS, idempotencyKey } from "../contracts";
+import {
+  IDLE_CINEMA_SESSION,
+  VELORA_EVENTS,
+  idempotencyKey,
+  type CinemaSession,
+} from "../contracts";
 
 const mocks = vi.hoisted(() => ({
   isTauri: vi.fn(() => true),
@@ -285,6 +292,21 @@ describe("edgeCinemaLifecycleErrorMessage", () => {
     );
     expect(leaky).not.toMatch(/C:\\|0x|os error| at /i);
   });
+
+  it("maps protected-content, site-change and navigation failures to calm, honest guidance", () => {
+    const protectedNotice = edgeCinemaLifecycleErrorMessage("Treść chroniona — PlayReady error");
+    expect(protectedNotice).toMatch(/nie omija zabezpieczeń/);
+    expect(protectedNotice).toMatch(/nie gwarantuje odtwarzania/);
+    expect(protectedNotice).not.toMatch(/kompatybiln|sprawdzon/i);
+
+    const siteNotice = edgeCinemaLifecycleErrorMessage("Strona usługi zmieniła adres");
+    expect(siteNotice).toMatch(/oficjalny adres/);
+    expect(siteNotice).not.toMatch(/kompatybiln|sprawdzon/i);
+
+    const navNotice = edgeCinemaLifecycleErrorMessage("navigation failed");
+    expect(navNotice).toMatch(/Sprawdź połączenie/);
+    expect(navNotice).toMatch(/nie gwarantuje/);
+  });
 });
 
 describe("normalizeCinemaSession", () => {
@@ -298,5 +320,108 @@ describe("normalizeCinemaSession", () => {
     const session = normalizeCinemaSession({ state: "error", lastError: "boom\nC:\\secret" });
     expect(session.lastError?.code).toBe("edge-error");
     expect(session.lastError?.message).not.toMatch(/\n/);
+  });
+});
+
+/**
+ * Deterministic simulated workflows: repeated Home → launch → close/crash →
+ * restore → Home cycles driven purely through the adapter's pure helpers. No
+ * native calls are made, so the assertions are stable on any machine.
+ */
+describe("Edge Cinema Lifecycle — deterministic workflows", () => {
+  it("normalizes injected/tampered state to a safe idle record across every cycle", () => {
+    const tampered: unknown[] = [
+      { state: "HACKED", managedByVelora: true, pid: 7 },
+      { state: null },
+      { state: 42 },
+      { state: "active\u0000" },
+      { state: "__proto__" },
+      { state: "ACTIVE", managedByVelora: "true", pid: -5, sessionId: {} },
+      [],
+      "active",
+      null,
+      undefined,
+    ];
+    for (let cycle = 0; cycle < 64; cycle++) {
+      for (const value of tampered) {
+        // The state is the security boundary: anything outside the whitelist
+        // (or any non-object input) always collapses to idle.
+        expect(normalizeCinemaSession(value).status).toBe("idle");
+      }
+    }
+    // Other fields are sanitized by type, independently of the state.
+    const sanitized = normalizeCinemaSession({
+      state: "ACTIVE",
+      managedByVelora: "true",
+      pid: -5,
+      sessionId: {},
+      lastError: 42,
+    });
+    expect(sanitized.pid).toBeNull();
+    expect(sanitized.sessionId).toBeNull();
+    expect(sanitized.managedByVelora).toBe(false);
+    expect(sanitized.lastError).toBeNull();
+
+    // A genuine active wire from the native layer is preserved.
+    expect(normalizeCinemaSession({ ...validWire, state: "active" }).status).toBe("active");
+  });
+
+  it("offers no duplicate launch while a managed session is active, across repeated transitions", () => {
+    const states: CinemaSession["status"][] = [
+      "idle", "launching", "active", "closing", "exited", "error",
+    ];
+    for (let cycle = 0; cycle < 64; cycle++) {
+      for (const status of states) {
+        for (const managedByVelora of [true, false]) {
+          const session: CinemaSession = { ...IDLE_CINEMA_SESSION, status, managedByVelora };
+          expect(shouldBlockDuplicateLaunch(session)).toBe(
+            (status === "active" || status === "launching") && managedByVelora,
+          );
+        }
+      }
+    }
+  });
+
+  it("holds the restoration predicate only at terminal, managed transitions", () => {
+    const base: CinemaSession = { ...IDLE_CINEMA_SESSION, managedByVelora: true };
+    const expectations: Array<[CinemaSession["status"], boolean]> = [
+      ["active", false],
+      ["launching", false],
+      ["closing", false],
+      ["exited", true],
+      ["idle", false],
+      ["active", false],
+      ["error", true],
+      ["idle", false],
+    ];
+    for (let cycle = 0; cycle < 64; cycle++) {
+      for (const [status, expected] of expectations) {
+        expect(shouldRestoreVeloraOnExit({ ...base, status })).toBe(expected);
+      }
+    }
+    // The native launch registry ends a session once; this predicate is only a
+    // pure signal and never calls focus itself.
+    expect(shouldRestoreVeloraOnExit({ ...base, status: "exited", managedByVelora: false })).toBe(false);
+    expect(shouldRestoreVeloraOnExit({ ...base, status: "active" })).toBe(false);
+    expect(mocks.invoke).not.toHaveBeenCalled();
+  });
+
+  it("does not add a second focus path — the native broker owns focus", () => {
+    const source = readFileSync(
+      resolve(process.cwd(), "src/services/edgeCinemaLifecycle.ts"),
+      "utf8",
+    );
+    for (const api of [
+      "setFocus",
+      "setForegroundWindow",
+      "request_foreground",
+      "restore_velora_window",
+      "AttachThreadInput",
+      "SendInput",
+    ]) {
+      expect(source).not.toMatch(new RegExp(`\\b${api}\\b`));
+    }
+    // The only window helper used is fullscreen on VELORA's own window.
+    expect(source).toContain("windowMode");
   });
 });

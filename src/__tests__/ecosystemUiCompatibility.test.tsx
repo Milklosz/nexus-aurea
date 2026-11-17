@@ -93,6 +93,23 @@ describe("Ecosystem — kompatybilność z dotychczasowym UI", () => {
     expect(isOfficialHttpsUrl("https://www.netflix.com@evil.example/", "www.netflix.com")).toBe(false);
   });
 
+  it("wartości pięciu profili pozostają niezmienione, a lookalike jest odrzucany przed invoke", async () => {
+    const web = streamingServices.filter((service) => service.kind === "web") as WebStreamingService[];
+    expect(web.map((service) => [service.id, service.href, service.allowedHost])).toEqual([
+      ["netflix", "https://www.netflix.com/pl/", "www.netflix.com"],
+      ["disney", "https://www.disneyplus.com/pl-pl", "www.disneyplus.com"],
+      ["max", "https://www.hbomax.com/pl/pl", "www.hbomax.com"],
+      ["prime", "https://www.primevideo.com/-/pl_PL/?tr=pl", "www.primevideo.com"],
+      ["youtube", "https://www.youtube.com/", "www.youtube.com"],
+    ]);
+    const lookalike: WebStreamingService = {
+      ...web[0],
+      href: "https://www.netflix.com.evil.example/pl/",
+    };
+    await expect(openStreamingService(lookalike)).rejects.toThrow(/zaufanych stron/);
+    expect(mocks.invoke).not.toHaveBeenCalled();
+  });
+
   it("niezaufany adres jest odrzucany przed wywołaniem invoke", async () => {
     const untrusted: WebStreamingService = {
       ...webService,

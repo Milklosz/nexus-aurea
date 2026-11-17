@@ -253,6 +253,79 @@ pub(crate) fn capture(app: &AppHandle) -> DiagnosticsSnapshot {
 /// The report is typed, so this is defense in depth rather than the only gate.
 /// A line that contains a private-path marker is redacted as a whole: splitting
 /// on whitespace could leak the second half of a user name containing spaces.
+/// Returns true when one bounded diagnostic line carries material that must not
+/// appear in an exported report: credentials, one-time pairing/bootstrap codes,
+/// device/session identifiers, network addresses or local account identifiers.
+/// This is defense in depth on top of the typed report; it is not a universal
+/// secret detector.
+fn is_sensitive_detail(line: &str, lower: &str) -> bool {
+    const MARKERS: &[&str] = &[
+        "token=",
+        "secret=",
+        "password=",
+        "authorization",
+        "bearer ",
+        "https://",
+        "http://",
+        "\"token\"",
+        "\"secret\"",
+        "\"password\"",
+        // S2.6 short-lived pairing/bootstrap material and remote identity.
+        "pair=",
+        "pairing",
+        "bootstrap",
+        "otp=",
+        "pin=",
+        "qr=",
+        "qrcode",
+        "one-time code",
+        "kod jednorazowy",
+        "deviceid",
+        "device_id",
+        "hmac",
+        "signature",
+        "nonce",
+        "credential",
+        "private key",
+        "-----begin",
+        "cert=",
+        "ca_key",
+    ];
+    if MARKERS.iter().any(|marker| lower.contains(marker)) {
+        return true;
+    }
+    if line
+        .split(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .any(|part| part.parse::<std::net::Ipv4Addr>().is_ok())
+        || line.split_whitespace().any(|part| {
+            part.trim_matches(['[', ']', ',', ';'])
+                .parse::<std::net::Ipv6Addr>()
+                .is_ok()
+        })
+    {
+        return true;
+    }
+    // MAC-48 address (AA:BB:CC:DD:EE:FF) and Windows SIDs identify hardware or accounts.
+    if line.split_whitespace().any(|part| {
+        let groups: Vec<&str> = part
+            .trim_matches(['[', ']', ',', ';', '(', ')'])
+            .split(':')
+            .collect();
+        groups.len() == 6
+            && groups
+                .iter()
+                .all(|g| g.len() == 2 && g.bytes().all(|b| b.is_ascii_hexdigit()))
+    }) {
+        return true;
+    }
+    if lower.contains("s-1-5-") || lower.contains("s-1-12-") {
+        return true;
+    }
+    // An email-like token can leak an account name even without a URL.
+    line.split_whitespace()
+        .any(|part| part.contains('@') && part.contains('.'))
+}
+
 pub(crate) fn sanitize_text(input: &str) -> String {
     let mut output = String::with_capacity(input.len().min(MAX_STRING_CHARS * 2));
     for line in input.lines().take(4) {
@@ -270,25 +343,7 @@ pub(crate) fn sanitize_text(input: &str) -> String {
             || lower.contains("documents and settings");
         if private_path {
             output.push_str("<redacted-path>");
-        } else if lower.contains("token=")
-            || lower.contains("secret=")
-            || lower.contains("password=")
-            || lower.contains("authorization")
-            || lower.contains("bearer ")
-            || lower.contains("https://")
-            || lower.contains("http://")
-            || lower.contains("\"token\"")
-            || lower.contains("\"secret\"")
-            || lower.contains("\"password\"")
-            || line
-                .split(|c: char| !(c.is_ascii_digit() || c == '.'))
-                .any(|part| part.parse::<std::net::Ipv4Addr>().is_ok())
-            || line.split_whitespace().any(|part| {
-                part.trim_matches(['[', ']', ',', ';'])
-                    .parse::<std::net::Ipv6Addr>()
-                    .is_ok()
-            })
-        {
+        } else if is_sensitive_detail(line, &lower) {
             output.push_str("<redacted-detail>");
         } else {
             output.extend(
@@ -463,6 +518,37 @@ mod tests {
             assert!(!json.contains(forbidden));
         }
     }
+    #[test]
+    fn pairing_bootstrap_and_device_material_never_reaches_an_export() {
+        for text in [
+            "https://192.168.0.10:47862/#pair=123456&exp=1731000000",
+            "pair=123456",
+            "#pair=123456",
+            "one-time code 123456",
+            "kod jednorazowy 123456",
+            "bootstrap token for device",
+            "deviceId=0123456789abcdef",
+            "hmac signature abcd nonce ef01",
+            "adapter 00:1A:2B:3C:4D:5E",
+            "owner S-1-5-21-1234-5678",
+            "contact milos@example.com",
+        ] {
+            assert_eq!(
+                super::sanitize_text(text),
+                "<redacted-detail>",
+                "unredacted diagnostic material: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn sanitized_export_stays_bounded_even_with_many_sensitive_lines() {
+        let input = "token=abc\n".repeat(MAX_STRING_CHARS);
+        let sanitized = super::sanitize_text(&input);
+        assert!(sanitized.chars().count() <= MAX_STRING_CHARS * 2 + 1);
+        assert!(!sanitized.contains("abc"));
+    }
+
     use super::{
         sanitize_text, BuildInfo, DiagnosticsError, DiagnosticsSnapshot, MAX_STRING_CHARS,
     };

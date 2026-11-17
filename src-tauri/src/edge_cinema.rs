@@ -1789,4 +1789,169 @@ mod tests {
         assert_eq!(value["sessionId"], "cinema-9");
         assert_eq!(value["managedByVelora"], true);
     }
+
+    /// Deterministic simulation of repeated Home → launch → close/crash →
+    /// restore → Home cycles. Every HWND, PID and creation time is derived from
+    /// the iteration index, so no real process or window is ever touched. It
+    /// re-checks the ownership guards that stop a foreign, recycled or stale
+    /// window being adopted, dispatched to or closed after a new launch.
+    #[test]
+    fn simulated_sessions_reject_duplicates_foreign_windows_and_recycled_pids() {
+        for iteration in 0..64u32 {
+            let pid = 4_000 + iteration;
+            let created = 1_000 + iteration as u64 * 10;
+            let hwnd = 800 + iteration as u64;
+            let launch_id = format!("cinema-sim-{iteration}");
+
+            let mut session = launch(LaunchPhase::SessionActive);
+            session.id = launch_id.clone();
+            session.app_id = Some("edge-cinema:netflix".into());
+            session.window_id = Some(hwnd);
+            session.process_ids = vec![pid];
+            let owners = [ProcessIdentity {
+                process_id: pid,
+                created_at_100ns: created,
+            }];
+            let netflix = service_for_id("netflix").unwrap();
+
+            // Exact window + exact process identity is the only accepted case.
+            assert!(
+                super::streaming_identity_matches(&session, hwnd, pid, created, &owners),
+                "iteration {iteration}: exact owned window must match"
+            );
+
+            // Duplicate launch: a second click gets a new launch id; a marker
+            // left by the previous launch must not authorize the new one.
+            let mut fresh_launch = session.clone();
+            fresh_launch.id = format!("cinema-sim-{iteration}-next");
+            let mut stale_marker = marker();
+            stale_marker.launch_id = launch_id.clone();
+            stale_marker.process_id = pid;
+            stale_marker.process_created_at_100ns = created;
+            assert!(
+                !super::marker_matches_launch(&stale_marker, &fresh_launch, netflix),
+                "iteration {iteration}: a previous launch's marker must not match a new launch"
+            );
+
+            // Adversarial observations: stale HWND, foreign PID, wrong creation
+            // time, and a recycled PID (same number, different creation time).
+            assert!(!super::streaming_identity_matches(
+                &session, hwnd + 1, pid, created, &owners
+            ));
+            assert!(!super::streaming_identity_matches(
+                &session, hwnd, pid + 1, created, &owners
+            ));
+            assert!(!super::streaming_identity_matches(
+                &session, hwnd, pid, created + 1, &owners
+            ));
+            let recycled = [ProcessIdentity {
+                process_id: pid,
+                created_at_100ns: created + 1,
+            }];
+            assert!(!super::streaming_identity_matches(
+                &session, hwnd, pid, created, &recycled
+            ));
+            assert!(!marker_matches_identity(
+                &stale_marker,
+                Some(ProcessIdentity {
+                    process_id: pid,
+                    created_at_100ns: created + 1,
+                })
+            ));
+
+            // Adoption is service-specific: a live Netflix marker never
+            // satisfies a Disney+ request, so no wrong service is opened.
+            assert!(adoption_is_compatible(&stale_marker, netflix));
+            assert!(!adoption_is_compatible(
+                &stale_marker,
+                service_for_id("disney").unwrap()
+            ));
+        }
+    }
+
+    /// Same repeated-cycle simulation, focused on the confirmed close path.
+    /// A close target must belong to the exact launch instance and process; a
+    /// recycled PID, a new launch id or a foreign process are all refused.
+    #[test]
+    fn simulated_close_target_is_rejected_after_new_launch_or_recycled_process() {
+        let service = service_for_id("netflix").unwrap();
+        for iteration in 0..64u32 {
+            let pid = 5_000 + iteration;
+            let created = 2_000 + iteration as u64 * 7;
+            let mut marker = marker();
+            marker.launch_id = format!("cinema-close-{iteration}");
+            marker.process_id = pid;
+            marker.process_created_at_100ns = created;
+
+            let mut launch = launch(LaunchPhase::SessionActive);
+            launch.id = marker.launch_id.clone();
+            launch.process_ids = vec![pid];
+            let target = OwnedWindowTarget {
+                hwnd: 900 + iteration as u64,
+                process_id: pid,
+                process_created_at_100ns: created,
+            };
+            let identities = [ProcessIdentity {
+                process_id: pid,
+                created_at_100ns: created,
+            }];
+            assert!(close_target_is_owned(
+                &marker, &launch, service, target, &identities
+            ));
+
+            // Recycled PID: same number, different creation time.
+            let recycled = [ProcessIdentity {
+                process_id: pid,
+                created_at_100ns: created + 1,
+            }];
+            assert!(!close_target_is_owned(
+                &marker, &launch, service, target, &recycled
+            ));
+
+            // A new launch reusing the same window cannot be closed with the
+            // marker of the launch that just ended.
+            let mut next = launch.clone();
+            next.id = format!("cinema-close-{iteration}-next");
+            assert!(!close_target_is_owned(
+                &marker, &next, service, target, &identities
+            ));
+
+            // A foreign process is never a valid close target.
+            let foreign = OwnedWindowTarget {
+                hwnd: target.hwnd,
+                process_id: pid + 10_000,
+                process_created_at_100ns: created,
+            };
+            assert!(!close_target_is_owned(
+                &marker, &launch, service, foreign, &identities
+            ));
+        }
+    }
+
+    /// After a close/crash the only projection left for Home is a terminal
+    /// session: it never pretends a live cinema session still owns the screen,
+    /// which is what would keep a controller focused in the wrong place.
+    #[test]
+    fn simulated_close_and_crash_leave_a_single_terminal_projection() {
+        for iteration in 0..64u32 {
+            let ended = launch(LaunchPhase::Ended);
+            let session = session_from_launch(
+                &ended,
+                Some("https://www.netflix.com/pl/".into()),
+                None,
+            );
+            assert_eq!(session.state, "exited");
+            assert!(super::idle_session().session_id.is_none());
+
+            let selected = select_cinema_launch_projection(
+                crate::session_orchestrator::SessionId::VeloraHome,
+                None,
+                None,
+                Some(ended.clone()),
+            );
+            let selected = selected.expect("the terminal launch is still retained for recovery");
+            assert_eq!(selected.id, ended.id);
+            assert!(!selected.phase.is_active(), "iteration {iteration}");
+        }
+    }
 }

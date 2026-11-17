@@ -129,6 +129,10 @@ describe("System Intelligence panel", () => {
     expect(screen.getByText(/59,94 Hz \(DisplayConfig\)/)).toBeTruthy();
     expect(screen.getByText(/połączenie nieznane/)).toBeTruthy();
     expect(screen.queryByText(/HDMI/)).toBeNull();
+    // 140% API bucket vs 144 DPI (150%): a calm note, not a failure.
+    expect(screen.getByText(/różni się o 10 p.p. od skali efektywnej \(150%\)/)).toBeTruthy();
+    expect(screen.getByText(/fizyczna geometria okna pozostaje niezmieniona/)).toBeTruthy();
+    expect(screen.getByText(/pulpit rozszerzony: ujemne położenie \(-3840, 1080\)/)).toBeTruthy();
   });
 
   it("does not present an unverified 96-DPI default as the effective monitor scale", async () => {
@@ -142,5 +146,35 @@ describe("System Intelligence panel", () => {
     render(<SystemDiagnosticsPanel />);
     expect(await screen.findByText(/efektywne DPI nieznane/)).toBeTruthy();
     expect(screen.queryByText(/efektywna skala 100%/)).toBeNull();
+    // Unconfirmed 96 must not produce a false divergence warning either.
+    expect(screen.queryByText(/różni się o .* p.p./)).toBeNull();
+    expect(screen.queryByText(/pulpit rozszerzony/)).toBeNull();
+  });
+
+  it("does not warn when confirmed effective scale matches the API bucket", async () => {
+    mocks.snapshot = snapshot();
+    mocks.snapshot.displayAudio.displays[0].diagnostics = {
+      x: 0, y: 0, desktopWidth: 3840, desktopHeight: 2160,
+      scalePercent: 140, effectiveDpiX: 134, effectiveDpiY: 134, dpiProvenance: "getDpiForMonitorPerMonitorProcess", refreshMillihz: 60_000,
+      connectionType: "HDMI", adapterName: null,
+      edidManufacturerId: null, edidProductCodeId: null, identitySource: "displayConfig",
+    };
+    render(<SystemDiagnosticsPanel />);
+    expect(await screen.findByText(/efektywna skala 140%/)).toBeTruthy();
+    expect(screen.queryByText(/różni się o .* p.p./)).toBeNull();
+    expect(screen.queryByText(/pulpit rozszerzony/)).toBeNull();
+  });
+
+  it("notes a negative origin separately even when scales agree", async () => {
+    mocks.snapshot = snapshot();
+    mocks.snapshot.displayAudio.displays[0].diagnostics = {
+      x: -3840, y: 0, desktopWidth: 3840, desktopHeight: 2160,
+      scalePercent: 140, effectiveDpiX: 134, effectiveDpiY: 134, dpiProvenance: "getDpiForMonitorPerMonitorProcess", refreshMillihz: 60_000,
+      connectionType: null, adapterName: null,
+      edidManufacturerId: null, edidProductCodeId: null, identitySource: "displayConfig",
+    };
+    render(<SystemDiagnosticsPanel />);
+    expect(await screen.findByText(/pulpit rozszerzony: ujemne położenie \(-3840, 0\)/)).toBeTruthy();
+    expect(screen.queryByText(/różni się o .* p.p./)).toBeNull();
   });
 });

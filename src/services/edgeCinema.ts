@@ -40,6 +40,11 @@ const EDGE_NOT_INSTALLED_GUIDANCE = "Nie znaleziono przeglądarki Microsoft Edge
 const PROFILE_DIR_GUIDANCE = "Nie udało się przygotować dedykowanego profilu Edge Cinema. Sprawdź uprawnienia do folderu danych aplikacji i spróbuj ponownie.";
 const SPAWN_GUIDANCE = "Nie udało się uruchomić okna Edge Cinema. Sprawdź instalację Edge i spróbuj ponownie.";
 const DRM_NOTE = "Obsługa DRM / Widevine / PlayReady oraz jakość 4K, HDR i HDCP nie są gwarantowane przez VELORA — zależą od sprzętu, GPU, subskrypcji i usługi.";
+// Jasne, niealarmujące komunikaty o ograniczeniach. Żaden nie obiecuje
+// "sprawdzonej" zgodności z usługą ani odtwarzania treści chronionych.
+const PROTECTED_CONTENT_NOTICE = "Ta treść może być chroniona i niedostępna w tym oknie. VELORA nie omija zabezpieczeń ani nie gwarantuje odtwarzania — dostęp zależy od usługi, konta i urządzenia.";
+const SITE_CHANGE_NOTICE = "Usługa wyświetliła inny adres niż oficjalny zapisany w VELORA. VELORA otwiera wyłącznie oficjalny adres; jeśli strona się zmieniła, skorzystaj z niej bezpośrednio.";
+const NAVIGATION_FAILURE_NOTICE = "Nie udało się przejść do strony usługi. Sprawdź połączenie i spróbuj ponownie — VELORA nie gwarantuje dostępności ani zgodności treści.";
 
 function messageFromCause(cause: unknown): string {
   if (typeof cause === "string") return cause;
@@ -70,6 +75,9 @@ export function edgeCinemaErrorMessage(cause: unknown, fallback: string = DEFAUL
     return "Nie udało się potwierdzić okna tej usługi. Spróbuj ponownie.";
   }
   if (/(drm|widevine|playready|hdcp|\b4k\b|\bhdr\b)/i.test(message)) return DRM_NOTE;
+  if (/chronion|protected|treść niedostępn|content.{0,12}unavailable/i.test(message)) return PROTECTED_CONTENT_NOTICE;
+  if (/inna usługa|zmieni|przekier|przesun|site.{0,12}chang|redirect|nawigac|not found|\b404\b/i.test(message)) return SITE_CHANGE_NOTICE;
+  if (/nie udało się przejść|nie (udało|można) (przejść|nawiązać)|navigation|failed to load|nie załadowa/i.test(message)) return NAVIGATION_FAILURE_NOTICE;
   if (/nie wykryto/i.test(message) && /edge/i.test(message)) return EDGE_NOT_INSTALLED_GUIDANCE;
   if (/profilu|katalogu profilu|user-data-dir/i.test(message)) return PROFILE_DIR_GUIDANCE;
   if (/nie uruchomił|uruchomienie okna|spawn/i.test(message)) return SPAWN_GUIDANCE;
