@@ -183,6 +183,18 @@ impl ControllerSupervisor {
         };
     }
 
+    /// An authoritative session change invalidates a chord that is still held,
+    /// even when the gate value itself did not change (for example one game
+    /// session handing off to another). Every pad must release and press again.
+    pub(crate) fn on_session_changed(&mut self) {
+        for state in self.devices.values_mut() {
+            state.armed = false;
+            state.holding_since_ms = None;
+            state.suppress_until_neutral = true;
+        }
+        self.last_outcome = ControllerFallbackOutcome::AwaitingNeutral;
+    }
+
     /// Observes a valid parsed report. Every device has its own timer and latch;
     /// two pads can never combine partial chords or release each other's latch.
     pub(crate) fn observe_report(
@@ -585,6 +597,91 @@ mod tests {
                 .observe_report("pad-a", buttons(true, true, true), 3_520)
                 .triggered
         );
+    }
+
+    #[test]
+    fn reopening_session_or_home_gate_while_chord_held_requires_neutral_rearm() {
+        let mut supervisor = enabled(1_500);
+        supervisor.observe_report("pad-a", buttons(false, false, false), 1);
+        supervisor.observe_report("pad-a", buttons(true, true, true), 20);
+        supervisor.observe_report("pad-a", buttons(true, true, true), 700);
+        supervisor.observe_report("pad-a", buttons(true, true, true), 1_400);
+        assert!(supervisor.observe_report("pad-a", buttons(true, true, true), 1_520).triggered);
+
+        // A session transition closes and reopens the gate while the physical
+        // chord is still held. The old hold must not complete.
+        supervisor.set_session_gate(false);
+        supervisor.set_session_gate(true);
+        for at in [1_600, 2_300, 3_000, 3_700] {
+            assert!(
+                !supervisor
+                    .observe_report("pad-a", buttons(true, true, true), at)
+                    .triggered,
+                "held chord retriggered after session gate reopened at {at}"
+            );
+        }
+        assert_eq!(
+            supervisor.status().last_outcome,
+            ControllerFallbackOutcome::AwaitingNeutral
+        );
+
+        // Release + neutral rearm permits one new deliberate hold.
+        supervisor.observe_report("pad-a", buttons(false, false, false), 3_800);
+        supervisor.observe_report("pad-a", buttons(true, true, true), 3_900);
+        supervisor.observe_report("pad-a", buttons(true, true, true), 4_600);
+        supervisor.observe_report("pad-a", buttons(true, true, true), 5_300);
+        assert!(supervisor.observe_report("pad-a", buttons(true, true, true), 5_400).triggered);
+
+        // The explicit Home gate follows the same rule.
+        supervisor.observe_report("pad-a", buttons(false, false, false), 5_500);
+        supervisor.observe_report("pad-a", buttons(true, true, true), 5_600);
+        supervisor.set_home_gate(false);
+        supervisor.set_home_gate(true);
+        for at in [5_700, 6_400, 7_100, 7_800] {
+            assert!(
+                !supervisor
+                    .observe_report("pad-a", buttons(true, true, true), at)
+                    .triggered,
+                "held chord retriggered after home gate reopened at {at}"
+            );
+        }
+        assert_eq!(
+            supervisor.status().last_outcome,
+            ControllerFallbackOutcome::AwaitingNeutral
+        );
+        supervisor.observe_report("pad-a", buttons(false, false, false), 7_900);
+        supervisor.observe_report("pad-a", buttons(true, true, true), 8_000);
+        supervisor.observe_report("pad-a", buttons(true, true, true), 8_700);
+        supervisor.observe_report("pad-a", buttons(true, true, true), 9_400);
+        assert!(supervisor.observe_report("pad-a", buttons(true, true, true), 9_500).triggered);
+    }
+
+    #[test]
+    fn authoritative_session_change_requires_neutral_rearm_even_without_a_gate_flip() {
+        let mut supervisor = enabled(1_500);
+        supervisor.observe_report("pad-a", buttons(false, false, false), 1);
+        supervisor.observe_report("pad-a", buttons(true, true, true), 20);
+        supervisor.observe_report("pad-a", buttons(true, true, true), 700);
+        supervisor.observe_report("pad-a", buttons(true, true, true), 1_400);
+        assert!(supervisor.observe_report("pad-a", buttons(true, true, true), 1_520).triggered);
+
+        // One external session handing off to another keeps the gate open, but
+        // the authoritative session revision changed: the chord is disarmed.
+        supervisor.on_session_changed();
+        assert!(
+            !supervisor
+                .observe_report("pad-a", buttons(true, true, true), 1_600)
+                .triggered
+        );
+        assert_eq!(
+            supervisor.status().last_outcome,
+            ControllerFallbackOutcome::AwaitingNeutral
+        );
+        supervisor.observe_report("pad-a", buttons(false, false, false), 1_700);
+        supervisor.observe_report("pad-a", buttons(true, true, true), 1_800);
+        supervisor.observe_report("pad-a", buttons(true, true, true), 2_500);
+        supervisor.observe_report("pad-a", buttons(true, true, true), 3_000);
+        assert!(supervisor.observe_report("pad-a", buttons(true, true, true), 3_320).triggered);
     }
 
     #[test]

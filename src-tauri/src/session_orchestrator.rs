@@ -538,6 +538,24 @@ fn internal_error(from: SessionId, target: SessionId) -> SessionError {
     }
 }
 
+/// A real session transition must revoke pending normalized controller input so
+/// a packet carrying the previous generation/epoch cannot act on the new
+/// session. Idempotent targets, deduplicated commands and rejected commands
+/// produce no changed event and must leave the streaming generation untouched.
+///
+/// Kept pure so the policy is unit-testable without an `AppHandle`. The native
+/// bridge below is the single place that calls
+/// `streaming_control::invalidate_controller_streaming(app)`.
+fn streaming_revocation_for_transition(event: Option<&SessionChangedEvent>) -> bool {
+    event.is_some()
+}
+
+fn revoke_streaming_if_transitioned(app: &AppHandle, event: Option<&SessionChangedEvent>) {
+    if streaming_revocation_for_transition(event) {
+        crate::streaming_control::invalidate_controller_streaming(app);
+    }
+}
+
 pub(crate) fn apply_transition(
     app: &AppHandle,
     target: SessionId,
@@ -545,6 +563,7 @@ pub(crate) fn apply_transition(
     context: Option<SessionContext>,
 ) -> Result<SessionSnapshot, SessionError> {
     let orchestrator = app.state::<SessionOrchestrator>();
+    let mut changed_event = None;
     let result = {
         let mut machine = orchestrator
             .machine
@@ -554,8 +573,9 @@ pub(crate) fn apply_transition(
         // publish revision 2 before revision 1 to the WebView.
         match machine.transition_at(target, cause, context, now_ms()) {
             Ok((snapshot, event)) => {
-                if let Some(event) = event {
-                    let _ = app.emit(SESSION_CHANGED_EVENT, event);
+                changed_event = event;
+                if let Some(event) = &changed_event {
+                    let _ = app.emit(SESSION_CHANGED_EVENT, event.clone());
                 }
                 Ok(snapshot)
             }
@@ -567,6 +587,7 @@ pub(crate) fn apply_transition(
     };
     if let Ok(snapshot) = &result {
         orchestrator.persist(app, snapshot);
+        revoke_streaming_if_transitioned(app, changed_event.as_ref());
     }
     result
 }
@@ -577,6 +598,7 @@ fn apply_transition_command(
 ) -> Result<SessionSnapshot, SessionError> {
     let orchestrator = app.state::<SessionOrchestrator>();
     let _gate = orchestrator.lock_transaction();
+    let mut changed_event = None;
     let result = {
         let mut machine = orchestrator
             .machine
@@ -584,8 +606,9 @@ fn apply_transition_command(
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         match machine.apply_command(request, now_ms()) {
             Ok((snapshot, event)) => {
-                if let Some(event) = event {
-                    let _ = app.emit(SESSION_CHANGED_EVENT, event);
+                changed_event = event;
+                if let Some(event) = &changed_event {
+                    let _ = app.emit(SESSION_CHANGED_EVENT, event.clone());
                 }
                 Ok(snapshot)
             }
@@ -597,6 +620,7 @@ fn apply_transition_command(
     };
     if let Ok(snapshot) = &result {
         orchestrator.persist(app, snapshot);
+        revoke_streaming_if_transitioned(app, changed_event.as_ref());
     }
     result
 }
@@ -732,6 +756,7 @@ pub(crate) fn finish_launch_session(app: &AppHandle, launch_id: &str) {
 /// transaction gate.
 pub(crate) fn finish_launch_session_inner(app: &AppHandle, launch_id: &str) {
     let orchestrator = app.state::<SessionOrchestrator>();
+    let mut changed_event = None;
     let snapshot = {
         let mut machine = orchestrator
             .machine
@@ -752,8 +777,9 @@ pub(crate) fn finish_launch_session_inner(app: &AppHandle, launch_id: &str) {
             now_ms(),
         ) {
             Ok((snapshot, event)) => {
-                if let Some(event) = event {
-                    let _ = app.emit(SESSION_CHANGED_EVENT, event);
+                changed_event = event;
+                if let Some(event) = &changed_event {
+                    let _ = app.emit(SESSION_CHANGED_EVENT, event.clone());
                 }
                 snapshot
             }
@@ -761,6 +787,7 @@ pub(crate) fn finish_launch_session_inner(app: &AppHandle, launch_id: &str) {
         }
     };
     orchestrator.persist(app, &snapshot);
+    revoke_streaming_if_transitioned(app, changed_event.as_ref());
 }
 
 /// Called after resume and at startup. A persisted launch context that is not
@@ -946,6 +973,28 @@ fn restore_reason_for_home_request(source: HomeRequestSource) -> RestoreReason {
     }
 }
 
+/// Compares the authoritative identity of two session states. Focus and a bare
+/// revision counter are not enough: the exact target, revision, transition time
+/// and launch must still match before a previous Home acknowledgement can be
+/// treated as current.
+fn session_identity_matches(left: &SessionSnapshot, right: &SessionSnapshot) -> bool {
+    if left.current != right.current
+        || left.revision != right.revision
+        || left.transitioned_at_ms != right.transitioned_at_ms
+    {
+        return false;
+    }
+    let left_launch = left
+        .context
+        .as_ref()
+        .and_then(|context| context.launch_id.as_deref());
+    let right_launch = right
+        .context
+        .as_ref()
+        .and_then(|context| context.launch_id.as_deref());
+    left_launch == right_launch
+}
+
 fn home_completion_is_reusable(
     completion: Option<&HomeCompletion>,
     current: &SessionSnapshot,
@@ -956,6 +1005,9 @@ fn home_completion_is_reusable(
         return false;
     };
     current.current == SessionId::VeloraHome
+        // A completion captured at revision N is never reusable once the
+        // session identity has changed to N+1, even if focus never moved.
+        && session_identity_matches(&completion.result.session, current)
         && completion.revision == current.revision
         && now.saturating_sub(completion.at_ms) <= HOME_DEDUPE_MS
         && completion.result.restore.restored
@@ -1669,6 +1721,252 @@ mod tests {
             !super::home_completion_is_reusable(Some(&completion), &snapshot, 1_100, Some(20),),
             "a later foreground change must permit another restore attempt"
         );
+    }
+
+    fn successful_home_completion(
+        snapshot: &super::SessionSnapshot,
+        at_ms: u64,
+        hwnd: u64,
+    ) -> super::HomeCompletion {
+        use crate::window_broker::{
+            ForegroundWindow, RestoreOutcome, RestoreReason, RestoreResult,
+        };
+        let foreground = ForegroundWindow {
+            hwnd: Some(hwnd),
+            ..ForegroundWindow::default()
+        };
+        let restore = RestoreResult {
+            attempted: false,
+            restored: true,
+            outcome: RestoreOutcome::AlreadyFocused,
+            reason: RestoreReason::UserRequest,
+            own_window: Some(hwnd),
+            foreground_before: foreground.clone(),
+            foreground_after: foreground,
+            error_code: None,
+            denial: None,
+            message: "VELORA ma już fokus.".into(),
+        };
+        let result = super::ReturnHomeResult {
+            session: snapshot.clone(),
+            restore,
+            operation_id: "op-home".into(),
+            timed_out: false,
+        };
+        super::HomeCompletion {
+            revision: snapshot.revision,
+            at_ms,
+            result,
+        }
+    }
+
+    #[test]
+    fn a_home_completion_captured_at_revision_n_is_rejected_after_transition_to_n_plus_one() {
+        let mut state = machine();
+        state
+            .transition_at(SessionId::Game, TransitionCause::Launch, None, 100)
+            .unwrap();
+        state
+            .transition_at(
+                SessionId::VeloraHome,
+                TransitionCause::GamepadHome,
+                None,
+                200,
+            )
+            .unwrap();
+        let home = state.snapshot();
+        let completion = successful_home_completion(&home, 200, 10);
+        assert!(super::home_completion_is_reusable(
+            Some(&completion),
+            &home,
+            200 + super::HOME_DEDUPE_MS,
+            Some(10),
+        ));
+
+        // A launch supersedes the queued/acknowledged Home. The request captured
+        // at revision N must not pull revision N+1 back to VELORA.
+        state
+            .transition_at(
+                SessionId::Game,
+                TransitionCause::Launch,
+                Some(SessionContext::for_launch("game-new", Some("1091500"), None)),
+                300,
+            )
+            .unwrap();
+        let launched = state.snapshot();
+        assert_eq!(launched.revision, home.revision + 1);
+        assert!(home_request_is_superseded(&home, &launched));
+        assert!(!super::home_completion_is_reusable(
+            Some(&completion),
+            &launched,
+            250,
+            Some(10),
+        ));
+
+        // An optimistic caller pinning revision N is rejected with StaleRevision
+        // instead of transitioning the newer session.
+        let mut stale = request(SessionId::VeloraHome, "home-queued");
+        stale.expected_revision = Some(home.revision);
+        let error = state.apply_command(&stale, 350).unwrap_err();
+        assert_eq!(error.code, SessionErrorCode::StaleRevision);
+        assert_eq!(error.current_revision, launched.revision);
+
+        // Even after a later Home the old acknowledgement stays stale: the
+        // revision and the launch identity both moved on.
+        state
+            .transition_at(
+                SessionId::Cinema,
+                TransitionCause::Launch,
+                Some(SessionContext::for_launch("cinema-new", Some("edge-cinema"), None)),
+                400,
+            )
+            .unwrap();
+        state
+            .transition_at(SessionId::VeloraHome, TransitionCause::User, None, 500)
+            .unwrap();
+        let home_again = state.snapshot();
+        assert!(!super::home_completion_is_reusable(
+            Some(&completion),
+            &home_again,
+            250,
+            Some(10),
+        ));
+        assert!(home.revision < home_again.revision);
+    }
+
+    #[test]
+    fn home_reuse_requires_matching_session_identity_not_just_revision_and_focus() {
+        let snapshot = machine().snapshot();
+        let completion = successful_home_completion(&snapshot, 1_000, 10);
+
+        // Same revision and same foreground, but a different launch identity:
+        // the old acknowledgement must not be reused for this session.
+        let mut different_launch = snapshot.clone();
+        different_launch.context = Some(SessionContext::for_launch("other-launch", None, None));
+        different_launch.context.as_mut().unwrap().session_revision = Some(snapshot.revision);
+        assert!(!super::home_completion_is_reusable(
+            Some(&completion),
+            &different_launch,
+            1_100,
+            Some(10),
+        ));
+
+        // Same revision and launch, but a distinct transition timestamp is a
+        // different session state as well.
+        let mut different_time = snapshot.clone();
+        different_time.transitioned_at_ms = snapshot.transitioned_at_ms + 1;
+        assert!(!super::home_completion_is_reusable(
+            Some(&completion),
+            &different_time,
+            1_100,
+            Some(10),
+        ));
+
+        assert!(super::home_completion_is_reusable(
+            Some(&completion),
+            &snapshot,
+            1_100,
+            Some(10),
+        ));
+    }
+
+    #[test]
+    fn repeated_home_and_session_transitions_keep_monotonic_revisions_and_reject_stale_commands() {
+        let mut state = machine();
+        let mut revisions = Vec::new();
+        let mut revision_three: Option<super::SessionSnapshot> = None;
+        let mut at = 1_000u64;
+        for (target, id) in [
+            (SessionId::Game, "launch-a"),
+            (SessionId::VeloraHome, "home-a"),
+            (SessionId::Cinema, "launch-b"),
+            (SessionId::VeloraHome, "home-b"),
+            (SessionId::Playnite, "launch-c"),
+            (SessionId::VeloraHome, "home-c"),
+            (SessionId::Game, "launch-d"),
+        ] {
+            let snapshot = state.apply_command(&request(target, id), at).unwrap().0;
+            if snapshot.revision == 3 {
+                revision_three = Some(snapshot.clone());
+            }
+            revisions.push(snapshot.revision);
+            at += 100;
+        }
+        for pair in revisions.windows(2) {
+            assert_eq!(pair[1], pair[0] + 1, "revision grew twice for one transition");
+        }
+        assert_eq!(revisions, vec![1, 2, 3, 4, 5, 6, 7]);
+
+        // A replayed id for the same target is idempotent: it returns the old
+        // snapshot without moving the current session back.
+        let before = state.snapshot();
+        let replayed = state
+            .apply_command(&request(SessionId::Game, "launch-a"), at)
+            .unwrap()
+            .0;
+        assert_eq!(replayed.current, SessionId::Game);
+        assert_eq!(replayed.revision, 1);
+        assert_eq!(state.snapshot(), before);
+
+        // Reusing that id for a different target and pinning a stale revision
+        // are both rejected without mutation.
+        let error = state
+            .apply_command(&request(SessionId::Playnite, "launch-a"), at)
+            .unwrap_err();
+        assert_eq!(error.code, SessionErrorCode::InvalidCommand);
+        let mut stale = request(SessionId::Cinema, "stale-cinema");
+        stale.expected_revision = Some(3);
+        let error = state.apply_command(&stale, at).unwrap_err();
+        assert_eq!(error.code, SessionErrorCode::StaleRevision);
+        assert_eq!(state.snapshot(), before);
+
+        // A Home request captured mid-run is superseded by the final Game session.
+        assert!(home_request_is_superseded(
+            &revision_three.expect("revision 3 snapshot"),
+            &state.snapshot()
+        ));
+    }
+
+    #[test]
+    fn a_real_transition_revokes_streaming_generation_but_deduped_and_stale_commands_do_not() {
+        let mut state = machine();
+
+        // A real launch transition revokes pending streaming input.
+        let (_, entered) = state
+            .transition_at(SessionId::Game, TransitionCause::Launch, None, 10)
+            .unwrap();
+        assert!(super::streaming_revocation_for_transition(entered.as_ref()));
+
+        // A repeated target is idempotent: no changed event, no revocation.
+        let (_, idempotent) = state
+            .transition_at(SessionId::Game, TransitionCause::Launch, None, 20)
+            .unwrap();
+        assert!(!super::streaming_revocation_for_transition(idempotent.as_ref()));
+
+        // A stale expected revision is rejected before the machine is touched.
+        let mut stale = request(SessionId::VeloraHome, "stale-home");
+        stale.expected_revision = Some(state.snapshot().revision + 10);
+        let error = state.apply_command(&stale, 30).unwrap_err();
+        assert_eq!(error.code, SessionErrorCode::StaleRevision);
+
+        // A real Home transition revokes once; a replayed command id resolves
+        // to the original snapshot with no changed event and must not revoke.
+        let home_request = request(SessionId::VeloraHome, "home-1");
+        let (_, real_home) = state.apply_command(&home_request, 40).unwrap();
+        assert!(super::streaming_revocation_for_transition(real_home.as_ref()));
+        let (_, deduped_home) = state.apply_command(&home_request, 50).unwrap();
+        assert!(!super::streaming_revocation_for_transition(deduped_home.as_ref()));
+
+        // Integration assertion for the owner of streaming_control.rs (not
+        // editable from this crate module): after
+        // `invalidate_controller_streaming(app)` the observable generation and
+        // controller_epoch each advance by exactly one:
+        //   let control = app.state::<StreamingControl>();
+        //   let before_generation = control.generation.load(Ordering::Acquire);
+        //   let before_epoch = control.controller_epoch.load(Ordering::Acquire);
+        //   invalidate_controller_streaming(&app);
+        //   assert_eq!(control.generation.load(Ordering::Acquire), before_generation + 1);
+        //   assert_eq!(control.controller_epoch.load(Ordering::Acquire), before_epoch + 1);
     }
 }
 

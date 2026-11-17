@@ -24,8 +24,14 @@ vi.mock("../services/nativeControllerStore", () => ({
 }));
 
 import { launchManagedApp, launchManagedGame } from "../services/appManager";
-import { disabledNativeControllerStatus } from "../services/nativeController";
-import { CONTROLLER_HOME_LAUNCH_BLOCKED_MESSAGE } from "../services/controllerHomePreflight";
+import { disabledNativeControllerStatus, type NativeControllerStatus } from "../services/nativeController";
+import {
+  CONTROLLER_HOME_LAUNCH_BLOCKED_MESSAGE,
+  establishControllerHomeReadiness,
+  isControllerHomeReady,
+  reconcileNativeStatusBounded,
+} from "../services/controllerHomePreflight";
+import type { SessionSnapshot } from "../services/sessionOrchestrator";
 import { launchPlayniteGame } from "../services/playniteLibrary";
 
 const PLAYNITE_GAME = "64f78cd1-0b00-4271-a9e1-89abc55f66cc";
@@ -130,5 +136,79 @@ describe("direct controller Home launch guard", () => {
     await launchAssertion;
     expect(mocks.invalidateStatusRead).toHaveBeenCalledTimes(1);
     expect(mocks.invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe("controller Home readiness is bound to an explicit session/revision token", () => {
+  function session(revision: number, launchId?: string): SessionSnapshot {
+    return {
+      current: "game",
+      previous: "veloraHome",
+      revision,
+      transitionedAtMs: 1_000 + revision,
+      context: launchId ? { launchId } : null,
+      allowedTargets: ["veloraHome"],
+    };
+  }
+
+  it("reports readiness false when the revision differs", () => {
+    const ready = establishControllerHomeReadiness(session(2, "game-1"), 1_000);
+    expect(isControllerHomeReady(ready, session(2, "game-1"))).toBe(true);
+    expect(isControllerHomeReady(ready, session(3, "game-1"))).toBe(false);
+    expect(isControllerHomeReady(ready, session(2, "game-2"))).toBe(false);
+  });
+
+  it("requires an explicit Resume after a diagnostics remount", () => {
+    // A remounted diagnostics panel has no acknowledgement and must not
+    // silently resume a Home action confirmed for an earlier session.
+    let readiness: ReturnType<typeof establishControllerHomeReadiness> | null = null;
+    const current = session(4, "game-4");
+    expect(isControllerHomeReady(readiness, current)).toBe(false);
+
+    // Restoring a stale acknowledgement from before the remount is not enough.
+    readiness = establishControllerHomeReadiness(session(3, "game-3"), 900);
+    expect(isControllerHomeReady(readiness, current)).toBe(false);
+
+    // Only an explicit re-establishment for the current session is ready.
+    readiness = establishControllerHomeReadiness(current, 1_100);
+    expect(isControllerHomeReady(readiness, current)).toBe(true);
+  });
+
+  it("ignores a late status reply after the bounded read epoch was invalidated", async () => {
+    const actual = await vi.importActual<typeof import("../services/nativeControllerStore")>(
+      "../services/nativeControllerStore",
+    );
+    let resolveStatus!: (status: NativeControllerStatus) => void;
+    let getStatusCalls = 0;
+    const store = new actual.NativeControllerStore({
+      listen: async () => () => {},
+      getStatus: () => {
+        getStatusCalls += 1;
+        return new Promise<NativeControllerStatus>((resolve) => { resolveStatus = resolve; });
+      },
+      setHomeEnabled: async () => disabledNativeControllerStatus,
+      now: () => 0,
+    });
+
+    vi.useFakeTimers();
+    // The bounded read resolves when its deadline invalidates the epoch (it does
+    // not throw), so drive the clock and let it settle.
+    let settled = false;
+    const bounded = reconcileNativeStatusBounded(store).then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await bounded;
+
+    // A late native status reply arrives only after the read epoch was invalidated.
+    resolveStatus(armedStatus());
+    await Promise.resolve();
+    await Promise.resolve();
+    vi.useRealTimers();
+
+    expect(settled).toBe(true);
+    expect(getStatusCalls).toBe(1);
+    // The stale reply is ignored: no status was ever applied, so a remounted
+    // panel cannot treat it as a fresh, healthy Home acknowledgement.
+    expect(store.getStatusKnown()).toBe(false);
+    expect(store.getStatusSnapshot()).toBe(disabledNativeControllerStatus);
   });
 });
