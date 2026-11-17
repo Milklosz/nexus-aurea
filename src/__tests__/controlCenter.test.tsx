@@ -32,20 +32,24 @@ vi.mock("../services/controlService", () => ({
   getFallbackHotkeyOptions: vi.fn(async () => []),
   setFallbackHotkey: vi.fn(async () => ({} as never)),
 }));
-vi.mock("../services/remoteAccess", () => ({
-  disabledRemoteAccessStatus: mocks.remoteStatus,
-  REMOTE_ACCESS_DISABLED_REASON: "Serwer domyślnie nie nasłuchuje w sieci.",
-  getRemoteAccessStatus: mocks.getRemoteStatus,
-  listenForRemoteAccessStatus: mocks.listenRemoteStatus,
-  prepareRemoteTrustProfile: mocks.prepareTrustProfile,
-  startRemoteAccess: mocks.startRemoteAccess,
-  beginRemotePairing: mocks.beginRemotePairing,
-  stopRemoteAccess: mocks.stopRemoteAccess,
-  revokeAllRemoteDevices: mocks.revokeAllRemoteDevices,
-  revokeRemoteDevice: mocks.revokeRemoteDevice,
-  inspectRemoteRecovery: mocks.inspectRemoteRecovery,
-  runRemoteRecovery: mocks.runRemoteRecovery,
-}));
+vi.mock("../services/remoteAccess", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/remoteAccess")>();
+  return {
+    ...actual,
+    disabledRemoteAccessStatus: mocks.remoteStatus,
+    REMOTE_ACCESS_DISABLED_REASON: "Serwer domyślnie nie nasłuchuje w sieci.",
+    getRemoteAccessStatus: mocks.getRemoteStatus,
+    listenForRemoteAccessStatus: mocks.listenRemoteStatus,
+    prepareRemoteTrustProfile: mocks.prepareTrustProfile,
+    startRemoteAccess: mocks.startRemoteAccess,
+    beginRemotePairing: mocks.beginRemotePairing,
+    stopRemoteAccess: mocks.stopRemoteAccess,
+    revokeAllRemoteDevices: mocks.revokeAllRemoteDevices,
+    revokeRemoteDevice: mocks.revokeRemoteDevice,
+    inspectRemoteRecovery: mocks.inspectRemoteRecovery,
+    runRemoteRecovery: mocks.runRemoteRecovery,
+  };
+});
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); mocks.remoteStatusListener = null; });
 
@@ -279,6 +283,37 @@ describe("Control Center", () => {
     expect(remoteStatus.textContent).toContain("2");
     expect(remoteStatus.textContent).toContain("HTTPSaktywny");
     expect(mocks.getRemoteStatus).toHaveBeenCalledOnce();
+  });
+
+  it("ticks a live pairing countdown, renders the QR and clears its timer on unmount", async () => {
+    setupDialog();
+    vi.useFakeTimers();
+    const clearIntervalSpy = vi.spyOn(window, "clearInterval");
+    try {
+      mocks.getRemoteStatus.mockResolvedValue({
+        ...mocks.remoteStatus,
+        enabled: true,
+        secureOriginAvailable: true,
+        pairingCode: "123456",
+        origin: "https://192.168.1.4:47862",
+        pairingExpiresAtMs: Date.now() + 5_000,
+        pairingExpiresInSeconds: 5,
+      } as never);
+      const view = renderCenter();
+      fireEvent.click(screen.getByRole("tab", { name: "iPhone Remote" }));
+      await act(async () => { await Promise.resolve(); });
+      const status = screen.getByLabelText("Stan iPhone Remote");
+      expect(status.textContent).toContain("kod jednorazowy · 5s");
+      expect(screen.getByRole("img", { name: /Kod QR jednorazowego parowania/ })).toBeTruthy();
+      await act(async () => { vi.advanceTimersByTime(1_000); });
+      expect(status.textContent).toContain("kod jednorazowy · 4s");
+      view.unmount();
+      expect(clearIntervalSpy).toHaveBeenCalled();
+    } finally {
+      clearIntervalSpy.mockRestore();
+      vi.useRealTimers();
+      mocks.getRemoteStatus.mockImplementation(async () => mocks.remoteStatus);
+    }
   });
 
   it("offers a local, explicitly confirmed recovery when the credential state is damaged", async () => {

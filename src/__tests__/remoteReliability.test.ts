@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   REMOTE_RELIABILITY_DESCRIPTOR,
   REMOTE_HMAC_PAYLOAD_PREFIX,
@@ -13,6 +13,10 @@ import {
   buildEnvelope,
   createRemoteTransportAdapter,
   safePairingReset,
+  helloAckPayload,
+  helloRequestPayload,
+  verifySignedHello,
+  verifyReconnect,
   type RemoteCommandRequest,
   type RemoteReliabilityEvent,
 } from "../services/remoteReliability";
@@ -278,5 +282,78 @@ describe("createRemoteTransportAdapter (prototype over injected deps)", () => {
     expect(seen).toEqual([event]);
     off();
     expect(unsubscribed).toBe(true);
+  });
+});
+
+describe("signed paired-state verification (reuses the existing device HMAC)", () => {
+  const deviceId = "0123456789abcdef0123456789abcdef";
+  const nonce = "00112233445566778899aabbccddeeff";
+  const mac = new Uint8Array(32).fill(7);
+  const signature = Buffer.from(mac).toString("base64url");
+
+  it("binds the hello request and ack to device, nonce, epoch and count", () => {
+    const request = helloRequestPayload(deviceId, nonce);
+    expect(request).toBe(`NEXUS-AUREA-REMOTE-V1\n${deviceId}\nhello\n${nonce}`);
+    const ack = helloAckPayload(deviceId, 123, 2, nonce);
+    expect(ack).toContain("\nhello-ack\n");
+    // An acknowledgment can never be replayed as a request.
+    expect(ack).not.toBe(request);
+    expect(helloAckPayload(deviceId, 124, 2, nonce)).not.toBe(ack);
+    expect(helloAckPayload(deviceId, 123, 3, nonce)).not.toBe(ack);
+    expect(helloAckPayload("ffffffffffffffffffffffffffffffff", 123, 2, nonce)).not.toBe(ack);
+  });
+
+  it("accepts a signed hello only for the exact bound fields and fails closed", async () => {
+    const computeMac = vi.fn(async (payload: string) => {
+      expect(payload).toBe(helloAckPayload(deviceId, 123, 2, nonce));
+      return mac;
+    });
+    const status = { nonce, serverEpoch: 123, pairedDeviceCount: 2, signature };
+    expect(await verifySignedHello({ deviceId, nonce, status, computeMac })).toBe(true);
+    expect(await verifySignedHello({
+      deviceId, nonce: "ffffffffffffffffffffffffffffffff", status, computeMac,
+    })).toBe(false);
+    expect(await verifySignedHello({ deviceId, nonce, status: { ...status, serverEpoch: 0 }, computeMac })).toBe(false);
+    expect(await verifySignedHello({ deviceId, nonce, status: { ...status, pairedDeviceCount: 0 }, computeMac })).toBe(false);
+    expect(await verifySignedHello({ deviceId, nonce, status: { ...status, signature: "AQ" }, computeMac })).toBe(false);
+  });
+
+  it("reconnect re-fetches status, requires fresh verification and fails closed on 401", async () => {
+    const waits: number[] = [];
+    const fetchStatus = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({ enabled: false, pairedDeviceCount: 0 }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ enabled: true, pairedDeviceCount: 1 }) });
+    const verifyPaired = vi.fn(async () => true);
+    const result = await verifyReconnect({
+      maxAttempts: 3, fetchStatus, verifyPaired,
+      delayMs: (attempt) => attempt * 10,
+      wait: async (ms) => { waits.push(ms); },
+    });
+    expect(result).toEqual({ statusVerified: true, pairedVerified: true, attempts: 2 });
+    expect(waits).toEqual([10]);
+    expect(verifyPaired).toHaveBeenCalledTimes(1);
+
+    // A fresh anonymous status alone never marks the device "paired & trusted".
+    const unverified = await verifyReconnect({
+      maxAttempts: 1,
+      fetchStatus: async () => ({ ok: true, status: 200, json: async () => ({ enabled: true, pairedDeviceCount: 1 }) }),
+      verifyPaired: async () => false,
+      delayMs: () => 0, wait: async () => {},
+    });
+    expect(unverified).toEqual({ statusVerified: true, pairedVerified: false, attempts: 1 });
+
+    // 401 fails closed immediately and never reaches the verification step.
+    const deniedVerify = vi.fn(async () => true);
+    const denied = await verifyReconnect({
+      maxAttempts: 3,
+      fetchStatus: async () => ({ ok: false, status: 401, json: async () => ({ enabled: false, pairedDeviceCount: 0 }) }),
+      verifyPaired: deniedVerify,
+      delayMs: () => 0, wait: async () => {},
+    });
+    expect(denied).toEqual({ statusVerified: false, pairedVerified: false, attempts: 1 });
+    expect(deniedVerify).not.toHaveBeenCalled();
+
+    // The reconnect driver has no command sink: no queued command can replay.
+    expect(shouldReplayOnReconnect("reconnecting")).toBe(false);
   });
 });
