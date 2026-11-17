@@ -2,11 +2,46 @@ import type { StreamingService } from "../data/streamingServices";
 import { isTauri } from "@tauri-apps/api/core";
 import type { NativeControllerStatus } from "./nativeController";
 import { nativeControllerStore } from "./nativeControllerStore";
+import { sessionRevisionToken, type SessionSnapshot } from "./sessionOrchestrator";
 
 export const CONTROLLER_HOME_LAUNCH_BLOCKED_MESSAGE =
   "Nie można potwierdzić bezpiecznego powrotu do VELORA dla wykrytego kontrolera. Pozostań w VELORA, otwórz Centrum Sterowania → „Powrót do VELORA” i wybierz „Włącz powrót na tę sesję”.";
 
 const NATIVE_STATUS_READ_TIMEOUT_MS = 2_000;
+
+/**
+ * An explicit, bounded acknowledgement that the native Home path was healthy
+ * for ONE authoritative session state. It is never inherited on remount:
+ * re-establishing it is a deliberate user action ("Resume") for the current
+ * session, not a silent continuation of a previous one.
+ */
+export interface ControllerHomeReadiness {
+  readonly token: string;
+  readonly establishedAtMs: number;
+}
+
+export function establishControllerHomeReadiness(
+  snapshot: SessionSnapshot,
+  atMs: number,
+): ControllerHomeReadiness {
+  return { token: sessionRevisionToken(snapshot), establishedAtMs: atMs };
+}
+
+/**
+ * True only while an established acknowledgement still matches the current
+ * session. A different revision, session or launch means an explicit Resume is
+ * required; a remounted panel with no acknowledgement is never implicitly ready.
+ */
+export function isControllerHomeReady(
+  readiness: ControllerHomeReadiness | null | undefined,
+  current: SessionSnapshot | null | undefined,
+): boolean {
+  return Boolean(
+    readiness
+    && current
+    && readiness.token === sessionRevisionToken(current),
+  );
+}
 
 /** Only a present native DS4 plus a disarmed Home path needs a launch guard. */
 export function shouldPreflightControllerHome(
@@ -60,18 +95,28 @@ function healthyNativeHome(status: NativeControllerStatus, statusKnown: boolean)
     && status.homeEnabled;
 }
 
-async function reconcileNativeStatusBounded(): Promise<void> {
+type NativeStatusRead = Pick<typeof nativeControllerStore, "reconcile" | "invalidateStatusRead">;
+
+/**
+ * Reads native status with a hard deadline. On timeout the read epoch is
+ * invalidated, so a late invoke reply can never make the status look current.
+ * The store is injectable to exercise the epoch boundary in tests; production
+ * always uses the single process-wide store.
+ */
+export async function reconcileNativeStatusBounded(
+  store: NativeStatusRead = nativeControllerStore,
+): Promise<void> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
-      nativeControllerStore.reconcile(),
+      store.reconcile(),
       new Promise<never>((_resolve, reject) => {
         timeout = setTimeout(() => reject(new Error("Native controller status timeout")), NATIVE_STATUS_READ_TIMEOUT_MS);
       }),
     ]);
   } catch {
     // Invalidate the read epoch so a late invoke cannot make the status look current.
-    nativeControllerStore.invalidateStatusRead();
+    store.invalidateStatusRead();
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);
   }
