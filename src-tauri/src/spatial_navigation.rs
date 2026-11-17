@@ -1,7 +1,7 @@
 //! Opt-in UI Automation navigation scoped to an already-owned streaming window.
 //! Never reads names, values, URLs or text. Call only on a non-UI MTA worker.
 use crate::edge_cinema::StreamingWindowTarget;
-use serde::Serialize;
+use crate::tv_navigation::{SpatialCandidateRejections, SpatialNavigationDiagnostics};
 use tauri::AppHandle;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -12,12 +12,28 @@ pub(crate) enum Direction {
     Right,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug)]
 pub(crate) struct SpatialOutcome {
-    pub candidate_count: usize,
-    pub query_ms: u64,
-    pub effect: &'static str,
+    pub accepted: bool,
+    pub effect: String,
+    pub diagnostics: SpatialNavigationDiagnostics,
+    pub failure_reason: Option<String>,
+    pub pointer_fallback_recommended: bool,
+}
+
+fn failed_outcome(
+    reason: &'static str,
+    message: impl Into<String>,
+    diagnostics: SpatialNavigationDiagnostics,
+    pointer_fallback_recommended: bool,
+) -> SpatialOutcome {
+    SpatialOutcome {
+        accepted: false,
+        effect: message.into(),
+        diagnostics,
+        failure_reason: Some(reason.into()),
+        pointer_fallback_recommended,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -109,16 +125,26 @@ pub(crate) fn navigate(
 ) -> Result<SpatialOutcome, String> {
     if !crate::edge_cinema::streaming_target_is_current(app, target) {
         invalidate();
-        return Err("Spatial: focus or owned session changed.".into());
+        return Ok(failed_outcome(
+            "targetChanged",
+            "Spatial navigation stopped because the owned streaming target changed.",
+            SpatialNavigationDiagnostics::default(),
+            false,
+        ));
     }
     #[cfg(target_os = "windows")]
     {
-        native::run(app, target, Some(direction), still_authorized)
+        Ok(native::run(app, target, Some(direction), still_authorized))
     }
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (direction, still_authorized);
-        Err("Spatial navigation requires Windows UI Automation.".into())
+        Ok(failed_outcome(
+            "unsupportedPlatform",
+            "Spatial navigation requires Windows UI Automation.",
+            SpatialNavigationDiagnostics::default(),
+            false,
+        ))
     }
 }
 
@@ -129,16 +155,26 @@ pub(crate) fn activate(
 ) -> Result<SpatialOutcome, String> {
     if !crate::edge_cinema::streaming_target_is_current(app, target) {
         invalidate();
-        return Err("Spatial: focus or owned session changed.".into());
+        return Ok(failed_outcome(
+            "targetChanged",
+            "Spatial navigation stopped because the owned streaming target changed.",
+            SpatialNavigationDiagnostics::default(),
+            false,
+        ));
     }
     #[cfg(target_os = "windows")]
     {
-        native::run(app, target, None, still_authorized)
+        Ok(native::run(app, target, None, still_authorized))
     }
     #[cfg(not(target_os = "windows"))]
     {
         let _ = still_authorized;
-        Err("Spatial navigation requires Windows UI Automation.".into())
+        Ok(failed_outcome(
+            "unsupportedPlatform",
+            "Spatial navigation requires Windows UI Automation.",
+            SpatialNavigationDiagnostics::default(),
+            false,
+        ))
     }
 }
 
@@ -202,6 +238,17 @@ mod native {
         element: IUIAutomationElement,
         bounds: Bounds,
     }
+    #[derive(Clone, Copy)]
+    enum CandidateRejection {
+        Disabled,
+        Offscreen,
+        Password,
+        NotKeyboardFocusable,
+        InvalidBounds,
+        OutsideScope,
+        PropertyUnavailable,
+        ActionBudget,
+    }
     struct Provider {
         // COM references must drop before the apartment is uninitialized.
         automation: IUIAutomation2,
@@ -210,6 +257,7 @@ mod native {
         candidates: Vec<Candidate>,
         target: StreamingWindowTarget,
         captured: Instant,
+        diagnostics: SpatialNavigationDiagnostics,
         _apartment: ComApartment,
     }
     thread_local! { static PROVIDER: RefCell<Option<Provider>> = const { RefCell::new(None) }; }
@@ -255,6 +303,7 @@ mod native {
                 candidates: Vec::new(),
                 target: target.clone(),
                 captured: Instant::now(),
+            diagnostics: SpatialNavigationDiagnostics::default(),
                 _apartment: apartment,
             })
         }
@@ -293,7 +342,9 @@ mod native {
                     }
                 }
                 check_budget(started)?;
-                current = unsafe { self.walker.GetParentElement(&current) }.map_err(|_| error())?;
+                current = unsafe { self.walker.GetParentElement(&current) }.map_err(|_| {
+                    "Spatial: focus is outside the owned window scope.".to_string()
+                })?;
             }
             Err("Spatial: focus ancestry exceeds safe scope.".into())
         }
@@ -303,22 +354,53 @@ mod native {
             element: &IUIAutomationElement,
             scope_bounds: Bounds,
             started: Instant,
-        ) -> Option<Bounds> {
+        ) -> Result<Bounds, CandidateRejection> {
             unsafe {
-                check_budget(started).ok()?;
-                if !element.CurrentIsEnabled().ok()?.as_bool()
-                    || check_budget(started).is_err()
-                    || element.CurrentIsOffscreen().ok()?.as_bool()
-                    || check_budget(started).is_err()
-                    || element.CurrentIsPassword().ok()?.as_bool()
-                    || check_budget(started).is_err()
-                    || !element.CurrentIsKeyboardFocusable().ok()?.as_bool()
+                check_budget(started).map_err(|_| CandidateRejection::ActionBudget)?;
+                if !element
+                    .CurrentIsEnabled()
+                    .map_err(|_| CandidateRejection::PropertyUnavailable)?
+                    .as_bool()
                 {
-                    return None;
+                    return Err(CandidateRejection::Disabled);
                 }
-                check_budget(started).ok()?;
-                let rect = bounds(element.CurrentBoundingRectangle().ok()?);
-                scope_bounds.contains(rect).then_some(rect)
+                check_budget(started).map_err(|_| CandidateRejection::ActionBudget)?;
+                if element
+                    .CurrentIsOffscreen()
+                    .map_err(|_| CandidateRejection::PropertyUnavailable)?
+                    .as_bool()
+                {
+                    return Err(CandidateRejection::Offscreen);
+                }
+                check_budget(started).map_err(|_| CandidateRejection::ActionBudget)?;
+                if element
+                    .CurrentIsPassword()
+                    .map_err(|_| CandidateRejection::PropertyUnavailable)?
+                    .as_bool()
+                {
+                    return Err(CandidateRejection::Password);
+                }
+                check_budget(started).map_err(|_| CandidateRejection::ActionBudget)?;
+                if !element
+                    .CurrentIsKeyboardFocusable()
+                    .map_err(|_| CandidateRejection::PropertyUnavailable)?
+                    .as_bool()
+                {
+                    return Err(CandidateRejection::NotKeyboardFocusable);
+                }
+                check_budget(started).map_err(|_| CandidateRejection::ActionBudget)?;
+                let rect = bounds(
+                    element
+                        .CurrentBoundingRectangle()
+                        .map_err(|_| CandidateRejection::PropertyUnavailable)?,
+                );
+                if !rect.valid() {
+                    Err(CandidateRejection::InvalidBounds)
+                } else if !scope_bounds.contains(rect) {
+                    Err(CandidateRejection::OutsideScope)
+                } else {
+                    Ok(rect)
+                }
             }
         }
 
@@ -327,26 +409,23 @@ mod native {
             element: &IUIAutomationElement,
             scope: &IUIAutomationElement,
             started: Instant,
-        ) -> bool {
+        ) -> Result<bool, String> {
             let mut current = element.clone();
             for _ in 0..MAX_DEPTH {
-                if check_budget(started).is_err() {
-                    return false;
-                }
+                check_budget(started)?;
                 if unsafe { self.automation.CompareElements(&current, scope) }
-                    .is_ok_and(|same| same.as_bool())
+                    .map_err(|_| error())?
+                    .as_bool()
                 {
-                    return true;
+                    return Ok(true);
                 }
-                if check_budget(started).is_err() {
-                    return false;
-                }
+                check_budget(started)?;
                 match unsafe { self.walker.GetParentElement(&current) } {
                     Ok(parent) => current = parent,
-                    Err(_) => return false,
+                    Err(_) => return Ok(false),
                 }
             }
-            false
+            Ok(false)
         }
 
         fn refresh(
@@ -354,8 +433,14 @@ mod native {
             scope: &IUIAutomationElement,
             started: Instant,
         ) -> Result<(), String> {
+            let query_started = Instant::now();
             self.candidates.clear();
             self.scope = None;
+            self.diagnostics.visited_count = 0;
+            self.diagnostics.candidate_count = 0;
+            self.diagnostics.rejected = SpatialCandidateRejections::default();
+            self.diagnostics.budget_exhausted = false;
+            self.diagnostics.cache_hit = false;
             let scope_bounds =
                 bounds(unsafe { scope.CurrentBoundingRectangle() }.map_err(|_| error())?);
             if !scope_bounds.valid() {
@@ -367,18 +452,46 @@ mod native {
                 pending.push((first, 1));
             }
             let mut visited = 0;
+            let mut budget_exhausted = false;
             while let Some((element, depth)) = pending.pop() {
-                if visited >= MAX_NODES || started.elapsed() >= QUERY_BUDGET {
+                if visited >= MAX_NODES || query_started.elapsed() >= QUERY_BUDGET {
+                    budget_exhausted = true;
                     break;
                 }
                 visited += 1;
-                if let Some(rect) = self.eligible(&element, scope_bounds, started) {
-                    self.candidates.push(Candidate {
+                match self.eligible(&element, scope_bounds, started) {
+                    Ok(rect) => self.candidates.push(Candidate {
                         element: element.clone(),
                         bounds: rect,
-                    });
+                    }),
+                    Err(CandidateRejection::Disabled) => {
+                        self.diagnostics.rejected.disabled += 1;
+                    }
+                    Err(CandidateRejection::Offscreen) => {
+                        self.diagnostics.rejected.offscreen += 1;
+                    }
+                    Err(CandidateRejection::Password) => {
+                        self.diagnostics.rejected.password += 1;
+                    }
+                    Err(CandidateRejection::NotKeyboardFocusable) => {
+                        self.diagnostics.rejected.not_keyboard_focusable += 1;
+                    }
+                    Err(CandidateRejection::InvalidBounds) => {
+                        self.diagnostics.rejected.invalid_bounds += 1;
+                    }
+                    Err(CandidateRejection::OutsideScope) => {
+                        self.diagnostics.rejected.outside_scope += 1;
+                    }
+                    Err(CandidateRejection::PropertyUnavailable) => {
+                        self.diagnostics.rejected.property_unavailable += 1;
+                    }
+                    Err(CandidateRejection::ActionBudget) => {
+                        budget_exhausted = true;
+                        break;
+                    }
                 }
-                if started.elapsed() >= QUERY_BUDGET {
+                if query_started.elapsed() >= QUERY_BUDGET {
+                    budget_exhausted = true;
                     break;
                 }
                 if let Ok(sibling) = unsafe { self.walker.GetNextSiblingElement(&element) } {
@@ -388,15 +501,32 @@ mod native {
                     if let Ok(child) = unsafe { self.walker.GetFirstChildElement(&element) } {
                         pending.push((child, depth + 1));
                     }
+                } else {
+                    // The depth cap can omit descendants. Do not select from
+                    // a partial tree when the traversal reached that limit.
+                    budget_exhausted = true;
                 }
+            }
+            if query_started.elapsed() >= QUERY_BUDGET {
+                budget_exhausted = true;
+            }
+            self.diagnostics.visited_count = visited;
+            self.diagnostics.candidate_count = self.candidates.len();
+            self.diagnostics.query_ms = query_started
+                .elapsed()
+                .as_millis()
+                .min(u64::MAX as u128) as u64;
+            self.diagnostics.budget_exhausted = budget_exhausted;
+            if budget_exhausted {
+                return Err(
+                    "Spatial: accessibility discovery budget exhausted; select pointer mode."
+                        .into(),
+                );
             }
             self.scope = Some(scope.clone());
             self.captured = Instant::now();
             if self.candidates.is_empty() {
-                return Err(
-                    "Spatial: no eligible controls within query budget; select pointer mode."
-                        .into(),
-                );
+                return Err("Spatial: no eligible controls in the current scope.".into());
             }
             Ok(())
         }
@@ -409,18 +539,29 @@ mod native {
             still_authorized: &dyn Fn() -> bool,
         ) -> Result<SpatialOutcome, String> {
             let started = Instant::now();
+            self.diagnostics = SpatialNavigationDiagnostics::default();
             let root = unsafe {
                 self.automation
                     .ElementFromHandle(HWND(target.hwnd as usize as *mut _))
             }
             .map_err(|_| error())?;
+            self.diagnostics.provider_available = true;
             let scope = self.current_scope(&root, started)?;
+            self.diagnostics.focus_in_scope = Some(true);
             let same_scope = self.scope.as_ref().is_some_and(|old| {
                 unsafe { self.automation.CompareElements(old, &scope) }
                     .is_ok_and(|same| same.as_bool())
             });
-            if !same_scope || self.captured.elapsed() >= CACHE_TTL {
+            let cache_hit = same_scope && self.captured.elapsed() < CACHE_TTL;
+            if !cache_hit {
                 self.refresh(&scope, started)?;
+            } else {
+                self.diagnostics.cache_hit = true;
+                self.diagnostics.visited_count = 0;
+                self.diagnostics.candidate_count = self.candidates.len();
+                self.diagnostics.rejected = SpatialCandidateRejections::default();
+                self.diagnostics.query_ms = 0;
+                self.diagnostics.budget_exhausted = false;
             }
             let focused = unsafe { self.automation.GetFocusedElement() }.map_err(|_| error())?;
             let origin =
@@ -441,8 +582,13 @@ mod native {
                 })
             }
             .ok_or_else(|| {
-                "Spatial: no actionable control in this direction; use keyboard or pointer mode."
-                    .to_string()
+                if direction.is_some() {
+                    "Spatial: no actionable control in this direction; use pointer mode."
+                        .to_string()
+                } else {
+                    "Spatial: the focused control is not an actionable candidate; use pointer mode."
+                        .to_string()
+                }
             })?;
             let candidate = &self.candidates[selected];
             let current_bounds = self
@@ -451,7 +597,13 @@ mod native {
                     bounds(unsafe { scope.CurrentBoundingRectangle() }.map_err(|_| error())?),
                     started,
                 )
-                .ok_or_else(error)?;
+                .map_err(|rejection| match rejection {
+                    CandidateRejection::ActionBudget => {
+                        "Spatial: accessibility action exceeded its work budget; action cancelled."
+                            .to_string()
+                    }
+                    _ => "Spatial: selected control is no longer eligible.".to_string(),
+                })?;
             // Moving/removed controls invalidate selection instead of activating
             // an old rectangle after a dynamic page update.
             if current_bounds != candidate.bounds {
@@ -461,13 +613,17 @@ mod native {
             if !unsafe { self.automation.CompareElements(&scope, &current_scope) }
                 .map_err(|_| error())?
                 .as_bool()
-                || !self.in_scope(&candidate.element, &scope, started)
-                || !still_authorized()
-                || !crate::edge_cinema::streaming_target_is_current(app, target)
             {
-                return Err(
-                    "Spatial: session, focus or modal scope changed; action cancelled.".into(),
-                );
+                return Err("Spatial: modal scope changed; action cancelled.".into());
+            }
+            if !self.in_scope(&candidate.element, &scope, started)? {
+                return Err("Spatial: selected control left its owned scope.".into());
+            }
+            if !still_authorized() {
+                return Err("Spatial: action authorization was revoked.".into());
+            }
+            if !crate::edge_cinema::streaming_target_is_current(app, target) {
+                return Err("Spatial: owned target changed before action.".into());
             }
             check_budget(started)?;
             let effect = if direction.is_some() {
@@ -483,22 +639,66 @@ mod native {
                 }
                 "focus-observed"
             } else {
-                let pattern = unsafe { candidate.element.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId) }.map_err(|_| "Spatial: focused control has no supported Invoke pattern; use keyboard or pointer mode.".to_string())?;
+                let pattern = unsafe { candidate.element.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId) }.map_err(|_| "Spatial: focused control has no supported Invoke pattern; use pointer mode.".to_string())?;
                 check_budget(started)?;
-                if !still_authorized()
-                    || !crate::edge_cinema::streaming_target_is_current(app, target)
-                {
-                    return Err("Spatial: foreground changed before Invoke.".into());
+                if !still_authorized() {
+                    return Err("Spatial: action authorization was revoked before Invoke.".into());
+                }
+                if !crate::edge_cinema::streaming_target_is_current(app, target) {
+                    return Err("Spatial: owned target changed before Invoke.".into());
                 }
                 unsafe { pattern.Invoke() }.map_err(|_| error())?;
                 "invoke-accepted-effect-unverified"
             };
+            self.diagnostics.candidate_count = self.candidates.len();
             Ok(SpatialOutcome {
-                candidate_count: self.candidates.len(),
-                query_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
-                effect,
+                accepted: true,
+                effect: effect.into(),
+                diagnostics: self.diagnostics,
+                failure_reason: None,
+                pointer_fallback_recommended: false,
             })
         }
+    }
+
+    fn failure_reason(error: &str, diagnostics: SpatialNavigationDiagnostics) -> (&'static str, bool) {
+        if diagnostics.budget_exhausted || error.contains("discovery budget") {
+            ("queryBudgetExhausted", true)
+        } else if error.contains("no eligible controls") {
+            ("noEligibleCandidates", true)
+        } else if error.contains("no actionable control in this direction") {
+            ("noCandidateInDirection", true)
+        } else if error.contains("focused control is not an actionable candidate") {
+            ("focusNotCandidate", true)
+        } else if error.contains("focus is outside the owned window scope") {
+            ("focusOutsideOwnedWindow", false)
+        } else if error.contains("ancestry exceeds safe scope") {
+            ("focusAncestryTooDeep", true)
+        } else if error.contains("work budget") {
+            ("actionBudgetExceeded", true)
+        } else if error.contains("no supported Invoke pattern") {
+            ("invokeUnsupported", true)
+        } else if error.contains("no longer eligible") || error.contains("left its owned scope") {
+            ("candidateInvalidated", true)
+        } else if error.contains("selected control moved") {
+            ("candidateInvalidated", true)
+        } else if error.contains("focus was not observed") {
+            ("focusNotObserved", true)
+        } else if error.contains("modal scope changed") {
+            ("scopeChanged", false)
+        } else if error.contains("authorization was revoked") {
+            ("authorizationRevoked", false)
+        } else if error.contains("owned target changed") || error.contains("focus or owned session changed") {
+            ("targetChanged", false)
+        } else if error.contains("provider unavailable or stale") {
+            ("providerUnavailable", true)
+        } else {
+            ("providerCallFailed", true)
+        }
+    }
+
+    fn elapsed_ms(started: Instant) -> u64 {
+        started.elapsed().as_millis().min(u64::MAX as u128) as u64
     }
 
     pub(super) fn run(
@@ -506,24 +706,66 @@ mod native {
         target: &StreamingWindowTarget,
         direction: Option<Direction>,
         still_authorized: &dyn Fn() -> bool,
-    ) -> Result<SpatialOutcome, String> {
+    ) -> SpatialOutcome {
         PROVIDER.with(|slot| {
             let mut slot = slot.borrow_mut();
+            let started = Instant::now();
             if slot
                 .as_ref()
                 .map_or(true, |provider| provider.target != *target)
             {
-                *slot = Some(Provider::new(target)?);
+                match Provider::new(target) {
+                    Ok(provider) => *slot = Some(provider),
+                    Err(message) => {
+                        let mut diagnostics = SpatialNavigationDiagnostics::default();
+                        diagnostics.query_ms = elapsed_ms(started);
+                        return failed_outcome(
+                            "providerUnavailable",
+                            message,
+                            diagnostics,
+                            true,
+                        );
+                    }
+                }
             }
-            let result =
-                slot.as_mut()
-                    .ok_or_else(error)?
-                    .act(app, target, direction, still_authorized);
+            let provider = slot.as_mut().expect("provider was initialized above");
+            let result = provider.act(app, target, direction, still_authorized);
+            let failure = result.as_ref().err().cloned();
+            let mut diagnostics = provider.diagnostics;
+            if let Some(message) = failure.as_deref() {
+                if diagnostics.query_ms == 0 {
+                    diagnostics.query_ms = elapsed_ms(started);
+                }
+                if message.contains("focus is outside the owned window scope") {
+                    diagnostics.focus_in_scope = Some(false);
+                } else if message.contains("ancestry exceeds safe scope") {
+                    diagnostics.focus_in_scope = None;
+                }
+                if message.contains("work budget") {
+                    diagnostics.budget_exhausted = true;
+                }
+                let (reason, pointer_fallback_recommended) =
+                    failure_reason(message, diagnostics);
+                let outcome = failed_outcome(
+                    reason,
+                    message,
+                    diagnostics,
+                    pointer_fallback_recommended,
+                );
+                // No retry after failure; discard every stale COM reference.
+                *slot = None;
+                return outcome;
+            }
+            let outcome = result.expect("failure was handled above");
+            diagnostics = outcome.diagnostics;
             // No retry after failure; discard every stale COM reference.
-            if result.is_err() || direction.is_none() {
+            if direction.is_none() {
                 *slot = None;
             }
-            result
+            SpatialOutcome {
+                diagnostics,
+                ..outcome
+            }
         })
     }
     pub(super) fn invalidate() {

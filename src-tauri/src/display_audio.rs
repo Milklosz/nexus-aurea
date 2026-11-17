@@ -8,6 +8,27 @@ pub(crate) const AUDIO_CHANGED_EVENT: &str = "velora-audio-changed";
 
 const MAX_DISPLAYS: usize = 16;
 
+/// Geometry uses physical desktop pixels, including negative monitor origins.
+/// Scale is observational and never used to rescale UIA's physical rectangles.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DisplayDiagnostics {
+    pub x: i32,
+    pub y: i32,
+    pub desktop_width: u32,
+    pub desktop_height: u32,
+    pub scale_percent: Option<u32>,
+    pub effective_dpi_x: Option<u32>,
+    pub effective_dpi_y: Option<u32>,
+    pub dpi_provenance: Option<String>,
+    pub refresh_millihz: Option<u32>,
+    pub connection_type: Option<String>,
+    pub adapter_name: Option<String>,
+    pub edid_manufacturer_id: Option<u16>,
+    pub edid_product_code_id: Option<u16>,
+    pub identity_source: String,
+}
+
 #[cfg(target_os = "windows")]
 const MAX_AUDIO_ENDPOINTS: usize = 32;
 #[cfg(target_os = "windows")]
@@ -34,6 +55,8 @@ pub struct DisplayInfo {
     pub primary: bool,
     pub hdr: Option<bool>,
     pub hdr_error: Option<String>,
+    #[serde(default)]
+    pub diagnostics: DisplayDiagnostics,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,6 +191,8 @@ pub(crate) fn display_signature(displays: &[DisplayInfo]) -> String {
             if display.primary { "1" } else { "0" }
         );
         let _ = write!(&mut normalized, "{hdr};");
+        // A scaling or topology change also invalidates geometry consumers.
+        let _ = write!(&mut normalized, "{:?};", display.diagnostics);
     }
     short_hash(&normalized)
 }
@@ -273,7 +298,8 @@ fn limitations() -> Vec<String> {
         "Identyfikatory monitorów i punktów końcowych audio są nieodwracalnymi skrótami; surowe ścieżki urządzeń nie opuszczają backendu.".to_string(),
         "Identyfikator monitora jest oparty na ścieżce urządzenia Windows; jeśli system jej nie zwróci, identyfikator może zmienić się po ponownym uruchomieniu.".to_string(),
         "Lista audio obejmuje urządzenia renderujące w każdym stanie; głośność i wyciszenie są odczytywane tylko dla aktywnych punktów końcowych.".to_string(),
-        "Zmiana HDMI jest wnioskowana z sygnatury aktywnych monitorów i trybu; moduł nie odczytuje nazwy portu HDMI ani nie negocjuje trybu.".to_string(),
+        "Połączenie i EDID są raportowane z aktywnej ścieżki DisplayConfig tylko przy jednoznacznym powiązaniu. Brak danych i lustrzane cele pozostają nieznane; raport nie odczytuje numeru portu ani nie negocjuje trybu.".to_string(),
+        "Położenie i wymiary pulpitu są fizycznymi pikselami; scalePercent jest przedziałem API GetScaleFactorForMonitor do doboru zasobów i może różnić się od efektywnego DPI okna. Nie należy ponownie skalować fizycznych prostokątów UI Automation. Odświeżanie w mHz pochodzi z ułamka DisplayConfig, jeśli jest dostępny.".to_string(),
     ];
 
     if cfg!(target_os = "windows") {
@@ -305,6 +331,15 @@ fn short_hash(value: &str) -> String {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     format!("{hash:016x}")
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn refresh_millihz(numerator: u32, denominator: u32) -> Option<u32> {
+    if numerator == 0 || denominator == 0 {
+        return None;
+    }
+    let value = (u64::from(numerator) * 1000 + u64::from(denominator) / 2) / u64::from(denominator);
+    (1..=1_000_000).contains(&value).then_some(value as u32)
 }
 
 /// Uses the same Core Audio apartment and identifier handling as diagnostics.
@@ -416,8 +451,8 @@ fn sanitize_label(raw: &str) -> String {
 #[cfg(target_os = "windows")]
 mod windows_native {
     use super::{
-        hash_identifier, normalize_identifier, sanitize_label, AudioEndpointInfo, DisplayInfo,
-        MonitorDetails, MAX_AUDIO_ENDPOINTS, MAX_DISPLAYS,
+        hash_identifier, normalize_identifier, sanitize_label, AudioEndpointInfo,
+        DisplayDiagnostics, DisplayInfo, MonitorDetails, MAX_AUDIO_ENDPOINTS, MAX_DISPLAYS,
     };
     use ::windows::core::{BOOL, PCWSTR, PWSTR};
     use ::windows::Win32::Devices::Display::{
@@ -436,8 +471,8 @@ mod windows_native {
         ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, LPARAM, RECT, RPC_E_CHANGED_MODE,
     };
     use ::windows::Win32::Graphics::Gdi::{
-        EnumDisplayMonitors, EnumDisplaySettingsW, GetMonitorInfoW, DEVMODEW,
-        ENUM_CURRENT_SETTINGS, HDC, HMONITOR, MONITORINFOEXW,
+        EnumDisplayDevicesW, EnumDisplayMonitors, EnumDisplaySettingsW, GetMonitorInfoW, DEVMODEW,
+        DISPLAY_DEVICEW, ENUM_CURRENT_SETTINGS, HDC, HMONITOR, MONITORINFOEXW,
     };
     use ::windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
     use ::windows::Win32::Media::Audio::{
@@ -453,6 +488,12 @@ mod windows_native {
         CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
         COINIT_MULTITHREADED, STGM_READ,
     };
+    use ::windows::Win32::UI::HiDpi::{
+        GetDpiForMonitor, GetProcessDpiAwareness, SetThreadDpiAwarenessContext,
+        DPI_AWARENESS_CONTEXT, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, MDT_EFFECTIVE_DPI,
+        PROCESS_PER_MONITOR_DPI_AWARE,
+    };
+    use ::windows::Win32::UI::Shell::GetScaleFactorForMonitor;
 
     const MAX_DIMENSION: u32 = 65_535;
     const MAX_REFRESH_HZ: u32 = 1_000;
@@ -464,6 +505,7 @@ mod windows_native {
     struct MonitorEnumContext {
         monitors: Vec<RawMonitor>,
         truncated: bool,
+        per_monitor_process: bool,
     }
 
     struct RawMonitor {
@@ -471,6 +513,11 @@ mod windows_native {
         width: u32,
         height: u32,
         primary: bool,
+        x: i32,
+        y: i32,
+        scale_percent: Option<u32>,
+        effective_dpi_x: Option<u32>,
+        effective_dpi_y: Option<u32>,
     }
 
     struct DisplayConfigEntry {
@@ -480,6 +527,9 @@ mod windows_native {
         hdr: Option<bool>,
         hdr_error: Option<String>,
         connection_type: Option<&'static str>,
+        refresh_millihz: Option<u32>,
+        edid_manufacturer_id: Option<u16>,
+        edid_product_code_id: Option<u16>,
     }
 
     #[windows::core::implement(IMMNotificationClient)]
@@ -604,11 +654,37 @@ mod windows_native {
         paths: Vec<DISPLAYCONFIG_PATH_INFO>,
     }
 
+    /// Windows geometry APIs virtualize coordinates for unaware callers. This
+    /// guard changes only this worker's context and restores it on every exit.
+    struct PhysicalDesktopScope(DPI_AWARENESS_CONTEXT);
+    impl PhysicalDesktopScope {
+        fn enter() -> Option<Self> {
+            let previous =
+                unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+            (!previous.0.is_null()).then_some(Self(previous))
+        }
+    }
+    impl Drop for PhysicalDesktopScope {
+        fn drop(&mut self) {
+            unsafe { SetThreadDpiAwarenessContext(self.0) };
+        }
+    }
+
     pub(super) fn read_displays() -> (Vec<DisplayInfo>, Option<String>) {
+        let Some(_physical_desktop_scope) = PhysicalDesktopScope::enter() else {
+            return (
+                Vec::new(),
+                Some("Nie można potwierdzić fizycznej przestrzeni współrzędnych ekranu.".into()),
+            );
+        };
         let config_entries = read_display_config_entries();
         let mut context = MonitorEnumContext {
             monitors: Vec::new(),
             truncated: false,
+            // GetDpiForMonitor returns a misleading 96/system DPI in unaware
+            // processes. Never present such values as this monitor's DPI.
+            per_monitor_process: unsafe { GetProcessDpiAwareness(None) }
+                .is_ok_and(|value| value == PROCESS_PER_MONITOR_DPI_AWARE),
         };
 
         let enumerated = unsafe {
@@ -635,9 +711,14 @@ mod windows_native {
         for (index, monitor) in context.monitors.into_iter().enumerate() {
             let gdi_name = wide_z_to_string(&monitor.device_name);
             let normalized_name = normalize_identifier(&gdi_name);
-            let entry = config_entries
+            let mut matching = config_entries
                 .iter()
-                .find(|candidate| candidate.source_key == normalized_name);
+                .filter(|candidate| candidate.source_key == normalized_name);
+            let first = matching.next();
+            // One GDI source can drive mirrored targets with different EDIDs.
+            // Never label that source using whichever target happened to be first.
+            let ambiguous = matching.next().is_some();
+            let entry = if ambiguous { None } else { first };
 
             let mut width = monitor.width;
             let mut height = monitor.height;
@@ -712,6 +793,33 @@ mod windows_native {
                 primary: monitor.primary,
                 hdr,
                 hdr_error,
+                diagnostics: DisplayDiagnostics {
+                    x: monitor.x,
+                    y: monitor.y,
+                    desktop_width: monitor.width,
+                    desktop_height: monitor.height,
+                    scale_percent: monitor.scale_percent,
+                    effective_dpi_x: monitor.effective_dpi_x,
+                    effective_dpi_y: monitor.effective_dpi_y,
+                    dpi_provenance: monitor
+                        .effective_dpi_x
+                        .map(|_| "getDpiForMonitorPerMonitorProcess".into()),
+                    refresh_millihz: entry.and_then(|item| item.refresh_millihz),
+                    connection_type: entry
+                        .and_then(|item| item.connection_type)
+                        .map(str::to_string),
+                    adapter_name: adapter_name(&gdi_name),
+                    edid_manufacturer_id: entry.and_then(|item| item.edid_manufacturer_id),
+                    edid_product_code_id: entry.and_then(|item| item.edid_product_code_id),
+                    identity_source: if ambiguous {
+                        "mirroredSourceUnknown"
+                    } else if entry.is_some() {
+                        "displayConfig"
+                    } else {
+                        "gdiFallback"
+                    }
+                    .into(),
+                },
             });
         }
 
@@ -755,6 +863,17 @@ mod windows_native {
         let mut info = MONITORINFOEXW::default();
         info.monitorInfo.cbSize = core::mem::size_of::<MONITORINFOEXW>() as u32;
         if unsafe { GetMonitorInfoW(hmonitor, &mut info.monitorInfo) }.as_bool() {
+            let scale_percent = unsafe { GetScaleFactorForMonitor(hmonitor) }
+                .ok()
+                .map(|value| value.0 as u32)
+                .filter(|value| (100..=500).contains(value));
+            let mut dpi_x = 0;
+            let mut dpi_y = 0;
+            let dpi_valid = context.per_monitor_process
+                && unsafe { GetDpiForMonitor(hmonitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) }
+                    .is_ok()
+                && (48..=768).contains(&dpi_x)
+                && (48..=768).contains(&dpi_y);
             context.monitors.push(RawMonitor {
                 device_name: info.szDevice,
                 width: dimension(
@@ -766,6 +885,11 @@ mod windows_native {
                     info.monitorInfo.rcMonitor.top,
                 ),
                 primary: info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0,
+                x: info.monitorInfo.rcMonitor.left,
+                y: info.monitorInfo.rcMonitor.top,
+                scale_percent,
+                effective_dpi_x: dpi_valid.then_some(dpi_x),
+                effective_dpi_y: dpi_valid.then_some(dpi_y),
             });
         }
         true.into()
@@ -793,6 +917,25 @@ mod windows_native {
         }
     }
 
+    fn adapter_name(gdi_name: &str) -> Option<String> {
+        for index in 0..MAX_CONFIG_PATHS as u32 {
+            let mut device = DISPLAY_DEVICEW {
+                cb: core::mem::size_of::<DISPLAY_DEVICEW>() as u32,
+                ..Default::default()
+            };
+            if !unsafe { EnumDisplayDevicesW(PCWSTR::null(), index, &mut device, 0) }.as_bool() {
+                break;
+            }
+            if normalize_identifier(&wide_z_to_string(&device.DeviceName))
+                == normalize_identifier(gdi_name)
+            {
+                let name = sanitize_label(&wide_z_to_string(&device.DeviceString));
+                return (!name.is_empty()).then_some(name);
+            }
+        }
+        None
+    }
+
     fn read_display_config_entries() -> Vec<DisplayConfigEntry> {
         let active = match query_active_paths() {
             Ok(active) => active,
@@ -808,7 +951,8 @@ mod windows_native {
                 Some(name) if !name.trim().is_empty() => normalize_identifier(&name),
                 _ => continue,
             };
-            let (friendly_name, device_key) = target_identity(&path);
+            let (friendly_name, device_key, edid_manufacturer_id, edid_product_code_id) =
+                target_identity(&path);
             let (hdr, hdr_error) = advanced_color_state(&path);
             entries.push(DisplayConfigEntry {
                 source_key,
@@ -825,6 +969,12 @@ mod windows_native {
                     DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DVI => Some("DVI"),
                     _ => None,
                 },
+                refresh_millihz: super::refresh_millihz(
+                    path.targetInfo.refreshRate.Numerator,
+                    path.targetInfo.refreshRate.Denominator,
+                ),
+                edid_manufacturer_id,
+                edid_product_code_id,
             });
         }
         entries
@@ -888,7 +1038,9 @@ mod windows_native {
         Some(wide_z_to_string(&source.viewGdiDeviceName))
     }
 
-    fn target_identity(path: &DISPLAYCONFIG_PATH_INFO) -> (Option<String>, String) {
+    fn target_identity(
+        path: &DISPLAYCONFIG_PATH_INFO,
+    ) -> (Option<String>, String, Option<u16>, Option<u16>) {
         let mut target = DISPLAYCONFIG_TARGET_DEVICE_NAME::default();
         target.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
         target.header.size = core::mem::size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>() as u32;
@@ -905,11 +1057,15 @@ mod windows_native {
                     path.targetInfo.adapterId.LowPart,
                     path.targetInfo.id
                 ),
+                None,
+                None,
             );
         }
 
         let name = wide_z_to_string(&target.monitorFriendlyDeviceName);
         let path_text = wide_z_to_string(&target.monitorDevicePath);
+        // DISPLAYCONFIG_TARGET_DEVICE_NAME_FLAGS.edidIdsValid is bit 2.
+        let edid_ids_valid = unsafe { target.flags.Anonymous.value } & 0x4 != 0;
         let device_key = if path_text.trim().is_empty() {
             format!(
                 "displayconfig:{}:{}:{}",
@@ -927,6 +1083,8 @@ mod windows_native {
                 Some(name)
             },
             device_key,
+            edid_ids_valid.then_some(target.edidManufactureId),
+            edid_ids_valid.then_some(target.edidProductCodeId),
         )
     }
 
@@ -1255,6 +1413,7 @@ mod tests {
             primary,
             hdr: Some(false),
             hdr_error: None,
+            diagnostics: DisplayDiagnostics::default(),
         }
     }
 
@@ -1335,6 +1494,28 @@ mod tests {
     }
 
     #[test]
+    fn topology_and_dpi_changes_invalidate_geometry_consumers() {
+        let original = display("tv", 3840, 2160, 60, false);
+        let signature = display_signature(&[original.clone()]);
+        let mut moved = original.clone();
+        moved.diagnostics.x = -3840;
+        moved.diagnostics.y = 1080;
+        assert_ne!(signature, display_signature(&[moved]));
+        let mut scaled = original;
+        scaled.diagnostics.scale_percent = Some(150);
+        assert_ne!(signature, display_signature(&[scaled]));
+    }
+
+    #[test]
+    fn fractional_refresh_preserves_5994_and_rejects_invalid_rates() {
+        assert_eq!(refresh_millihz(60_000, 1001), Some(59_940));
+        assert_eq!(refresh_millihz(60, 1), Some(60_000));
+        assert_eq!(refresh_millihz(0, 1), None);
+        assert_eq!(refresh_millihz(60, 0), None);
+        assert_eq!(refresh_millihz(u32::MAX, 1), None);
+    }
+
+    #[test]
     fn snapshot_serializes_read_only_policy() {
         let value = serde_json::to_value(snapshot()).expect("snapshot powinien się serializować");
         assert_eq!(value["policy"]["readOnly"], true);
@@ -1354,6 +1535,7 @@ mod tests {
             primary: true,
             hdr: None,
             hdr_error: Some("Windows nie udostępnił informacji o HDR (kod 50).".to_string()),
+            diagnostics: DisplayDiagnostics::default(),
         };
 
         let value = serde_json::to_value(&unknown).expect("DisplayInfo powinien się serializować");
@@ -1387,5 +1569,16 @@ mod tests {
     #[test]
     fn labels_do_not_keep_control_characters() {
         assert_eq!(sanitize_label("Monitor\u{0}\n 1\u{202e}"), "Monitor 1");
+    }
+
+    /// Explicit read-only evidence probe; excluded from automated acceptance.
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "read-only live hardware evidence; invoke explicitly with --ignored --nocapture"]
+    fn live_display_audio_snapshot() {
+        println!(
+            "VELORA_DISPLAY_AUDIO_EVIDENCE={}",
+            serde_json::to_string(&snapshot()).unwrap()
+        );
     }
 }

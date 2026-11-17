@@ -9,6 +9,20 @@ export type TvNavigationAction =
   | "pointerBack" | "pointerToggle" | "nextSection" | "previousSection" | "captions" | "click"
   | "fullscreen" | "playerMute" | "mute" | "volumeUp" | "volumeDown";
 
+export interface SpatialDiagnostics {
+  providerAvailable: boolean;
+  focusInScope: boolean | null;
+  visitedCount: number;
+  candidateCount: number;
+  rejected: {
+    disabled: number; offscreen: number; password: number; notKeyboardFocusable: number;
+    invalidBounds: number; outsideScope: number; propertyUnavailable: number;
+  };
+  queryMs: number;
+  budgetExhausted: boolean;
+  cacheHit: boolean;
+}
+
 export interface TvNavigationReceipt {
   action: TvNavigationAction;
   serviceId?: string | null;
@@ -24,6 +38,13 @@ export interface TvNavigationReceipt {
   dispatchElapsedMs?: number;
   spatialQueryMs?: number | null;
   spatialCandidateCount?: number | null;
+  spatialDiagnostics?: SpatialDiagnostics | null;
+  fallbackReason?: string | null;
+  fallbackActivated?: boolean;
+  /** Explicit local operator annotation; independent of the native dispatch receipt. */
+  effectObservation?: "notChecked" | "observed" | "notObserved";
+  /** Native status confirmed completed Home and focused trusted main, after dispatch. */
+  homeTransitionReady?: boolean;
 }
 
 export interface TvNavigationStatus {
@@ -35,6 +56,7 @@ export interface TvNavigationStatus {
   generation: number;
   mediaControlsArmed: boolean;
   lastSimulatorSequence?: number;
+  simulatorHomeReady?: boolean;
   targetSession?: { sessionId: string; serviceId: string; label: string } | null;
   mediaControlSession?: { sessionId: string; serviceId: string; label: string } | null;
   lastResult: string | null;
@@ -105,15 +127,27 @@ const actions: ReadonlySet<string> = new Set<TvNavigationAction>([
 /** Export uses an allowlist: no native error strings, session identifiers, titles or page data. */
 export function navigationEvidenceJson(receipts: readonly TvNavigationReceipt[]): string {
   const codes = new Set([
-    "automatic", "keyboard", "spatial", "pointer", "unavailable", "unsupported", "unknown",
+    "automatic", "keyboard", "spatial", "pointer", "spatial-pointer-hybrid", "unavailable", "unsupported", "unknown",
     "unverified", "effectUnverified", "observed", "notObserved", "notDispatched", "commandSent", "commandAccepted",
     "focus-observed", "invoke-accepted-effect-unverified",
     "owned", "verified", "denied", "accepted", "rejected", "notApplicable", "notChecked",
   ]);
   const safeCode = (value: string) => codes.has(value) ? value : "redacted";
   const serviceIds = new Set(["netflix", "disney", "max", "prime", "youtube"]);
+  const fallbackReasons = new Set(["providerUnavailable", "focusOutsideOwnedWindow", "focusAncestryTooDeep", "noEligibleCandidates",
+    "queryBudgetExhausted", "noCandidateInDirection", "actionBudgetExceeded", "scopeChanged", "candidateInvalidated", "focusNotObserved",
+    "invokeUnsupported", "providerCallFailed", "authorizationRevoked", "targetChanged", "unsupportedPlatform", "focusNotCandidate"]);
+  const count = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+  const diagnostics = (value?: SpatialDiagnostics | null) => value ? {
+    providerAvailable: value.providerAvailable === true,
+    focusInScope: typeof value.focusInScope === "boolean" ? value.focusInScope : null,
+    visitedCount: count(value.visitedCount), candidateCount: count(value.candidateCount), queryMs: count(value.queryMs),
+    budgetExhausted: value.budgetExhausted === true, cacheHit: value.cacheHit === true,
+    rejected: Object.fromEntries((["disabled", "offscreen", "password", "notKeyboardFocusable", "invalidBounds", "outsideScope", "propertyUnavailable"] as const)
+      .map(key => [key, count(value.rejected?.[key])])),
+  } : null;
   return JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
     physicalHardwareVerified: false,
     effectPolicy: "A command receipt does not establish a playback effect.",
     actions: receipts.slice(-64).map(receipt => ({
@@ -127,10 +161,16 @@ export function navigationEvidenceJson(receipts: readonly TvNavigationReceipt[])
       ownership: receipt.ownership ? safeCode(receipt.ownership) : "unreported",
       commandAccepted: receipt.accepted,
       effect: safeCode(receipt.effect),
+      effectObservation: receipt.effectObservation === "observed" || receipt.effectObservation === "notObserved" ? receipt.effectObservation : "notChecked",
+      effectObservationSource: "localOperator",
+      homeTransitionReady: typeof receipt.homeTransitionReady === "boolean" ? receipt.homeTransitionReady : null,
       resultPresent: receipt.lastResult !== null,
       dispatchElapsedMs: Number.isFinite(receipt.dispatchElapsedMs) ? receipt.dispatchElapsedMs : null,
       spatialQueryMs: Number.isFinite(receipt.spatialQueryMs) ? receipt.spatialQueryMs : null,
       spatialCandidateCount: Number.isSafeInteger(receipt.spatialCandidateCount) ? receipt.spatialCandidateCount : null,
+      spatialDiagnostics: diagnostics(receipt.spatialDiagnostics),
+      fallbackReason: receipt.fallbackReason ? fallbackReasons.has(receipt.fallbackReason) ? receipt.fallbackReason : "redacted" : null,
+      fallbackActivated: receipt.fallbackActivated === true,
     })),
   }, null, 2);
 }

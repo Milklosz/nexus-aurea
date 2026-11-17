@@ -59,6 +59,9 @@ pub enum NavigationAction {
     NextSection,
     ScrollUp,
     ScrollDown,
+    /// Internal bounded controller scroll intensity; simulator IPC exposes
+    /// only the closed `scrollUp` / `scrollDown` names.
+    ScrollAmount(i16),
     PointerMove(i32, i32),
     PointerClick,
     PointerBack,
@@ -145,7 +148,7 @@ pub const PROFILES: &[TvNavigationProfile] = &[
         back_behavior: BROWSER_BACK,
         scroll_behavior: OWNED_SCROLL,
         fullscreen_behavior: "F in armed player context; Esc exits; live effect unverified",
-        automatic_strategy: "keyboard",
+        automatic_strategy: "spatial-pointer-hybrid",
         keyboard: "available; browser behavior varies by page",
         spatial: "candidate; UI Automation provider may expose no usable controls",
         pointer: "bounded to the owned Edge client area",
@@ -162,7 +165,7 @@ pub const PROFILES: &[TvNavigationProfile] = &[
         back_behavior: BROWSER_BACK,
         scroll_behavior: OWNED_SCROLL,
         fullscreen_behavior: "Explicit player control via keyboard focus, UIA or pointer; no shortcut assumed",
-        automatic_strategy: "keyboard",
+        automatic_strategy: "spatial-pointer-hybrid",
         keyboard: "candidate; service UI behavior unverified",
         spatial: "candidate; UI Automation provider may expose no usable controls",
         pointer: "bounded to the owned Edge client area",
@@ -179,7 +182,7 @@ pub const PROFILES: &[TvNavigationProfile] = &[
         back_behavior: BROWSER_BACK,
         scroll_behavior: OWNED_SCROLL,
         fullscreen_behavior: "Explicit player control via keyboard focus, UIA or pointer; no shortcut assumed",
-        automatic_strategy: "keyboard",
+        automatic_strategy: "spatial-pointer-hybrid",
         keyboard: "Tab/arrows navigate, Enter links, Space selects, Esc menus per official help; live effect unverified",
         spatial: "candidate; UI Automation provider may expose no usable controls",
         pointer: "bounded to the owned Edge client area",
@@ -196,7 +199,7 @@ pub const PROFILES: &[TvNavigationProfile] = &[
         back_behavior: BROWSER_BACK,
         scroll_behavior: OWNED_SCROLL,
         fullscreen_behavior: "F in armed player context; Esc exits; live effect unverified",
-        automatic_strategy: "keyboard",
+        automatic_strategy: "spatial-pointer-hybrid",
         keyboard: "candidate; service UI behavior unverified",
         spatial: "candidate; UI Automation provider may expose no usable controls",
         pointer: "bounded to the owned Edge client area",
@@ -213,7 +216,7 @@ pub const PROFILES: &[TvNavigationProfile] = &[
         back_behavior: BROWSER_BACK,
         scroll_behavior: OWNED_SCROLL,
         fullscreen_behavior: "F in armed player context; Esc exits; live effect unverified",
-        automatic_strategy: "keyboard",
+        automatic_strategy: "spatial-pointer-hybrid",
         keyboard: "available; browser behavior varies by page",
         spatial: "candidate; UI Automation provider may expose no usable controls",
         pointer: "bounded to the owned Edge client area",
@@ -253,6 +256,39 @@ pub struct NavigationDiagnostics {
     pub dispatch_elapsed_ms: Option<u64>,
     pub spatial_query_ms: Option<u64>,
     pub spatial_candidate_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_spatial_diagnostics: Option<SpatialNavigationDiagnostics>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_fallback_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_fallback_activated: Option<bool>,
+}
+
+/// Fixed-size, content-free UI Automation telemetry for one spatial attempt.
+/// Counts are bounded by the traversal limit and never contain page text.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpatialCandidateRejections {
+    pub disabled: usize,
+    pub offscreen: usize,
+    pub password: usize,
+    pub not_keyboard_focusable: usize,
+    pub invalid_bounds: usize,
+    pub outside_scope: usize,
+    pub property_unavailable: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpatialNavigationDiagnostics {
+    pub provider_available: bool,
+    pub focus_in_scope: Option<bool>,
+    pub visited_count: usize,
+    pub candidate_count: usize,
+    pub rejected: SpatialCandidateRejections,
+    pub query_ms: u64,
+    pub budget_exhausted: bool,
+    pub cache_hit: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -272,6 +308,7 @@ pub struct TvNavigationStatus {
     pub profiles: &'static [TvNavigationProfile],
     pub diagnostics: NavigationDiagnostics,
     pub last_simulator_sequence: u64,
+    pub simulator_home_ready: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -289,6 +326,12 @@ pub struct NavigationActionReceipt {
     pub dispatch_elapsed_ms: u64,
     pub spatial_query_ms: Option<u64>,
     pub spatial_candidate_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spatial_diagnostics: Option<SpatialNavigationDiagnostics>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_activated: Option<bool>,
 }
 
 #[cfg(test)]
@@ -331,7 +374,7 @@ mod tests {
             assert!(!service.back_behavior.is_empty());
             assert!(!service.scroll_behavior.is_empty());
             assert!(!service.fullscreen_behavior.is_empty());
-            assert_eq!(service.automatic_strategy, "keyboard");
+            assert_eq!(service.automatic_strategy, "spatial-pointer-hybrid");
             assert!(!service.limitations.is_empty());
         }
         assert!(profile("arbitrary.example").is_none());

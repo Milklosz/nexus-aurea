@@ -6,7 +6,7 @@
 use crate::ds4::{Ds4Button, Ds4Dpad, Ds4Report};
 use crate::tv_navigation::{
     NavigationAction, NavigationActionReceipt, NavigationDiagnostics, NavigationMode,
-    NavigationTargetSession, TvNavigationStatus, PROFILES,
+    NavigationTargetSession, SpatialNavigationDiagnostics, TvNavigationStatus, PROFILES,
 };
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -95,6 +95,11 @@ struct RuntimeState {
     last_dispatch_elapsed_ms: Option<u64>,
     last_spatial_query_ms: Option<u64>,
     last_spatial_candidate_count: Option<usize>,
+    last_spatial_diagnostics: Option<SpatialNavigationDiagnostics>,
+    last_fallback_reason: Option<String>,
+    last_fallback_activated: Option<bool>,
+    simulator_home_request_id: u64,
+    simulator_home_ready_revision: Option<u64>,
     engine: InteractionEngine,
     last_remote_at: Option<Instant>,
     engine_controller_epoch: u64,
@@ -174,11 +179,15 @@ struct NormalizedAction {
 
 #[derive(Clone, Debug, Default)]
 struct ActionResult {
+    accepted: Option<bool>,
     effect: String,
     ownership: Option<String>,
     elapsed_ms: u64,
     spatial_query_ms: Option<u64>,
     spatial_candidate_count: Option<usize>,
+    spatial_diagnostics: Option<SpatialNavigationDiagnostics>,
+    fallback_reason: Option<String>,
+    fallback_activated: Option<bool>,
 }
 
 enum WorkerPacket {
@@ -212,7 +221,7 @@ struct InteractionEngine {
     options_seen_reserved_chord: bool,
 }
 
-fn reserved_home_constituent(report: &Ds4Report) -> bool {
+fn reserved_home_constituent(report: &Ds4Report, mode: NavigationMode) -> bool {
     [
         Ds4Button::Ps,
         Ds4Button::Share,
@@ -222,7 +231,12 @@ fn reserved_home_constituent(report: &Ds4Report) -> bool {
         Ds4Button::R1,
     ]
     .into_iter()
-    .any(|button| report.buttons.is_pressed(button))
+    .any(|button| {
+        // R3 is a deliberate precision modifier only while pointer mode is
+        // active. It remains reserved in every other mode/Home gesture.
+        !(mode == NavigationMode::Pointer && button == Ds4Button::R3)
+            && report.buttons.is_pressed(button)
+    })
 }
 
 fn is_options(report: &Ds4Report) -> bool {
@@ -305,7 +319,7 @@ impl InteractionEngine {
             };
         }
         // No held input crosses config, focus, reconnect or Home chord boundaries.
-        if reserved_home_constituent(report) {
+        if reserved_home_constituent(report, mode) {
             if self.options_pending {
                 self.options_seen_reserved_chord = true;
             }
@@ -417,18 +431,24 @@ impl InteractionEngine {
         }
         self.last_direction = direction;
         if mode == NavigationMode::Pointer {
+            let max_step = if report.buttons.is_pressed(Ds4Button::R3) {
+                8
+            } else {
+                32
+            };
             let (x, y) = (
-                pointer_axis_step(report.right_x, RIGHT_STICK_DEADZONE, 32),
-                pointer_axis_step(report.right_y, RIGHT_STICK_DEADZONE, 32),
+                pointer_axis_step(report.right_x, RIGHT_STICK_DEADZONE, max_step),
+                pointer_axis_step(report.right_y, RIGHT_STICK_DEADZONE, max_step),
             );
             if x != 0 || y != 0 {
                 actions.push(Action::Move(x, y));
             }
         } else if report.right_y.is_finite() && report.right_y.abs() >= RIGHT_STICK_DEADZONE {
+            let amount = scroll_axis_amount(report.right_y, RIGHT_STICK_DEADZONE);
             actions.push(if report.right_y < 0.0 {
-                Action::Scroll(120)
+                Action::Scroll(amount)
             } else {
-                Action::Scroll(-120)
+                Action::Scroll(-amount)
             });
         }
         if actions.len() < 3 && (report.l2 > 0.5 || report.r2 > 0.5) {
@@ -480,6 +500,26 @@ fn pointer_axis_step(value: f32, deadzone: f32, max_step: i32) -> i32 {
     step.max(1).min(max_step) * if bounded < 0.0 { -1 } else { 1 }
 }
 
+fn scroll_axis_amount(value: f32, deadzone: f32) -> i32 {
+    if !value.is_finite()
+        || !deadzone.is_finite()
+        || !(0.0..1.0).contains(&deadzone)
+        || value.abs() < deadzone
+    {
+        return 0;
+    }
+    let normalized = ((value.abs().clamp(0.0, 1.0) - deadzone) / (1.0 - deadzone)).clamp(0.0, 1.0);
+    (120.0 + 120.0 * normalized * normalized).round() as i32
+}
+
+fn scale_pointer_delta(delta: i32, client_extent: i32, reference_extent: i32) -> i32 {
+    if delta == 0 || client_extent <= 0 || reference_extent <= 0 {
+        return delta.clamp(-64, 64);
+    }
+    let scale = (client_extent as f64 / reference_extent as f64).clamp(1.0, 2.0);
+    ((f64::from(delta) * scale).round() as i32).clamp(-64, 64)
+}
+
 impl StreamingControl {
     fn status(&self) -> StreamingControlStatus {
         let state = self
@@ -499,7 +539,11 @@ impl StreamingControl {
     }
 }
 
-fn status_snapshot(control: &StreamingControl, simulator_available: bool) -> TvNavigationStatus {
+fn status_snapshot(
+    app: &AppHandle,
+    control: &StreamingControl,
+    simulator_available: bool,
+) -> TvNavigationStatus {
     let state = control
         .state
         .lock()
@@ -528,6 +572,12 @@ fn status_snapshot(control: &StreamingControl, simulator_available: bool) -> TvN
         })
     });
     let active_service = state.active_service.clone();
+    let mode = state.mode;
+    let media_controls_armed = state.media_controls_armed;
+    let generation = control.generation.load(Ordering::Acquire);
+    let last_result = state.last_result.clone();
+    let last_simulator_sequence = state.last_simulator_sequence;
+    let ready_revision = state.simulator_home_ready_revision;
     let strategy = match state.mode {
         NavigationMode::Automatic => active_service
             .as_deref()
@@ -539,37 +589,66 @@ fn status_snapshot(control: &StreamingControl, simulator_available: bool) -> TvN
         NavigationMode::Spatial => "spatial".into(),
         NavigationMode::Pointer => "pointer".into(),
     };
+    let diagnostics = NavigationDiagnostics {
+        accepted_actions: state.accepted,
+        rejected_actions: state.rejected,
+        dropped_reports: control.dropped.load(Ordering::Relaxed),
+        queue_depth: control.queue_depth.load(Ordering::Relaxed),
+        last_source: state.last_source.map(str::to_string),
+        last_controller_id: state.last_controller_id.clone(),
+        last_repeat: state.last_repeat,
+        last_sequence: state.last_sequence,
+        last_routing_decision: state.last_routing_decision.map(str::to_string),
+        last_target_present: state.last_target_session.is_some(),
+        last_action_at_ms: state.last_action_at_ms,
+        dispatch_elapsed_ms: state.last_dispatch_elapsed_ms,
+        spatial_query_ms: state.last_spatial_query_ms,
+        spatial_candidate_count: state.last_spatial_candidate_count,
+        last_spatial_diagnostics: state.last_spatial_diagnostics,
+        last_fallback_reason: state.last_fallback_reason.clone(),
+        last_fallback_activated: state.last_fallback_activated,
+    };
+    drop(state);
     TvNavigationStatus {
         windows: cfg!(target_os = "windows"),
         enabled: control.enabled.load(Ordering::Acquire),
         simulator_available,
-        mode: state.mode,
+        mode,
         active_strategy: strategy,
         active_service,
         target_session,
         media_control_session,
-        generation: control.generation.load(Ordering::Acquire),
-        media_controls_armed: state.media_controls_armed,
-        last_result: state.last_result.clone(),
+        generation,
+        media_controls_armed,
+        last_result,
         profiles: PROFILES,
-        diagnostics: NavigationDiagnostics {
-            accepted_actions: state.accepted,
-            rejected_actions: state.rejected,
-            dropped_reports: control.dropped.load(Ordering::Relaxed),
-            queue_depth: control.queue_depth.load(Ordering::Relaxed),
-            last_source: state.last_source.map(str::to_string),
-            last_controller_id: state.last_controller_id.clone(),
-            last_repeat: state.last_repeat,
-            last_sequence: state.last_sequence,
-            last_routing_decision: state.last_routing_decision.map(str::to_string),
-            last_target_present: state.last_target_session.is_some(),
-            last_action_at_ms: state.last_action_at_ms,
-            dispatch_elapsed_ms: state.last_dispatch_elapsed_ms,
-            spatial_query_ms: state.last_spatial_query_ms,
-            spatial_candidate_count: state.last_spatial_candidate_count,
-        },
-        last_simulator_sequence: state.last_simulator_sequence,
+        diagnostics,
+        last_simulator_sequence,
+        simulator_home_ready: simulator_home_ready(app, control, simulator_available, ready_revision),
     }
+}
+
+fn simulator_home_ready(
+    app: &AppHandle,
+    control: &StreamingControl,
+    simulator_available: bool,
+    ready_revision: Option<u64>,
+) -> bool {
+    if !simulator_available || !control.enabled.load(Ordering::Acquire) {
+        return false;
+    }
+    let Some(ready_revision) = ready_revision else {
+        return false;
+    };
+    let snapshot = crate::session_orchestrator::get_session_state(app.clone());
+    if snapshot.current != crate::session_orchestrator::SessionId::VeloraHome
+        || snapshot.revision != ready_revision
+    {
+        return false;
+    }
+    app.get_webview_window("main")
+        .filter(|window| local_main_origin(window))
+        .is_some_and(|window| window.is_focused().unwrap_or(false))
 }
 
 fn active_strategy_for(mode: NavigationMode, service_id: Option<&str>) -> String {
@@ -643,7 +722,7 @@ pub fn get_streaming_control_status(app: AppHandle) -> StreamingControlStatus {
 #[tauri::command(async)]
 pub fn get_tv_navigation_status(app: AppHandle, window: WebviewWindow) -> TvNavigationStatus {
     let simulator = simulator_available(&window);
-    let mut status = status_snapshot(app.state::<StreamingControl>().inner(), simulator);
+    let mut status = status_snapshot(&app, app.state::<StreamingControl>().inner(), simulator);
     status.active_service = if status.enabled {
         crate::edge_cinema::foreground_owned_streaming_target(&app)
             .map(|target| target.service_id.to_string())
@@ -687,6 +766,7 @@ pub fn configure_tv_navigation(
     }
     configure_router(&app, enabled, mode)?;
     Ok(status_snapshot(
+        &app,
         app.state::<StreamingControl>().inner(),
         simulator_available(&window),
     ))
@@ -723,7 +803,7 @@ pub fn set_tv_navigation_mode(
     state.engine = InteractionEngine::default();
     state.last_result = Some(format!("Tryb nawigacji ustawiono: {}.", mode.as_str()));
     drop(state);
-    Ok(status_snapshot(&control, simulator_available(&window)))
+    Ok(status_snapshot(&app, &control, simulator_available(&window)))
 }
 
 #[tauri::command(async)]
@@ -773,7 +853,7 @@ pub fn set_tv_navigation_media_controls(
     crate::spatial_navigation::invalidate();
     state.engine = InteractionEngine::default();
     drop(state);
-    Ok(status_snapshot(&control, simulator_available(&window)))
+    Ok(status_snapshot(&app, &control, simulator_available(&window)))
 }
 
 #[tauri::command(async)]
@@ -810,7 +890,7 @@ pub fn capture_tv_navigation_target(
     }
     state.last_result = Some("Przypięto dokładną, aktywną sesję Edge Cinema do symulatora.".into());
     drop(state);
-    Ok(status_snapshot(&control, true))
+    Ok(status_snapshot(&app, &control, true))
 }
 
 #[tauri::command(async)]
@@ -834,7 +914,7 @@ pub fn cancel_tv_navigation_simulation(
     state.last_result =
         Some("Akcja symulatora anulowana; kolejne wejście wymaga neutralnego stanu pada.".into());
     drop(state);
-    Ok(status_snapshot(&control, true))
+    Ok(status_snapshot(&app, &control, true))
 }
 
 fn configure_router(
@@ -931,12 +1011,18 @@ fn configure_router(
                             let reply = action.reply.clone();
                             let action_generation = action.generation;
                             let result = dispatch_normalized_action(&worker_app, action);
+                            let fallback_activated = result.as_ref().is_ok_and(|result| {
+                                result.fallback_activated == Some(true)
+                            });
+                            let current_generation = worker_app
+                                .state::<StreamingControl>()
+                                .generation
+                                .load(Ordering::Acquire);
                             if simulator
-                                && worker_app
-                                    .state::<StreamingControl>()
-                                    .generation
-                                    .load(Ordering::Acquire)
-                                    == action_generation
+                                && (current_generation == action_generation
+                                    || (fallback_activated
+                                        && current_generation
+                                            == action_generation.saturating_add(1)))
                             {
                                 worker_app
                                     .state::<StreamingControl>()
@@ -1195,8 +1281,7 @@ fn action_to_navigation(action: Action) -> NavigationAction {
         Action::Back => NavigationAction::Back,
         Action::Click => NavigationAction::PointerClick,
         Action::Move(x, y) => NavigationAction::PointerMove(x, y),
-        Action::Scroll(value) if value > 0 => NavigationAction::ScrollUp,
-        Action::Scroll(_) => NavigationAction::ScrollDown,
+        Action::Scroll(value) => NavigationAction::ScrollAmount(value.clamp(-240, 240) as i16),
         Action::TogglePointer => NavigationAction::PointerToggle,
         Action::PlayPause => NavigationAction::PlayPause,
         Action::OpenControlCenter => NavigationAction::OpenControlCenter,
@@ -1218,6 +1303,40 @@ fn normalized_generation_active(
 ) -> bool {
     generation_active(control, epoch, controller_epoch)
         && control.generation.load(Ordering::Acquire) == generation
+}
+
+fn activate_pointer_fallback(
+    control: &StreamingControl,
+    expected_mode: NavigationMode,
+    epoch: u64,
+    controller_epoch: u64,
+    generation: u64,
+) -> bool {
+    let _config = control
+        .config_gate
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !normalized_generation_active(control, epoch, controller_epoch, generation) {
+        return false;
+    }
+    let mut state = control
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if state.mode != expected_mode
+        || !matches!(expected_mode, NavigationMode::Automatic | NavigationMode::Spatial)
+    {
+        return false;
+    }
+    state.mode = NavigationMode::Pointer;
+    // Avoid silently retrying an unavailable spatial provider if the user
+    // later exits pointer mode. Choosing Automatic again is an explicit probe.
+    state.previous_mode = NavigationMode::Keyboard;
+    state.engine = InteractionEngine::default();
+    control.generation.fetch_add(1, Ordering::AcqRel);
+    control.controller_epoch.fetch_add(1, Ordering::AcqRel);
+    crate::spatial_navigation::invalidate();
+    true
 }
 
 /// Raw Input removal/arrival uses this bounded hook, never waits on the input
@@ -1286,7 +1405,8 @@ pub(crate) fn route_remote_navigation(app: &AppHandle, command: &str) -> Result<
         reply: Some(reply),
     };
     match enqueue_action_and_wait(app, normalized, receiver) {
-        Ok(_) => Ok(true),
+        Ok(result) if result.accepted.unwrap_or(true) => Ok(true),
+        Ok(result) => Err(result.effect),
         Err(error) => Err(error),
     }
 }
@@ -1324,7 +1444,7 @@ pub fn simulate_tv_navigation_action(
         parsed,
         NavigationAction::Home | NavigationAction::OpenControlCenter
     );
-    let pinned_target = {
+    let (pinned_target, local_action_target) = {
         let state = control
             .state
             .lock()
@@ -1343,9 +1463,18 @@ pub fn simulate_tv_navigation_action(
             if captured.launch_id != session_id {
                 return Err("Sesja akcji różni się od przypiętej sesji symulatora.".into());
             }
-            Some(captured.clone())
+            (Some(captured.clone()), None)
+        } else if let Some(session_id) = target_session.as_deref() {
+            let captured = state
+                .simulator_target
+                .as_ref()
+                .ok_or_else(|| "Najpierw przypnij aktywną sesję Edge Cinema.".to_string())?;
+            if captured.launch_id != session_id {
+                return Err("Sesja akcji różni się od przypiętej sesji symulatora.".into());
+            }
+            (None, Some(captured.clone()))
         } else {
-            None
+            (None, None)
         }
     };
     if !control.enabled.load(Ordering::Acquire) {
@@ -1356,8 +1485,17 @@ pub fn simulate_tv_navigation_action(
         return Err("Symulator wymaga aktywnego natywnego Home w tej sesji.".into());
     }
     if home_or_menu {
-        if !window.is_focused().unwrap_or(false) {
-            return Err("Przed Home lub Control Center wróć do głównego okna VELORA.".into());
+        let main_focused = local_main_origin(&window) && window.is_focused().unwrap_or(false);
+        let foreground = crate::edge_cinema::foreground_owned_streaming_target(&app);
+        if !simulator_local_action_context_matches(
+            main_focused,
+            target_session.as_deref(),
+            local_action_target.as_ref(),
+            foreground.as_ref(),
+        ) {
+            return Err(
+                "Home or Control Center requires the local VELORA window or the exact foreground pinned Edge Cinema session.".into(),
+            );
         }
     } else if !simulator_focus_context_ok(&app, &window, pinned_target.as_ref().unwrap()) {
         return Err("Fokus zmienił się na inne okno; symulator nie przywróci sesji.".into());
@@ -1403,11 +1541,12 @@ pub fn simulate_tv_navigation_action(
         state.last_simulator_sequence = sequence;
     }
     let (accepted, result) = match receiver.recv_timeout(Duration::from_millis(ACTION_WAIT_MS)) {
-        Ok(Ok(result)) => (true, result),
-        Ok(Err(_)) => (
+        Ok(Ok(result)) => (result.accepted.unwrap_or(true), result),
+        Ok(Err(error)) => (
             false,
             ActionResult {
-                effect: "effectUnverified".into(),
+                accepted: Some(false),
+                effect: error,
                 ownership: Some("denied".into()),
                 ..ActionResult::default()
             },
@@ -1421,7 +1560,7 @@ pub fn simulate_tv_navigation_action(
             return Err("Native action worker stopped before returning a receipt.".into());
         }
     };
-    let status = status_snapshot(&control, true);
+    let status = status_snapshot(&app, &control, true);
     Ok(NavigationActionReceipt {
         accepted,
         effect: result.effect,
@@ -1436,6 +1575,9 @@ pub fn simulate_tv_navigation_action(
         dispatch_elapsed_ms: result.elapsed_ms,
         spatial_query_ms: result.spatial_query_ms,
         spatial_candidate_count: result.spatial_candidate_count,
+        spatial_diagnostics: result.spatial_diagnostics,
+        fallback_reason: result.fallback_reason,
+        fallback_activated: result.fallback_activated,
     })
 }
 
@@ -1447,6 +1589,87 @@ fn simulator_focus_context_ok(
     window.is_focused().unwrap_or(false)
         || crate::edge_cinema::foreground_owned_streaming_target(app)
             .is_some_and(|foreground| same_target(&foreground, target))
+}
+
+fn simulator_local_action_context_matches(
+    main_trusted_and_focused: bool,
+    requested_session: Option<&str>,
+    captured_target: Option<&crate::edge_cinema::StreamingWindowTarget>,
+    foreground_target: Option<&crate::edge_cinema::StreamingWindowTarget>,
+) -> bool {
+    if main_trusted_and_focused {
+        return requested_session.map_or(true, |session_id| {
+            captured_target.is_some_and(|target| target.launch_id == session_id)
+        });
+    }
+    let Some(session_id) = requested_session else {
+        return false;
+    };
+    let Some(captured) = captured_target else {
+        return false;
+    };
+    captured.launch_id == session_id
+        && foreground_target.is_some_and(|foreground| same_target(captured, foreground))
+}
+
+fn simulator_local_action_context_current(app: &AppHandle, action: &NormalizedAction) -> bool {
+    let Some(main) = app.get_webview_window("main") else {
+        return false;
+    };
+    if !local_main_origin(&main) {
+        return false;
+    }
+    let main_focused = main.is_focused().unwrap_or(false);
+    let captured = app
+        .state::<StreamingControl>()
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .simulator_target
+        .clone();
+    let foreground = crate::edge_cinema::foreground_owned_streaming_target(app);
+    let matches = simulator_local_action_context_matches(
+        main_focused,
+        action.target_session.as_deref(),
+        captured.as_ref(),
+        foreground.as_ref(),
+    );
+    matches
+        && foreground.as_ref().map_or(true, |target| {
+            crate::edge_cinema::streaming_target_is_current(app, target)
+        })
+}
+
+fn complete_simulator_home_request(
+    app: AppHandle,
+    request_id: u64,
+    result: Result<crate::session_orchestrator::ReturnHomeResult, crate::session_orchestrator::SessionError>,
+) {
+    let ready_revision = result.ok().and_then(|completion| {
+        let snapshot = crate::session_orchestrator::get_session_state(app.clone());
+        let focused = app
+            .get_webview_window("main")
+            .filter(|window| local_main_origin(window))
+            .is_some_and(|window| window.is_focused().unwrap_or(false));
+        let restore_confirmed = completion.restore.restored
+            && completion.restore.own_window.is_some()
+            && completion.restore.foreground_after.hwnd == completion.restore.own_window;
+        (!completion.timed_out
+            && completion.session.current == crate::session_orchestrator::SessionId::VeloraHome
+            && snapshot.current == crate::session_orchestrator::SessionId::VeloraHome
+            && snapshot.revision == completion.session.revision
+            && restore_confirmed
+            && focused)
+            .then_some(completion.session.revision)
+    });
+    let control = app.state::<StreamingControl>();
+    let mut state = control
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if state.simulator_home_request_id == request_id {
+        state.simulator_home_ready_revision = ready_revision;
+    }
 }
 
 fn same_target(
@@ -1552,13 +1775,25 @@ fn dispatch_normalized_action(
     state.last_action_at_ms = Some(action.timestamp_ms);
     state.last_dispatch_elapsed_ms = Some(elapsed);
     if let Ok(result) = &result {
-        state.accepted = state.accepted.saturating_add(1);
+        if result.accepted.unwrap_or(true) {
+            state.accepted = state.accepted.saturating_add(1);
+        } else {
+            state.rejected = state.rejected.saturating_add(1);
+        }
         state.last_result = Some(result.effect.clone());
         state.last_spatial_query_ms = result.spatial_query_ms;
         state.last_spatial_candidate_count = result.spatial_candidate_count;
+        state.last_spatial_diagnostics = result.spatial_diagnostics;
+        state.last_fallback_reason = result.fallback_reason.clone();
+        state.last_fallback_activated = result.fallback_activated;
     } else if let Err(error) = &result {
         state.rejected = state.rejected.saturating_add(1);
         state.last_result = Some(error.clone());
+        state.last_spatial_query_ms = None;
+        state.last_spatial_candidate_count = None;
+        state.last_spatial_diagnostics = None;
+        state.last_fallback_reason = None;
+        state.last_fallback_activated = None;
     }
     state.last_routing_decision = Some(match action.route {
         TargetRoute::ForegroundOwned => "foregroundOwned",
@@ -1599,11 +1834,27 @@ fn dispatch_normalized_action_inner(
                     "Home is handled only through the existing local Home mechanism.".into(),
                 );
             }
+            if !simulator_local_action_context_current(app, action) {
+                return Err(
+                    "Home was rejected because focus left the trusted VELORA window or exact pinned Edge Cinema session.".into(),
+                );
+            }
+            let request_id = {
+                let mut state = control
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                state.simulator_home_request_id =
+                    state.simulator_home_request_id.saturating_add(1);
+                state.simulator_home_ready_revision = None;
+                state.simulator_home_request_id
+            };
+            let home_app = app.clone();
             let queued = crate::session_orchestrator::request_return_home(
                 app.clone(),
                 crate::session_orchestrator::TransitionCause::User,
-                crate::session_orchestrator::HomeRequestSource::ExplicitUser,
-                |_| {},
+                crate::session_orchestrator::HomeRequestSource::Device,
+                move |result| complete_simulator_home_request(home_app, request_id, result),
             );
             if !queued {
                 return Err("The existing Home worker queue is unavailable.".into());
@@ -1649,11 +1900,10 @@ fn dispatch_normalized_action_inner(
                 }
             }
             if action.source == ActionSource::Simulator {
-                let main = app
-                    .get_webview_window("main")
-                    .ok_or_else(|| "VELORA main window is unavailable.".to_string())?;
-                if !local_main_origin(&main) || !main.is_focused().unwrap_or(false) {
-                    return Err("Return focus to the local VELORA main window first.".into());
+                if !simulator_local_action_context_current(app, action) {
+                    return Err(
+                        "Control Center was rejected because focus left the trusted VELORA window or exact pinned Edge Cinema session.".into(),
+                    );
                 }
             }
             let main = app
@@ -1814,6 +2064,9 @@ fn dispatch_normalized_action_inner(
         NavigationAction::Back | NavigationAction::PointerBack => Some(Action::Back),
         NavigationAction::ScrollUp => Some(Action::Scroll(120)),
         NavigationAction::ScrollDown => Some(Action::Scroll(-120)),
+        NavigationAction::ScrollAmount(amount) => {
+            Some(Action::Scroll(i32::from(amount).clamp(-240, 240)))
+        }
         NavigationAction::PointerMove(x, y) => {
             if control
                 .state
@@ -1895,7 +2148,7 @@ fn dispatch_normalized_action_inner(
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .mode;
-        if mode == NavigationMode::Spatial
+        if matches!(mode, NavigationMode::Automatic | NavigationMode::Spatial)
             && matches!(
                 action.action,
                 NavigationAction::Up
@@ -1944,11 +2197,51 @@ fn dispatch_normalized_action_inner(
                 }
                 _ => unreachable!(),
             };
+            if outcome.accepted {
+                return Ok(ActionResult {
+                    accepted: Some(true),
+                    effect: outcome.effect,
+                    ownership: Some("UI Automation candidates within the owned window".into()),
+                    spatial_query_ms: Some(outcome.diagnostics.query_ms),
+                    spatial_candidate_count: Some(outcome.diagnostics.candidate_count),
+                    spatial_diagnostics: Some(outcome.diagnostics),
+                    ..ActionResult::default()
+                });
+            }
+
+            let may_switch_to_pointer = action.source != ActionSource::Remote
+                && outcome.pointer_fallback_recommended
+                && still_authorized()
+                && crate::edge_cinema::streaming_target_is_current(app, &target);
+            let switched_to_pointer = may_switch_to_pointer
+                && activate_pointer_fallback(
+                    control,
+                    mode,
+                    action.config_epoch,
+                    action.controller_epoch,
+                    action.generation,
+                );
+            if switched_to_pointer {
+                crate::pointer_indicator::update(target.hwnd, true);
+            }
+            let failure_reason = outcome.failure_reason;
+            let effect = if switched_to_pointer {
+                format!(
+                    "Spatial provider did not confirm the action ({}). Pointer mode is active; the action was not repeated. Inspect the page before moving or clicking.",
+                    failure_reason.as_deref().unwrap_or("provider unavailable")
+                )
+            } else {
+                outcome.effect
+            };
             return Ok(ActionResult {
-                effect: outcome.effect.into(),
+                accepted: Some(false),
+                effect,
                 ownership: Some("UI Automation candidates within the owned window".into()),
-                spatial_query_ms: Some(outcome.query_ms),
-                spatial_candidate_count: Some(outcome.candidate_count),
+                spatial_query_ms: Some(outcome.diagnostics.query_ms),
+                spatial_candidate_count: Some(outcome.diagnostics.candidate_count),
+                spatial_diagnostics: Some(outcome.diagnostics),
+                fallback_reason: failure_reason,
+                fallback_activated: Some(switched_to_pointer),
                 ..ActionResult::default()
             });
         }
@@ -2024,6 +2317,7 @@ fn service_media_key(service: &str, action: NavigationAction) -> Option<u16> {
         ("youtube", NavigationAction::SeekForward) => Some(0x4c),
         ("youtube", NavigationAction::Fullscreen) => Some(0x46),
         ("youtube", NavigationAction::PlayerMute) => Some(0x4d),
+        ("youtube", NavigationAction::Captions) => Some(0x43),
         ("prime", NavigationAction::PlayPause) => Some(0x20),
         ("prime", NavigationAction::SeekBackward) => Some(0x25),
         ("prime", NavigationAction::SeekForward) => Some(0x27),
@@ -2086,7 +2380,7 @@ fn normalize_pointer_coordinate(position: i32, origin: i32, extent: i32) -> Opti
 
 #[cfg(target_os = "windows")]
 mod native {
-    use super::{normalized_generation_active, Action, StreamingControl};
+    use super::{normalized_generation_active, scale_pointer_delta, Action, StreamingControl};
     use crate::edge_cinema::StreamingWindowTarget;
     use std::ffi::c_void;
 
@@ -2147,6 +2441,24 @@ mod native {
         fn WindowFromPoint(point: Point) -> *mut c_void;
         fn GetAncestor(window: *mut c_void, flags: u32) -> *mut c_void;
         fn GetSystemMetrics(index: i32) -> i32;
+        fn SetThreadDpiAwarenessContext(context: *mut c_void) -> *mut c_void;
+    }
+    struct DpiContextGuard(*mut c_void);
+    impl DpiContextGuard {
+        fn enter() -> Result<Self, String> {
+            const PER_MONITOR_V2: *mut c_void = -4isize as *mut c_void;
+            let previous = unsafe { SetThreadDpiAwarenessContext(PER_MONITOR_V2) };
+            if previous.is_null() {
+                Err("Per-monitor pointer coordinates are unavailable.".into())
+            } else {
+                Ok(Self(previous))
+            }
+        }
+    }
+    impl Drop for DpiContextGuard {
+        fn drop(&mut self) {
+            unsafe { SetThreadDpiAwarenessContext(self.0) };
+        }
     }
     fn key(vk: u16, up: bool, extended: bool) -> Input {
         Input {
@@ -2231,6 +2543,12 @@ mod native {
         generation: u64,
         simulated: bool,
     ) -> Result<(), String> {
+        let _dpi_context = if matches!(action, Action::Click | Action::Scroll(_) | Action::Move(..))
+        {
+            Some(DpiContextGuard::enter()?)
+        } else {
+            None
+        };
         // Do not combine generated taps with an actual keyboard shortcut/drag.
         if [0x10, 0x11, 0x12, 0x5b, 0x5c, 0x01, 0x02]
             .iter()
@@ -2380,6 +2698,10 @@ mod native {
                 } else {
                     actual
                 };
+                let client_width = last.x.saturating_sub(first.x).saturating_add(1);
+                let client_height = last.y.saturating_sub(first.y).saturating_add(1);
+                let dx = scale_pointer_delta(dx, client_width, 1920);
+                let dy = scale_pointer_delta(dy, client_height, 1080);
                 let point = Point {
                     x: cursor.x.saturating_add(dx).clamp(first.x, last.x),
                     y: cursor.y.saturating_add(dy).clamp(first.y, last.y),
@@ -2411,6 +2733,9 @@ mod native {
             )
         };
         if inserted == inputs.len() as u32 {
+            if action == Action::Click {
+                crate::pointer_indicator::click_feedback(target.hwnd);
+            }
             if simulated {
                 if let Some(point) = next_cursor {
                     SIM_CURSOR.with(|cell| {
@@ -2489,6 +2814,59 @@ mod tests {
         bytes[1..5].fill(128);
         bytes[5] = 8;
         crate::ds4::parse_report(&bytes).unwrap()
+    }
+    fn streaming_target(id: &str, hwnd: u64) -> crate::edge_cinema::StreamingWindowTarget {
+        crate::edge_cinema::StreamingWindowTarget {
+            service_id: "youtube",
+            launch_id: id.into(),
+            hwnd,
+            process_id: 7,
+            process_created_at_100ns: 99,
+        }
+    }
+
+    #[test]
+    fn simulator_home_and_control_center_require_local_or_exact_owned_focus() {
+        let captured = streaming_target("session-a", 10);
+        let same_session_other_identity = streaming_target("session-a", 11);
+        let other_session = streaming_target("session-b", 10);
+        assert!(simulator_local_action_context_matches(true, None, None, None));
+        assert!(simulator_local_action_context_matches(
+            true,
+            Some("session-a"),
+            Some(&captured),
+            None
+        ));
+        assert!(!simulator_local_action_context_matches(
+            true,
+            Some("session-b"),
+            Some(&captured),
+            None
+        ));
+        assert!(simulator_local_action_context_matches(
+            false,
+            Some("session-a"),
+            Some(&captured),
+            Some(&captured)
+        ));
+        assert!(!simulator_local_action_context_matches(
+            false,
+            Some("session-a"),
+            Some(&captured),
+            Some(&same_session_other_identity)
+        ));
+        assert!(!simulator_local_action_context_matches(
+            false,
+            Some("session-a"),
+            Some(&captured),
+            Some(&other_session)
+        ));
+        assert!(!simulator_local_action_context_matches(
+            false,
+            None,
+            Some(&captured),
+            Some(&captured)
+        ));
     }
     #[test]
     fn held_cross_never_crosses_focus_or_reconnect() {
@@ -2585,6 +2963,26 @@ mod tests {
         );
         assert!(engine
             .update("pad", &input, 1, NavigationMode::Pointer, 160)
+            .is_empty());
+    }
+    #[test]
+    fn right_stick_click_activates_precision_only_in_pointer_mode() {
+        let mut engine = InteractionEngine::default();
+        let mut input = report();
+        engine.update("pad", &input, 1, NavigationMode::Pointer, 0);
+        input.buttons.set(Ds4Button::R3, true);
+        input.right_x = 1.0;
+        assert_eq!(
+            engine.update("pad", &input, 1, NavigationMode::Pointer, 50),
+            vec![Action::Move(8, 0)]
+        );
+        input.buttons.set(Ds4Button::R3, false);
+        assert_eq!(
+            engine.update("pad", &input, 1, NavigationMode::Pointer, 100),
+            vec![Action::Move(32, 0)]
+        );
+        assert!(engine
+            .update("pad", &input, 1, NavigationMode::Keyboard, 150)
             .is_empty());
     }
     #[test]
@@ -2708,6 +3106,10 @@ mod tests {
             Some(0x4a)
         );
         assert_eq!(
+            service_media_key("youtube", NavigationAction::Captions),
+            Some(0x43)
+        );
+        assert_eq!(
             service_media_key("prime", NavigationAction::Fullscreen),
             Some(0x46)
         );
@@ -2726,6 +3128,27 @@ mod tests {
         assert!(pointer_axis_step(0.5, 0.25, 32) < pointer_axis_step(1.0, 0.25, 32));
         assert_eq!(pointer_axis_step(4.0, 0.25, 32), 32);
         assert_eq!(pointer_axis_step(-4.0, 0.25, 32), -32);
+    }
+    #[test]
+    fn pointer_and_scroll_motion_scale_for_4k_without_unbounded_deltas() {
+        assert_eq!(scale_pointer_delta(32, 1920, 1920), 32);
+        assert_eq!(scale_pointer_delta(32, 3840, 1920), 64);
+        assert_eq!(scale_pointer_delta(-8, 3840, 1920), -16);
+        assert_eq!(scale_pointer_delta(100, 7680, 1920), 64);
+        assert_eq!(scale_pointer_delta(32, 0, 1920), 32);
+        assert_eq!(normalize_pointer_coordinate(-1920, -1920, 1920), Some(0));
+        assert_eq!(normalize_pointer_coordinate(-1, -1920, 1920), Some(65535));
+        assert_eq!(scroll_axis_amount(0.2, RIGHT_STICK_DEADZONE), 0);
+        assert_eq!(scroll_axis_amount(0.4, RIGHT_STICK_DEADZONE), 125);
+        assert!(scroll_axis_amount(1.0, RIGHT_STICK_DEADZONE) <= 240);
+        assert_eq!(
+            action_to_navigation(Action::Scroll(999)),
+            NavigationAction::ScrollAmount(240)
+        );
+        assert_eq!(
+            action_to_navigation(Action::Scroll(-999)),
+            NavigationAction::ScrollAmount(-240)
+        );
     }
     #[test]
     fn options_opens_only_on_clean_release_and_never_after_home_constituents() {
@@ -2762,6 +3185,57 @@ mod tests {
         assert!(!normalized_generation_active(&control, 0, 0, 0));
         assert!(!control.simulator_busy.load(Ordering::Acquire));
         assert!(normalized_generation_active(&control, 0, 1, 1));
+    }
+
+    #[test]
+    fn sticky_pointer_fallback_revokes_queued_input_and_requires_a_fresh_mode_choice() {
+        let control = StreamingControl::default();
+        control.enabled.store(true, Ordering::Release);
+        control
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .mode = NavigationMode::Automatic;
+        assert!(activate_pointer_fallback(
+            &control,
+            NavigationMode::Automatic,
+            0,
+            0,
+            0
+        ));
+        assert!(!normalized_generation_active(&control, 0, 0, 0));
+        let state = control
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(state.mode, NavigationMode::Pointer);
+        assert_eq!(state.previous_mode, NavigationMode::Keyboard);
+        assert!(!state.engine.primed);
+
+        drop(state);
+        let rejected = StreamingControl::default();
+        rejected.enabled.store(true, Ordering::Release);
+        rejected.generation.store(1, Ordering::Release);
+        rejected
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .mode = NavigationMode::Spatial;
+        assert!(!activate_pointer_fallback(
+            &rejected,
+            NavigationMode::Spatial,
+            0,
+            0,
+            0
+        ));
+        assert_eq!(
+            rejected
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .mode,
+            NavigationMode::Spatial
+        );
     }
 
     #[test]
