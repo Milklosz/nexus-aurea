@@ -4,6 +4,7 @@ import {
   getDiagnosticsSnapshot,
   type DiagnosticsSnapshot,
 } from "../services/diagnostics";
+import { displayGeometryFlags } from "../services/displayAudio";
 
 const modelLabels: Record<string, string> = {
   dualSense: "DualSense",
@@ -113,23 +114,33 @@ export function SystemDiagnosticsPanel() {
         <summary>Wyświetlacze i audio (tylko odczyt)</summary>
         {snapshot.displayAudio.displays.length === 0
           ? <p>Brak danych o wyświetlaczach.</p>
-          : <ul>{snapshot.displayAudio.displays.map((display) => <li key={display.id}>
-            {display.name}: {display.width}×{display.height} @ {display.refreshHz} Hz · HDR: {display.hdr === null ? "niedostępny" : display.hdr ? "tak" : "nie"} · {display.primary ? "główny" : "dodatkowy"}
-            {display.hdrError ? ` · ${display.hdrError}` : ""}
-            {display.diagnostics && <span>
-              {` · pulpit ${display.diagnostics.desktopWidth}×${display.diagnostics.desktopHeight} px (${display.diagnostics.x}, ${display.diagnostics.y})`}
-              {display.diagnostics.dpiProvenance === "getDpiForMonitorPerMonitorProcess" && display.diagnostics.effectiveDpiX !== null && display.diagnostics.effectiveDpiY !== null
-                ? ` · ${display.diagnostics.effectiveDpiX}×${display.diagnostics.effectiveDpiY} DPI · efektywna skala ${Math.round(display.diagnostics.effectiveDpiX / 96 * 100)}%`
-                : " · efektywne DPI nieznane"}
-              {display.diagnostics.scalePercent !== null
-                ? ` · skala API ${display.diagnostics.scalePercent}% (DPI okna może się różnić)`
-                : " · skala API nieznana"}
-              {display.diagnostics.refreshMillihz !== null ? ` · ${(display.diagnostics.refreshMillihz / 1000).toLocaleString("pl-PL", { maximumFractionDigits: 3 })} Hz (DisplayConfig)` : ""}
-              {display.diagnostics.connectionType ? ` · ${display.diagnostics.connectionType}` : " · połączenie nieznane"}
-              {display.diagnostics.adapterName ? ` · ${display.diagnostics.adapterName}` : ""}
-              {display.diagnostics.identitySource === "mirroredSourceUnknown" ? " · cele lustrzane: identyfikacja niejednoznaczna" : ""}
-            </span>}
-          </li>)}</ul>}
+          : <ul>{snapshot.displayAudio.displays.map((display) => {
+            const diagnostics = display.diagnostics;
+            const geometry = displayGeometryFlags(diagnostics);
+            return <li key={display.id}>
+              {display.name}: {display.width}×{display.height} @ {display.refreshHz} Hz · HDR: {display.hdr === null ? "niedostępny" : display.hdr ? "tak" : "nie"} · {display.primary ? "główny" : "dodatkowy"}
+              {display.hdrError ? ` · ${display.hdrError}` : ""}
+              {diagnostics && <span>
+                {` · pulpit ${diagnostics.desktopWidth}×${diagnostics.desktopHeight} px (${diagnostics.x}, ${diagnostics.y})`}
+                {geometry.effectiveScalePercent !== null && diagnostics.effectiveDpiX !== null && diagnostics.effectiveDpiY !== null
+                  ? ` · ${diagnostics.effectiveDpiX}×${diagnostics.effectiveDpiY} DPI · efektywna skala ${geometry.effectiveScalePercent}%`
+                  : " · efektywne DPI nieznane"}
+                {diagnostics.scalePercent !== null
+                  ? ` · skala API ${diagnostics.scalePercent}% (DPI okna może się różnić)`
+                  : " · skala API nieznana"}
+                {geometry.scaleDiverges
+                  ? ` · uwaga: skala API (${diagnostics.scalePercent}%) różni się o ${geometry.scaleDivergencePoints} p.p. od skali efektywnej (${geometry.effectiveScalePercent}%); fizyczna geometria okna pozostaje niezmieniona`
+                  : ""}
+                {geometry.negativeOrigin
+                  ? ` · pulpit rozszerzony: ujemne położenie (${diagnostics.x}, ${diagnostics.y})`
+                  : ""}
+                {diagnostics.refreshMillihz !== null ? ` · ${(diagnostics.refreshMillihz / 1000).toLocaleString("pl-PL", { maximumFractionDigits: 3 })} Hz (DisplayConfig)` : ""}
+                {diagnostics.connectionType ? ` · ${diagnostics.connectionType}` : " · połączenie nieznane"}
+                {diagnostics.adapterName ? ` · ${diagnostics.adapterName}` : ""}
+                {diagnostics.identitySource === "mirroredSourceUnknown" ? " · cele lustrzane: identyfikacja niejednoznaczna" : ""}
+              </span>}
+            </li>;
+          })}</ul>}
         {snapshot.displayAudio.audio.length === 0
           ? <p>Brak danych o urządzeniach audio.</p>
           : <ul>{snapshot.displayAudio.audio.map((endpoint) => <li key={endpoint.id}>
