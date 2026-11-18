@@ -103,7 +103,7 @@ uses both a launch-time environment and an isolated compile-time identity:
 | Single-instance mutex / window | `Local\pl.nexus.aurea.single-instance` / `VELORA` | `Local\pl.nexus.aurea.portable-validation.single-instance` / `VELORA (Portable Validation)` |
 | Edge Cinema profiles | `%LOCALAPPDATA%\VELORA\EdgeCinemaServices` | isolated `Local\VELORA\EdgeCinemaServices` |
 | Windows autostart (`HKCU\...\Run`) | available in installed app | write command is disabled in the portable build |
-| iOS trust-profile download (system Downloads) | available in installed app | write command is disabled in the portable build |
+| iOS trust-profile download (system Downloads) | available in installed app | written only to `VELORA-Portable-Data\trust`, after explicit local approval |
 
 The launcher changes `APPDATA`, `LOCALAPPDATA`, `USERPROFILE`, `TEMP` and `TMP` for
 **its child process only**; no system or user environment variable is changed.
@@ -123,3 +123,48 @@ or modified.
   Apple Music stub) may not be visible in this profile. This is intentional for
   isolation; copy only synthetic test fixtures into the portable data root if a
   test needs them.
+
+## 7. iPhone Remote — reversible portable trust-profile validation
+
+This candidate supports a **manual, reversible** iPhone pairing test. It never
+installs a certificate silently, never modifies a system trust store and never
+weakens HTTPS/TLS.
+
+### Setup (explicit approval required)
+
+1. In the iPhone Remote panel, tick the unchecked-by-default approval checkbox.
+   Before it can be ticked the UI shows the resolved path
+   `VELORA-Portable-Data\trust\VELORA-LAN-Remote.mobileconfig` and the CA
+   SHA-256 fingerprint (read-only preview, no file written).
+2. Clicking **Przygotuj profil zaufania iPhone'a** issues a one-time, 120-second
+   local IPC approval token and writes the `.mobileconfig` ONLY inside
+   `VELORA-Portable-Data\trust`. An authoritative portable guard rejects any
+   path outside the portable data root; the installed Downloads directory is
+   never consulted in portable mode.
+3. Compare the displayed SHA-256 fingerprint with the one shown by iOS. Transfer
+   the profile manually over a trusted channel (e.g. AirDrop to your own device).
+4. On the iPhone install it via Settings → General → VPN & Device Management,
+   then enable full trust in Settings → General → About → Certificate Trust
+   Settings. Keep the private CA key in the isolated Credential Manager service.
+5. Keep the MSI and iPhone on the SAME private Wi-Fi network. Open the exact
+   HTTPS address shown in Control Center. The QR code carries only the one-time
+   code, host and short expiry in the URL **fragment** — no token, key or
+   fingerprint. **Do not bypass Safari certificate warnings.**
+6. Generate the one-time code in Control Center and enter it within 60 seconds.
+   Commands remain HMAC-SHA256 signed, replay-protected and host/origin checked.
+
+### Cleanup (reversible)
+
+Tick the separate **Wyczyść dane zaufania (cofnij)** confirmation and click the
+button. The local-only command (no LAN route) stops the server, removes the
+generated `.mobileconfig` from the portable trust directory only, and revokes all
+paired devices. It reports each step truthfully. On the iPhone, manually remove
+the profile in Settings → General → VPN & Device Management and disable full
+trust in Certificate Trust Settings. The installed app's profile and all system
+trust stores are never touched.
+
+### Validation status
+
+Real-device pairing has **NOT** been validated on an iPhone or MSI. This is an
+explicit hardware gate for Luna — do not report pairing as PASS from this
+build alone.

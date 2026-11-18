@@ -31,6 +31,7 @@ describe("iPhone Remote security regression guard", () => {
       "RustlsConfig::from_pem",
       "trust_confirmed",
       "prepare_trust_profile",
+      "prepare_trust_profile_in",
       "is_allowed_request",
       "no-store",
       "no-referrer",
@@ -38,6 +39,51 @@ describe("iPhone Remote security regression guard", () => {
       "MAX_REQUEST_BYTES",
     ];
     for (const literal of required) expect(rust).toContain(literal);
+  });
+
+  it("keeps portable trust writes inside the portable root behind explicit local approval", () => {
+    // Guard + approval + resolver must all remain in the real source.
+    for (const literal of [
+      "fn resolve_trust_profile_dir(",
+      "crate::portable::is_portable()",
+      "crate::portable::data_dir()",
+      "pub fn prepare_trust_profile_in(",
+      "dir.starts_with(&root)",
+      "begin_remote_trust_approval",
+      "prepare_trust_profile_with_approval",
+      "cleanup_remote_trust_artifacts",
+      "take_trust_approval",
+      "TRUST_APPROVAL_TTL",
+    ]) {
+      expect(rust).toContain(literal);
+    }
+
+    const source = rust.replace(/\r\n/g, "\n");
+    // The write path itself may never mention the installed Downloads dir.
+    const writeStart = source.indexOf("pub fn prepare_trust_profile_in(");
+    expect(writeStart).toBeGreaterThan(-1);
+    const writeEnd = source.indexOf("#[cfg(not(windows))]", writeStart);
+    expect(writeEnd).toBeGreaterThan(writeStart);
+    expect(source.slice(writeStart, writeEnd)).not.toContain("download_dir()");
+
+    // In the resolver, download_dir() exists only in the INSTALLED branch,
+    // after the portable guard.
+    const resolverStart = source.indexOf("fn resolve_trust_profile_dir(");
+    expect(resolverStart).toBeGreaterThan(-1);
+    const resolverEnd = source.indexOf("fn ca_fingerprint(", resolverStart);
+    expect(resolverEnd).toBeGreaterThan(resolverStart);
+    const resolver = source.slice(resolverStart, resolverEnd);
+    const afterGuard = resolver.split("if crate::portable::is_portable()")[1];
+    expect(afterGuard).toBeDefined();
+    const [portableBranch, installedBranch] = afterGuard.split("} else {");
+    expect(portableBranch).not.toContain("download_dir()");
+    expect(portableBranch).toContain("crate::portable::data_dir()");
+    expect(installedBranch).toContain("download_dir()");
+
+    // `start` must go through the resolved path, never a raw directory.
+    const startAt = source.indexOf("pub async fn start(");
+    const preparedAt = source.indexOf("let prepared = self.prepare_trust_profile(&app)?;", startAt);
+    expect(preparedAt).toBeGreaterThan(startAt);
   });
 
   it("keeps the body limit wired to the 4096-byte constant", () => {
