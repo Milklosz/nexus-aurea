@@ -291,6 +291,20 @@ fn require_edge_window_target(
     target.ok_or_else(|| EDGE_WINDOW_UNAVAILABLE_ERROR.to_string())
 }
 
+/// True only when a resolved window belongs to one of the process identities
+/// captured for this launch. A recycled PID or a foreign window never passes,
+/// so a first launch never activates a window it does not own. Pure so the
+/// identity gate is unit-testable without native foreground calls.
+fn owned_window_target_is_owned(
+    target: &OwnedWindowTarget,
+    identities: &[crate::process_table::ProcessIdentity],
+) -> bool {
+    identities.iter().any(|identity| {
+        identity.process_id == target.process_id
+            && identity.created_at_100ns == target.process_created_at_100ns
+    })
+}
+
 fn require_edge_window_focus(result: Result<bool, String>) -> Result<(), String> {
     match result {
         Ok(true) => Ok(()),
@@ -920,6 +934,23 @@ pub fn launch_edge_cinema(app: AppHandle, url: String) -> Result<EdgeCinemaRecei
         );
         emit_session(&app, session);
 
+        // First launch must be as deterministic as adoption. Once the owned
+        // window is visible, verify its identity against this launch's captured
+        // identities before a single bounded foreground request. On mismatch
+        // (or if the window has not appeared yet) focus is left alone: no
+        // foreign window is activated, no keystrokes are injected, no retry.
+        if let Some(target) = edge_window_target(&app, &launch) {
+            let identities = launch_registry::owned_process_identities_for_launch(&app, &launch.id);
+            if owned_window_target_is_owned(&target, &identities) {
+                window_broker::grant_foreground_handoff(&[target.process_id]);
+                require_edge_window_focus(window_broker::activate_owned_window(
+                    target.hwnd,
+                    target.process_id,
+                    target.process_created_at_100ns,
+                ))?;
+            }
+        }
+
         Ok(EdgeCinemaReceipt {
             launched: true,
             mode: "app-fullscreen".to_string(),
@@ -1288,6 +1319,31 @@ mod tests {
     };
     use crate::launch_registry::{LaunchKind, LaunchPhase, LaunchSession};
     use crate::process_table::ProcessIdentity;
+
+    #[test]
+    fn first_launch_focus_requires_an_owned_window_identity_match() {
+        let target = OwnedWindowTarget {
+            hwnd: 70,
+            process_id: 42,
+            process_created_at_100ns: 999,
+        };
+        let owned = [ProcessIdentity {
+            process_id: 42,
+            created_at_100ns: 999,
+        }];
+        let recycled_pid = [ProcessIdentity {
+            process_id: 42,
+            created_at_100ns: 1_000,
+        }];
+        let foreign_process = [ProcessIdentity {
+            process_id: 43,
+            created_at_100ns: 999,
+        }];
+        assert!(super::owned_window_target_is_owned(&target, &owned));
+        assert!(!super::owned_window_target_is_owned(&target, &recycled_pid));
+        assert!(!super::owned_window_target_is_owned(&target, &foreign_process));
+        assert!(!super::owned_window_target_is_owned(&target, &[]));
+    }
 
     #[test]
     fn streaming_input_requires_exact_service_window_and_captured_process_identity() {
