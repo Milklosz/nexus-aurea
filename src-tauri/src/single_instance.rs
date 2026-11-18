@@ -9,12 +9,9 @@
 //! needs no new crate or `windows` feature and `Cargo.lock` does not change.
 #![cfg_attr(not(target_os = "windows"), allow(dead_code))]
 
-/// Session-local mutex name: each Windows user session gets its own instance.
-pub(crate) const MUTEX_NAME: &str = "Local\\pl.nexus.aurea.single-instance";
-/// Class and title of the main Tauri window. The title must match `tauri.conf.json`
-/// (checked by a unit test below).
+/// Class of the main Tauri window. The portable build uses a different title
+/// (see `crate::portable`) so the two builds never activate each other's window.
 pub(crate) const WINDOW_CLASS: &str = "Tauri Window";
-pub(crate) const WINDOW_TITLE: &str = "VELORA";
 
 const ERROR_ALREADY_EXISTS: u32 = 183;
 const SW_RESTORE: i32 = 9;
@@ -47,7 +44,7 @@ pub(crate) fn claim_or_activate_existing() -> bool {
     fn wide(text: &str) -> Vec<u16> {
         text.encode_utf16().chain(std::iter::once(0)).collect()
     }
-    let Some((handle, claim)) = native::create(MUTEX_NAME) else {
+    let Some((handle, claim)) = native::create(crate::portable::mutex_name()) else {
         // Fail open: if the mutex cannot be created, start normally.
         return true;
     };
@@ -58,7 +55,10 @@ pub(crate) fn claim_or_activate_existing() -> bool {
         }
         Claim::AlreadyRunning => {
             native::close(handle);
-            activate_existing_window(&wide(WINDOW_CLASS), &wide(WINDOW_TITLE));
+            activate_existing_window(
+                &wide(WINDOW_CLASS),
+                &wide(crate::portable::window_title()),
+            );
             false
         }
     }
@@ -146,7 +146,8 @@ pub(crate) fn claim_or_activate_existing() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_mutex_error, Claim, MUTEX_NAME, WINDOW_CLASS, WINDOW_TITLE};
+    use super::{classify_mutex_error, Claim, WINDOW_CLASS};
+    use crate::portable::{INSTALLED_MUTEX_NAME, INSTALLED_WINDOW_TITLE};
 
     #[test]
     fn existing_mutex_means_another_instance_is_running() {
@@ -160,15 +161,15 @@ mod tests {
 
     #[test]
     fn mutex_name_is_session_local() {
-        assert!(MUTEX_NAME.starts_with("Local\\"));
+        assert!(INSTALLED_MUTEX_NAME.starts_with("Local\\"));
     }
 
     #[test]
     fn window_title_matches_tauri_config() {
         let config = include_str!("../tauri.conf.json");
         assert!(
-            config.contains(&format!("\"title\": \"{WINDOW_TITLE}\"")),
-            "tauri.conf.json main window title must equal {WINDOW_TITLE}"
+            config.contains(&format!("\"title\": \"{INSTALLED_WINDOW_TITLE}\"")),
+            "tauri.conf.json main window title must equal {INSTALLED_WINDOW_TITLE}"
         );
     }
 

@@ -1,0 +1,269 @@
+name: Portable Windows validation build
+
+# Reproducible no-install candidate for MSI hardware validation. It never runs
+# an installer, never writes the registry and never touches the installed app's
+# data. The main CI workflow (.github/workflows/ci.yml) still runs the frontend,
+# Rust, Playnite and Windows checks; this workflow builds and packages the
+# isolated candidate and records its provenance.
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - feat/portable-validation-build
+
+permissions:
+  contents: read
+
+jobs:
+  portable-windows:
+    name: Windows x64 / portable validation candidate
+    runs-on: windows-latest
+    timeout-minutes: 75
+    env:
+      # PRs are checked out at their head commit, not at GitHub's synthetic
+      # merge commit, so the manifest names a real source commit.
+      VELORA_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      VELORA_EVENT_SHA: ${{ github.sha }}
+      VELORA_PR_NUMBER: ${{ github.event.pull_request.number }}
+      VELORA_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      VELORA_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      VELORA_PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      VELORA_PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+    steps:
+      - name: Check out the exact source commit
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify checkout matches the recorded source commit
+        shell: pwsh
+        run: |
+          $head = (git rev-parse HEAD).Trim()
+          if ($head -ne $env:VELORA_SOURCE_SHA) {
+            throw "Checkout $head does not match source commit $env:VELORA_SOURCE_SHA."
+          }
+          $dirty = (git status --porcelain)
+          if ($dirty) { throw "The checkout is dirty; refusing to build a provenance record." }
+          Write-Host "SOURCE_SHA=$head"
+          Write-Host "EVENT_SHA=$env:VELORA_EVENT_SHA"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11.25.0
+          cache: true
+
+      - name: Set up Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build files
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test portable manifest tooling
+        run: pnpm test:portable-manifest
+
+      - name: Build React and TypeScript
+        run: pnpm build
+
+      - name: Build standalone Windows x64 executable (no bundle)
+        # --no-bundle is essential: an NSIS installer is never produced or run.
+        run: pnpm tauri build --no-bundle --ci --target x86_64-pc-windows-msvc
+
+      - name: Stage the portable package
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'velora-portable-stage'
+          $output = Join-Path $env:GITHUB_WORKSPACE 'dist/portable'
+          if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+          New-Item -ItemType Directory -Path $stage -ErrorAction Stop | Out-Null
+          New-Item -ItemType Directory -Force -Path $output -ErrorAction Stop | Out-Null
+          $exe = 'src-tauri/target/x86_64-pc-windows-msvc/release/nexus-aurea.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'Standalone EXE was not built.' }
+          Copy-Item -LiteralPath $exe -Destination (Join-Path $stage 'nexus-aurea.exe')
+          $support = @(
+            'scripts/portable/Run-VELORA-Portable.cmd',
+            'scripts/portable/Start-VELORA-Portable.ps1',
+            'scripts/portable/Preflight-WebView2.ps1',
+            'scripts/portable/README-PORTABLE.md'
+          )
+          foreach ($file in $support) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing support file: $file" }
+            Copy-Item -LiteralPath $file -Destination $stage
+          }
+          Get-ChildItem -LiteralPath $stage -File | ForEach-Object {
+            Write-Host ("{0,12}  {1}" -f $_.Length, $_.Name)
+          }
+
+      - name: Bounded startup and shutdown smoke test (no hardware claims)
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'velora-portable-stage'
+          $output = Join-Path $env:GITHUB_WORKSPACE 'dist/portable'
+          $dataRoot = Join-Path $env:RUNNER_TEMP 'velora-portable-smoke-data'
+          $smokePath = Join-Path $output 'smoke-result.json'
+          $result = [ordered]@{
+            status = 'NOT-RUN'
+            startedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+            evidenceType = 'bounded-ci-process-smoke'
+            hardwareValidated = $false
+            platform = 'windows-latest (GitHub Actions, not MSI)'
+          }
+          $process = $null
+          try {
+            if (Test-Path -LiteralPath $dataRoot) { Remove-Item -LiteralPath $dataRoot -Recurse -Force }
+            foreach ($sub in @('Local','Roaming','Temp')) {
+              New-Item -ItemType Directory -Force -Path (Join-Path $dataRoot $sub) | Out-Null
+            }
+            $realAppData = [Environment]::GetFolderPath('ApplicationData')
+            $realLocalAppData = [Environment]::GetFolderPath('LocalApplicationData')
+            $installedDataBefore = @($realAppData, $realLocalAppData) | Where-Object { $_ -and (Test-Path -LiteralPath (Join-Path $_ 'pl.nexus.aurea')) }
+
+            $env:VELORA_PORTABLE_DATA_DIR = $dataRoot
+            $env:LOCALAPPDATA = Join-Path $dataRoot 'Local'
+            $env:APPDATA = Join-Path $dataRoot 'Roaming'
+            $env:USERPROFILE = $dataRoot
+            $env:TEMP = Join-Path $dataRoot 'Temp'
+            $env:TMP = $env:TEMP
+
+            $exe = Join-Path $stage 'nexus-aurea.exe'
+            $process = Start-Process -FilePath $exe -ArgumentList '--windowed' -WorkingDirectory $stage -PassThru
+            $result.pid = $process.Id
+            Start-Sleep -Seconds 15
+            $running = -not $process.HasExited
+            $result.runningAfter15s = $running
+
+            $dataFiles = @(Get-ChildItem -LiteralPath $dataRoot -Recurse -File -ErrorAction SilentlyContinue)
+            $result.isolatedDataFileCount = $dataFiles.Count
+            $result.isolatedDataSample = @($dataFiles | Select-Object -First 12 | ForEach-Object {
+              $_.FullName.Substring($dataRoot.Length + 1)
+            })
+            $installedDataAfter = @($realAppData, $realLocalAppData) | Where-Object { $_ -and (Test-Path -LiteralPath (Join-Path $_ 'pl.nexus.aurea')) }
+            $result.installedProfileCreated = ($installedDataAfter.Count -gt $installedDataBefore.Count)
+
+            $closeRequested = $false
+            $exitCode = $null
+            if ($running) {
+              $closeRequested = $process.CloseMainWindow()
+              $result.gracefulCloseRequested = $closeRequested
+              if ($closeRequested) {
+                try { $process.WaitForExit(20000) | Out-Null } catch { }
+              }
+              if ($process.HasExited) {
+                $exitCode = $process.ExitCode
+              } else {
+                Stop-Process -Id $process.Id -Force
+                $exitCode = 'force-stopped-after-timeout'
+              }
+            }
+            $result.exitCode = $exitCode
+            if ($running -and -not $result.installedProfileCreated) {
+              $result.status = 'PASS'
+            } elseif (-not $running) {
+              $result.status = 'STARTUP-BLOCKED'
+            } else {
+              $result.status = 'ISOLATION-BLOCKED'
+            }
+          } catch {
+            $result.status = 'BLOCKED'
+            $result.error = $_.Exception.Message
+          } finally {
+            if ($process -and -not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
+            $result.finishedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+            $result | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $smokePath -Encoding utf8
+            Write-Host "SMOKE_STATUS=$($result.status)"
+            Get-Content -LiteralPath $smokePath
+          }
+          # Best-effort evidence only: never fail the build because a headless
+          # runner could not display a full GUI. The report states the status.
+          exit 0
+
+      - name: Package ZIP, SHA-256 manifest and source provenance
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'velora-portable-stage'
+          $output = Join-Path $env:GITHUB_WORKSPACE 'dist/portable'
+          $zipPath = Join-Path $output 'VELORA-Portable-Windows-x64.zip'
+          $manifestPath = Join-Path $output 'velora-portable-manifest.json'
+          $sumsPath = Join-Path $output 'SHA256SUMS.txt'
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zipPath -CompressionLevel Optimal -Force
+          if (-not (Test-Path -LiteralPath $zipPath -PathType Leaf)) { throw 'Portable ZIP was not created.' }
+
+          $arguments = @(
+            'write',
+            '--stage', $stage,
+            '--executable', (Join-Path $stage 'nexus-aurea.exe'),
+            '--package', $zipPath,
+            '--manifest', $manifestPath,
+            '--sums', $sumsPath,
+            '--smokeFile', (Join-Path $output 'smoke-result.json'),
+            '--sourceSha', $env:VELORA_SOURCE_SHA,
+            '--checkoutSha', $env:VELORA_SOURCE_SHA,
+            '--eventSha', $env:VELORA_EVENT_SHA,
+            '--appVersion', ((Get-Content 'package.json' -Raw | ConvertFrom-Json).version),
+            '--ref', $env:GITHUB_REF,
+            '--event', $env:GITHUB_EVENT_NAME,
+            '--runId', $env:GITHUB_RUN_ID,
+            '--runAttempt', $env:GITHUB_RUN_ATTEMPT,
+            '--runUrl', "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID",
+            '--workflow', $env:GITHUB_WORKFLOW,
+            '--actor', $env:GITHUB_ACTOR,
+            '--target', 'x86_64-pc-windows-msvc',
+            '--runnerOs', $env:RUNNER_OS,
+            '--dirty', 'false'
+          )
+          if ($env:GITHUB_EVENT_NAME -eq 'pull_request') {
+            $arguments += @(
+              '--prNumber', $env:VELORA_PR_NUMBER,
+              '--prHeadSha', $env:VELORA_PR_HEAD_SHA,
+              '--prBaseSha', $env:VELORA_PR_BASE_SHA,
+              '--prHeadRef', $env:VELORA_PR_HEAD_REF,
+              '--prBaseRef', $env:VELORA_PR_BASE_REF
+            )
+          }
+          node scripts/portable-manifest.mjs @arguments
+          if ($LASTEXITCODE -ne 0) { throw 'Could not write the portable manifest.' }
+
+          node scripts/portable-manifest.mjs verify --manifest $manifestPath --base $output --stage $stage --package $zipPath
+          if ($LASTEXITCODE -ne 0) { throw 'Portable manifest verification failed.' }
+
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          $smoke = Get-Content -LiteralPath (Join-Path $output 'smoke-result.json') -Raw | ConvertFrom-Json
+          @(
+            '## VELORA 2.0 portable validation candidate'
+            ''
+            "- Source commit: $($manifest.source.sourceSha)"
+            "- Event SHA: $($manifest.source.eventSha)"
+            "- Run: [$($manifest.source.runId)]($($manifest.source.runUrl)) (attempt $($manifest.source.runAttempt))"
+            "- ZIP SHA-256: $($manifest.artifacts.package.sha256)"
+            "- EXE SHA-256: $($manifest.artifacts.executable.sha256)"
+            "- Startup/shutdown smoke: $($smoke.status) (isolated files: $($smoke.isolatedDataFileCount))"
+            ''
+            'No installer was run. No registry or system setting was changed. No physical hardware validation is claimed.'
+            'The manifest is a hash consistency record, not a digital signature.'
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+      - name: Upload portable candidate artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: VELORA-Portable-Windows-x64-${{ env.VELORA_SOURCE_SHA }}
+          path: |
+            dist/portable/VELORA-Portable-Windows-x64.zip
+            dist/portable/velora-portable-manifest.json
+            dist/portable/SHA256SUMS.txt
+            dist/portable/smoke-result.json
+          if-no-files-found: error
+          retention-days: 30

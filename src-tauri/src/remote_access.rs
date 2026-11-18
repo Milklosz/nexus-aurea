@@ -32,8 +32,6 @@ const MAX_PAIRED_DEVICES: usize = 8;
 #[cfg(windows)]
 const MAX_REQUEST_BYTES: usize = 4096;
 #[cfg(windows)]
-const CREDENTIAL_SERVICE: &str = "com.nexus.aurea.remote";
-#[cfg(windows)]
 const CA_CERT_ACCOUNT: &str = "trust-ca-cert-v2";
 #[cfg(windows)]
 const CA_KEY_ACCOUNT: &str = "trust-ca-key-v2";
@@ -394,12 +392,13 @@ impl Default for RemoteInner {
     fn default() -> Self {
         // Without a lock file location the state lock cannot exist and every
         // state operation fails closed; it never runs unprotected.
-        let state_lock: Arc<dyn StateLock> = match default_lock_path(CREDENTIAL_SERVICE) {
+        let credential_service = crate::portable::credential_service();
+        let state_lock: Arc<dyn StateLock> = match default_lock_path(credential_service) {
             Some(path) => Arc::new(FileStateLock::new(path)),
             None => Arc::new(UnavailableStateLock),
         };
         Self::with_credential_store(
-            Arc::new(WindowsCredentialStore::new(CREDENTIAL_SERVICE)),
+            Arc::new(WindowsCredentialStore::new(credential_service)),
             state_lock,
         )
     }
@@ -2496,6 +2495,15 @@ pub fn prepare_remote_trust_profile(
     app: tauri::AppHandle,
     service: State<'_, RemoteAccess>,
 ) -> Result<RemoteAccessStatus, String> {
+    // The trust profile is written to the system Downloads folder, which the
+    // portable launcher cannot redirect. Refuse explicitly instead of leaking
+    // a file outside the portable data root.
+    if crate::portable::is_portable() {
+        return Err(
+            "Portable validation build: iOS trust-profile generation is disabled so that no file is written outside the portable data root."
+                .to_string(),
+        );
+    }
     service.prepare_trust_profile(&app)
 }
 
