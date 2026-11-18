@@ -1,6 +1,6 @@
 # VELORA 2.0 — Portable Windows validation build
 
-**Status:** implementation complete, CI verification pending.
+**Status:** implemented and CI-verified. See `velora-2-portable-validation-report.md`.
 **Candidate:** Draft PR #65, commit `446ad37e8ff9a32ff0eff9b8e0cc7d3867bc40d8` (validated base).
 **This work:** separate Draft PR from branch `feat/portable-validation-build`. PR #65 is not modified.
 
