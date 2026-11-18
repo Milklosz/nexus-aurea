@@ -60,6 +60,8 @@ pub struct DiagnosticsSnapshot {
     pub native_controller: NativeControllerStatus,
     pub display_audio: DisplayAudioSnapshot,
     pub remote: RemoteDiagnostics,
+    /// Content-free count of session-boundary media quiesces (S2.9-A).
+    pub streaming_quiesce_count: u64,
     pub errors: Vec<DiagnosticsError>,
     pub limitations: Vec<String>,
 }
@@ -229,6 +231,7 @@ pub(crate) fn capture(app: &AppHandle) -> DiagnosticsSnapshot {
         paired_device_count: remote_status.paired_device_count,
         recovery_required: remote_status.recovery_required,
     };
+    let streaming_quiesce_count = crate::streaming_control::streaming_quiesce_count(app);
     let mut snapshot = DiagnosticsSnapshot {
         generated_at_ms: now_ms(),
         build: build_info(),
@@ -241,6 +244,7 @@ pub(crate) fn capture(app: &AppHandle) -> DiagnosticsSnapshot {
         native_controller,
         display_audio,
         remote,
+        streaming_quiesce_count,
         errors: Vec::new(),
         limitations: limitations(),
     };
@@ -665,6 +669,7 @@ mod tests {
                 display_signature: "sig".into(),
                 captured_at_ms: 2,
             },
+            streaming_quiesce_count: 0,
             errors: vec![DiagnosticsError {
                 source: "test".into(),
                 message: "test".into(),

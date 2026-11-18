@@ -65,6 +65,7 @@ pub struct StreamingControl {
     generation: AtomicU64,
     enabled: AtomicBool,
     dropped: AtomicU64,
+    quiesce_count: AtomicU64,
     queue_depth: AtomicUsize,
     simulator_busy: AtomicBool,
     worker_running: AtomicBool,
@@ -1386,14 +1387,55 @@ fn fallback_effect(kind: Option<SpatialFailureKind>) -> String {
     )
 }
 
-/// Raw Input removal/arrival uses this bounded hook, never waits on the input
-/// worker. Old queued packets are invalid immediately; same-path reconnects
-/// must observe neutral before another controller action is permitted.
-pub(crate) fn invalidate_controller_streaming(app: &AppHandle) {
-    let control = app.state::<StreamingControl>();
+/// Neutralise all media-arming state that could survive a session boundary.
+/// Pure over `RuntimeState` so the quiesce is unit-testable without an
+/// `AppHandle`. A held Play/Pause edge in the input engine is cleared here:
+/// media keys are a blind toggle, so a stray edge after re-focus must never
+/// inherit an armed target from the previous service. No playback state is
+/// read, persisted or restored, and no key is injected.
+fn quiesce_runtime_media_state(state: &mut RuntimeState) {
+    state.media_controls_armed = false;
+    state.media_target_session = None;
+    state.media_target_service_id = None;
+    state.simulator_target = None;
+    state.engine = InteractionEngine::default();
+}
+
+/// Full quiesce shared by the native hook and unit tests. Bumps the controller
+/// epoch and generation exactly once, clears media arming under the existing
+/// state lock, and returns the new generation for the sanitized receipt.
+fn quiesce_streaming_control(control: &StreamingControl) -> u64 {
     control.controller_epoch.fetch_add(1, Ordering::AcqRel);
-    control.generation.fetch_add(1, Ordering::AcqRel);
+    let generation = control
+        .generation
+        .fetch_add(1, Ordering::AcqRel)
+        .saturating_add(1);
+    control.quiesce_count.fetch_add(1, Ordering::AcqRel);
+    {
+        let mut state = control
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        quiesce_runtime_media_state(&mut state);
+    }
     crate::spatial_navigation::invalidate();
+    generation
+}
+
+/// Raw Input removal/arrival and real session transitions use this bounded
+/// hook, never wait on the input worker. Old queued packets are invalid
+/// immediately; same-path reconnects and first-vs-repeated launches must
+/// observe neutral media arming before another action is permitted.
+pub(crate) fn invalidate_controller_streaming(app: &AppHandle) -> u64 {
+    let control = app.state::<StreamingControl>();
+    quiesce_streaming_control(&control)
+}
+
+/// Content-free counter for diagnostics: how many full quiesces have run.
+pub(crate) fn streaming_quiesce_count(app: &AppHandle) -> u64 {
+    app.state::<StreamingControl>()
+        .quiesce_count
+        .load(Ordering::Acquire)
 }
 
 /// Called only after RemoteAccess has authenticated/authorized its command.
@@ -2882,6 +2924,96 @@ mod tests {
             process_id: 7,
             process_created_at_100ns: 99,
         }
+    }
+
+    #[test]
+    fn quiesce_clears_media_arming_and_advances_generation_exactly_once() {
+        let control = StreamingControl::default();
+        {
+            let mut state = control
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.media_controls_armed = true;
+            state.media_target_session = Some("netflix-session".into());
+            state.media_target_service_id = Some("netflix");
+            state.simulator_target = Some(streaming_target("netflix-session", 10));
+            // Park a half-pressed Cross in the engine: a blind media key edge
+            // must not carry across the quiesce into the next service.
+            let mut input = report();
+            input.buttons.set(Ds4Button::Cross, true);
+            state
+                .engine
+                .update("pad", &input, 1, NavigationMode::Keyboard, 0);
+        }
+        let before_generation = control.generation.load(Ordering::Acquire);
+        let before_epoch = control.controller_epoch.load(Ordering::Acquire);
+
+        let generation = quiesce_streaming_control(&control);
+
+        assert_eq!(generation, before_generation + 1);
+        assert_eq!(
+            control.generation.load(Ordering::Acquire),
+            before_generation + 1
+        );
+        assert_eq!(
+            control.controller_epoch.load(Ordering::Acquire),
+            before_epoch + 1
+        );
+        assert_eq!(control.quiesce_count.load(Ordering::Acquire), 1);
+
+        let mut state = control
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(!state.media_controls_armed);
+        assert!(state.media_target_session.is_none());
+        assert!(state.media_target_service_id.is_none());
+        assert!(state.simulator_target.is_none());
+        let mut input = report();
+        input.buttons.set(Ds4Button::Cross, false);
+        assert!(state
+            .engine
+            .update("pad", &input, 1, NavigationMode::Keyboard, 50)
+            .is_empty());
+    }
+
+    #[test]
+    fn quiesce_rejects_replayed_and_stale_generations() {
+        let control = StreamingControl::default();
+        control.enabled.store(true, Ordering::Release);
+        let epoch = control.epoch.load(Ordering::Acquire);
+        let stale_generation = control.generation.load(Ordering::Acquire);
+        let stale_controller_epoch = control.controller_epoch.load(Ordering::Acquire);
+        assert!(normalized_generation_active(
+            &control,
+            epoch,
+            stale_controller_epoch,
+            stale_generation
+        ));
+
+        let generation = quiesce_streaming_control(&control);
+
+        // The pre-quiesce token is now stale even though it was once current.
+        assert!(!normalized_generation_active(
+            &control,
+            epoch,
+            stale_controller_epoch,
+            stale_generation
+        ));
+        assert!(!normalized_generation_active(
+            &control,
+            epoch,
+            stale_controller_epoch,
+            generation
+        ));
+        // A fresh read with a deduplicated (unchanged) token is still current.
+        assert!(normalized_generation_active(
+            &control,
+            epoch,
+            control.controller_epoch.load(Ordering::Acquire),
+            generation
+        ));
     }
 
     #[test]
