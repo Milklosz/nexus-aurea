@@ -943,11 +943,16 @@ pub fn launch_edge_cinema(app: AppHandle, url: String) -> Result<EdgeCinemaRecei
             let identities = launch_registry::owned_process_identities_for_launch(&app, &launch.id);
             if owned_window_target_is_owned(&target, &identities) {
                 window_broker::grant_foreground_handoff(&[target.process_id]);
-                require_edge_window_focus(window_broker::activate_owned_window(
+                // Best effort only: Windows may deny the foreground request for a
+                // freshly spawned process. The window is already launched and
+                // tracked, so a denial must never turn a successful launch into
+                // a reported failure (the existing watcher can still restore it).
+                // No retry and no keystroke: only this one bounded request.
+                let _ = require_edge_window_focus(window_broker::activate_owned_window(
                     target.hwnd,
                     target.process_id,
                     target.process_created_at_100ns,
-                ))?;
+                ));
             }
         }
 
