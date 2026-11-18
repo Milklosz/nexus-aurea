@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => {
 vi.mock("../services/controlService", () => ({
   disabledControlServiceStatus: mocks.controlStatus,
   getControlServiceStatus: mocks.getStatus,
+  listenForControlServiceStatus: vi.fn(async () => () => {}),
   getFallbackHotkeyOptions: vi.fn(async () => []),
   setFallbackHotkey: vi.fn(async () => mocks.controlStatus),
 }));

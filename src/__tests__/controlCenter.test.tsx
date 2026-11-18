@@ -10,6 +10,15 @@ import { canRemoteSelect } from "../services/remotePermissions";
 const mocks = vi.hoisted(() => ({
   status: { windows: false, running: false, gameMode: false, controllerCount: 0, playstationControllerCount: 0, foregroundProcess: null, returnHotkeyRegistered: false, lastError: null },
   getStatus: vi.fn(async () => mocks.status),
+  controlStatusListener: null as ((status: {
+    windows: boolean; running: boolean; gameMode: boolean; controllerCount: number;
+    playstationControllerCount: number; foregroundProcess: string | null;
+    returnHotkeyRegistered: boolean; lastError: string | null;
+  }) => void) | null,
+  listenControlStatus: vi.fn(async (listener: (status: never) => void) => {
+    mocks.controlStatusListener = listener as typeof mocks.controlStatusListener;
+    return () => { mocks.controlStatusListener = null; };
+  }),
   remoteStatus: { enabled: false, secureOriginAvailable: false, pairingAvailable: false, pairedDeviceCount: 0, pairedDevices: [], origin: null, caFingerprint: null, trustProfilePath: null, pairingCode: null, pairingExpiresInSeconds: 0 },
   getRemoteStatus: vi.fn(async () => mocks.remoteStatus),
   remoteStatusListener: null as ((status: RemoteAccessStatus) => void) | null,
@@ -29,6 +38,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../services/controlService", () => ({
   disabledControlServiceStatus: { windows: false, running: false, gameMode: false, controllerCount: 0, playstationControllerCount: 0, foregroundProcess: null, returnHotkeyRegistered: false, lastError: null },
   getControlServiceStatus: mocks.getStatus,
+  listenForControlServiceStatus: mocks.listenControlStatus,
   getFallbackHotkeyOptions: vi.fn(async () => []),
   setFallbackHotkey: vi.fn(async () => ({} as never)),
 }));
@@ -51,7 +61,7 @@ vi.mock("../services/remoteAccess", async (importOriginal) => {
   };
 });
 
-afterEach(() => { cleanup(); vi.clearAllMocks(); mocks.remoteStatusListener = null; });
+afterEach(() => { cleanup(); vi.clearAllMocks(); mocks.remoteStatusListener = null; mocks.controlStatusListener = null; });
 
 function setupDialog() {
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
@@ -158,6 +168,42 @@ describe("Control Center", () => {
     expect(screen.queryByRole("button", { name: "Ponów odczyt statusu Windows" })).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(mocks.getStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports a rejected Windows status read truthfully as unknown, with the real reason and a retry", async () => {
+    setupDialog();
+    mocks.status = { ...mocks.status, windows: true };
+    mocks.getStatus.mockRejectedValueOnce(new Error("backend refused the request"));
+    renderCenter();
+
+    const alertText = (await screen.findByRole("alert")).textContent ?? "";
+    expect(alertText).toContain("Nie udało się odczytać stanu Windows.");
+    expect(alertText).toContain("Powód: backend refused the request");
+    expect(screen.getByText(/Backend Windows: nieznany/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Ponów odczyt statusu Windows" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Głośność +" })).toBeNull();
+    expect(screen.getByText(/Stan systemu jest nieznany/)).toBeTruthy();
+    mocks.status = { ...mocks.status, windows: false };
+  });
+
+  it("clears degraded status when a live control-service status event arrives, without polling", async () => {
+    setupDialog();
+    mocks.status = { ...mocks.status, windows: false };
+    mocks.getStatus.mockRejectedValueOnce(new Error("backend refused the request"));
+    renderCenter();
+
+    expect((await screen.findByRole("alert")).textContent).toContain("Nie udało się odczytać stanu Windows.");
+    expect(screen.getByText(/Backend Windows: nieznany/)).toBeTruthy();
+    await waitFor(() => expect(mocks.controlStatusListener).toBeTypeOf("function"));
+
+    act(() => {
+      mocks.controlStatusListener?.({ ...mocks.status, windows: true, running: true });
+    });
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByText(/Backend Windows: dostępny/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Głośność +" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Ponów odczyt statusu Windows" })).toBeNull();
   });
 
   it("uses the existing system volume actions when Windows is available", async () => {

@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { disabledControlServiceStatus, getControlServiceStatus, type ControlServiceStatus } from "../services/controlService";
+import { messageFromUnknown, veloraError, type VeloraError } from "../contracts/errors";
+import {
+  disabledControlServiceStatus, getControlServiceStatus, listenForControlServiceStatus,
+  type ControlServiceStatus,
+} from "../services/controlService";
 import type { CinemaProfile } from "../services/cinemaMode";
 import type { AmbientSettings } from "../services/ambient";
 import { nextAmbientDelay, AMBIENT_IDLE_OPTIONS } from "../services/ambient";
@@ -25,9 +29,12 @@ import {
 } from "../services/livingRoom";
 import {
   beginRemotePairing,
+  beginRemoteTrustProfileApproval,
+  cleanupRemoteTrustArtifacts,
   disabledRemoteAccessStatus,
   getRemoteAccessStatus,
   inspectRemoteRecovery,
+  inspectRemoteTrustProfile,
   listenForRemoteAccessStatus,
   prepareRemoteTrustProfile,
   REMOTE_ACCESS_DISABLED_REASON,
@@ -39,6 +46,7 @@ import {
   type RemoteAccessStatus,
   type RemoteRecoveryMode,
   type RemoteRecoveryPlan,
+  type RemoteTrustProfilePreview,
 } from "../services/remoteAccess";
 import {
   buildPairingBootstrapUrl,
@@ -97,6 +105,28 @@ function delayLabel(seconds: number): string {
   return Math.round(seconds / 60) + " min";
 }
 
+type StatusReadState = "loading" | "ready" | "unknown";
+
+/** Keeps the stable "Nie udało się odczytać stanu Windows" text, but appends the real cause. */
+function classifyStatusReadError(cause: unknown): VeloraError {
+  const raw = messageFromUnknown(cause) ?? "";
+  const reason = raw.slice(0, 160);
+  if (reason.includes("brak odpowiedzi")) {
+    return veloraError(
+      "remote-timeout",
+      `Nie udało się odczytać stanu Windows. Brak odpowiedzi w ciągu ${STATUS_READ_TIMEOUT_MS / 1000} s — stan jest nieznany; ponów odczyt.`,
+      true,
+      raw,
+    );
+  }
+  return veloraError(
+    "unavailable",
+    `Nie udało się odczytać stanu Windows.${reason ? ` Powód: ${reason}.` : ""} Stan jest nieznany; ponów odczyt.`,
+    true,
+    raw,
+  );
+}
+
 /** Renders the QR module matrix produced by the self-contained encoder. */
 function PairingQrCode({ modules, label }: { modules: boolean[][]; label: string }) {
   const size = modules.length;
@@ -125,28 +155,36 @@ export function SessionControllerControls({ homeEnabled, nativeRunning }: { home
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const mounted = useRef(false);
   const inFlight = useRef(false);
+  const refreshRequestId = useRef(0);
 
   const refresh = async () => {
     if (inFlight.current) return;
     inFlight.current = true;
+    const requestId = ++refreshRequestId.current;
     setBusy(true);
-    // A timeout reports a failed read, but an unresolved IPC remains single-flight.
     const pending = Promise.allSettled([getStreamingControlStatus(), getControllerFallbackStatus()]).then(results => {
       const [streamingResult, fallbackResult] = results;
       if (streamingResult.status === "rejected") throw streamingResult.reason;
       if (fallbackResult.status === "rejected") throw fallbackResult.reason;
       return [streamingResult.value, fallbackResult.value] as const;
     });
-    void pending.finally(() => { inFlight.current = false; }).catch(() => {});
+    // Do NOT release the reservation from `pending.finally`: a timed-out IPC may never settle,
+    // and a late settlement must not release a newer request's reservation. The epoch below
+    // releases it for this request as soon as the bounded race settles.
     try {
       const [nextStreaming, nextFallback] = await withTimeout(pending, STATUS_READ_TIMEOUT_MS, "Sterowanie z kanapy");
-      if (mounted.current) {
+      if (mounted.current && requestId === refreshRequestId.current) {
         setStreaming(nextStreaming); setFallback(nextFallback); setReady(true); setNotice(""); setError("");
       }
     } catch {
-      if (mounted.current) { setReady(false); setNotice("Stan sterowania z kanapy jest niedostępny. Odśwież po odzyskaniu połączenia."); }
+      if (mounted.current && requestId === refreshRequestId.current) {
+        setReady(false); setNotice("Stan sterowania z kanapy jest niedostępny. Odśwież po odzyskaniu połączenia.");
+      }
     } finally {
-      if (mounted.current) setBusy(false);
+      if (requestId === refreshRequestId.current) {
+        inFlight.current = false;
+        if (mounted.current) setBusy(false);
+      }
     }
   };
 
@@ -233,7 +271,8 @@ export function ControlCenter(props: ControlCenterProps) {
     props.initialPanel !== undefined && (props.initialPanel !== "search" || props.appSearch !== undefined) ? props.initialPanel : "cinema");
   const [status, setStatus] = useState<ControlServiceStatus>(disabledControlServiceStatus);
   const [loading, setLoading] = useState(true);
-  const [statusReadFailed, setStatusReadFailed] = useState(false);
+  const [statusReadState, setStatusReadState] = useState<StatusReadState>("loading");
+  const [statusError, setStatusError] = useState<VeloraError | null>(null);
   const nativeController = useNativeControllerStatus();
   const [homeBusy, setHomeBusy] = useState(false);
   const [homeNotice, setHomeNotice] = useState("");
@@ -251,6 +290,11 @@ export function ControlCenter(props: ControlCenterProps) {
   const remoteStatusRequestInFlight = useRef(false);
   const [remoteBusy, setRemoteBusy] = useState(false);
   const [trustConfirmed, setTrustConfirmed] = useState(false);
+  // Explicit, unchecked-by-default consent for the one-time profile write and
+  // for the rollback. Both are local-only and require a fresh approval token.
+  const [profileApproved, setProfileApproved] = useState(false);
+  const [cleanupAcknowledged, setCleanupAcknowledged] = useState(false);
+  const [trustPreview, setTrustPreview] = useState<RemoteTrustProfilePreview | null>(null);
   const [remoteError, setRemoteError] = useState("");
   const [remoteNotice, setRemoteNotice] = useState("");
   const [recoveryPlan, setRecoveryPlan] = useState<RemoteRecoveryPlan | null>(null);
@@ -294,13 +338,14 @@ export function ControlCenter(props: ControlCenterProps) {
       const next = await withTimeout(getControlServiceStatus(), STATUS_READ_TIMEOUT_MS, "Status Windows");
       if (isActive() && requestId === controlStatusRequestId.current) {
         setStatus(next);
-        setStatusReadFailed(false);
+        setStatusReadState("ready");
+        setStatusError(null);
       }
-    } catch {
+    } catch (cause) {
       if (isActive() && requestId === controlStatusRequestId.current) {
-        setStatus(disabledControlServiceStatus);
-        setStatusReadFailed(true);
-        setError("Nie udało się odczytać stanu Windows. Funkcje systemowe są niedostępne.");
+        // Keep the last known status; a failed read means "unknown", not "backend unavailable".
+        setStatusReadState("unknown");
+        setStatusError(classifyStatusReadError(cause));
       }
     } finally {
       if (isActive() && requestId === controlStatusRequestId.current) {
@@ -319,11 +364,26 @@ export function ControlCenter(props: ControlCenterProps) {
       : window.requestAnimationFrame(() => element?.querySelector<HTMLElement>(".cc-close")?.focus({ preventScroll: true }));
     let active = true;
     void readControlStatus(() => active);
+    // Event-driven recovery only: the backend already publishes every 750 ms. No polling is added.
+    // A good snapshot clears a degraded read, but is ignored while a read is in flight so it can
+    // never clobber a fresher response (the request id invalidates any stale read's guards).
+    let stopStatusListener: (() => void) | undefined;
+    void listenForControlServiceStatus((next) => {
+      if (!active || controlStatusRequestInFlight.current) return;
+      controlStatusRequestId.current += 1;
+      setStatus(next);
+      setStatusReadState("ready");
+      setStatusError(null);
+    }).then((unlisten) => {
+      if (active) stopStatusListener = unlisten;
+      else unlisten();
+    }).catch(() => {});
     return () => {
       window.cancelAnimationFrame(focusFrame);
       active = false;
       controlStatusRequestId.current += 1;
       controlStatusRequestInFlight.current = false;
+      stopStatusListener?.();
       if (element?.open) element.close();
     };
   }, []);
@@ -485,7 +545,7 @@ export function ControlCenter(props: ControlCenterProps) {
   };
 
   const changeVolume = async (action: SystemVolumeAction) => {
-    if (!status.windows || busy) return;
+    if (statusReadState !== "ready" || !status.windows || busy) return;
     setBusy(true);
     setError("");
     setNotice("");
@@ -570,13 +630,15 @@ export function ControlCenter(props: ControlCenterProps) {
 
           <section className="cc-card" aria-label="Dźwięk systemu">
             <div className="cc-card-heading"><span className="cc-card-index">02</span><div><h3>Dźwięk</h3><p>Głośność systemowa Windows.</p></div></div>
-            {status.windows
+            {statusReadState === "ready" && status.windows
               ? <div className="cc-actions cc-volume-actions">
                 <button type="button" data-remote-allow="" disabled={busy} onClick={() => void changeVolume("down")} aria-label="Głośność −">−</button>
                 <button type="button" data-remote-allow="" disabled={busy} onClick={() => void changeVolume("mute")}>Wycisz</button>
                 <button type="button" data-remote-allow="" disabled={busy} onClick={() => void changeVolume("up")} aria-label="Głośność +">+</button>
               </div>
-              : <p>{props.livingRoom ? "Regulacja głośności jest niedostępna." : "Regulacja głośności wymaga natywnego backendu Windows."}</p>}
+              : <p>{statusReadState !== "ready"
+                ? "Stan systemu jest nieznany — ponów odczyt w sekcji „Stan systemu”."
+                : props.livingRoom ? "Regulacja głośności jest niedostępna." : "Regulacja głośności wymaga natywnego backendu Windows."}</p>}
           </section>
 
           <section className="cc-card cc-card-wide" aria-label="VELORA Ambient">
@@ -597,18 +659,21 @@ export function ControlCenter(props: ControlCenterProps) {
           <section className="cc-card cc-card-wide cc-system-card" aria-label="Stan systemu">
             <div className="cc-card-heading"><span className="cc-card-index">04</span><div><h3>Stan systemu</h3><p>Windows i kontroler.</p></div></div>
             <div className="cc-system-status">
-              {loading
+              {statusReadState === "loading"
                 ? <p role="status">Odczytuję stan backendu…</p>
-                : <p role="status"><span className={`cc-status-dot ${status.windows ? "is-ready" : ""}`} />Backend Windows: {status.windows ? "dostępny" : "niedostępny"}</p>}
-              {status.windows && <p>Control Service: {status.running ? status.gameMode ? "tryb Gaming" : "aktywny" : "wyłączony"}
+                : statusReadState === "unknown"
+                  ? <p role="status"><span className="cc-status-dot" />Backend Windows: nieznany</p>
+                  : <p role="status"><span className={`cc-status-dot ${status.windows ? "is-ready" : ""}`} />Backend Windows: {status.windows ? "dostępny" : "niedostępny"}</p>}
+              {statusReadState === "ready" && status.windows && <p>Control Service: {status.running ? status.gameMode ? "tryb Gaming" : "aktywny" : "wyłączony"}
                 {status.running
                   ? " · kontrolery HID: " + status.controllerCount + " · Sony: " + status.playstationControllerCount
                   : " · monitoring urządzeń jest wyłączony"}
               </p>}
-              {status.foregroundProcess && <p>Aktywne okno: {status.foregroundProcess}</p>}
-              {status.lastError && <p role="alert">{status.lastError}</p>}
+              {statusReadState === "ready" && status.foregroundProcess && <p>Aktywne okno: {status.foregroundProcess}</p>}
+              {statusReadState === "ready" && status.lastError && <p role="alert">{status.lastError}</p>}
+              {statusError && <p className="cc-feedback cc-error" role="alert">{statusError.message}</p>}
             </div>
-            {statusReadFailed && <button type="button" data-remote-allow="" aria-busy={loading} disabled={loading} onClick={() => void readControlStatus()}>
+            {statusReadState === "unknown" && <button type="button" data-remote-allow="" aria-busy={loading} disabled={loading} onClick={() => void readControlStatus()}>
               {loading ? "Odczytuję…" : "Ponów odczyt statusu Windows"}
             </button>}
           </section>
@@ -699,10 +764,24 @@ export function ControlCenter(props: ControlCenterProps) {
             {remoteStatusLoading ? "Odczytuję…" : "Ponów odczyt statusu"}
           </button>}
           {remoteStatusReady && !remoteStatus.enabled && <div className="cc-remote-actions">
-            <button type="button" disabled={!remoteStatusReady || remoteBusy} onClick={() => void runRemoteAction(
-              prepareRemoteTrustProfile,
-              "Profil zaufania jest gotowy do bezpiecznego przeniesienia na iPhone'a.",
-            )}>Przygotuj profil zaufania iPhone'a</button>
+            <p>Ścieżka profilu (podgląd): <code>{trustPreview?.path ?? remoteStatus.trustProfilePath ?? "jeszcze nieprzygotowany"}</code></p>
+            <p>Odcisk CA SHA-256 (podgląd): <code className="remote-fingerprint">{trustPreview?.fingerprint ?? remoteStatus.caFingerprint ?? "brak"}</code></p>
+            {trustPreview?.portable && <p className="cc-card-note">Wersja przenośna: profil jest zapisywany wyłącznie w katalogu danych przenośnych, nigdy w folderze Pobrane.</p>}
+            <label className="remote-trust-confirmation">
+              <input type="checkbox" checked={profileApproved} onChange={(event) => {
+                const checked = event.target.checked;
+                setProfileApproved(checked);
+                if (checked) void inspectRemoteTrustProfile().then(setTrustPreview).catch((cause: unknown) => {
+                  setProfileApproved(false);
+                  setRemoteError(cause instanceof Error ? cause.message : "Nie udało się odczytać podglądu profilu.");
+                });
+              }} />
+              Rozumiem, że jednorazowe zatwierdzenie zapisze plik .mobileconfig w podanym katalogu i że muszę ręcznie przenieść go na iPhone'a.
+            </label>
+            <button type="button" disabled={!remoteStatusReady || remoteBusy || !profileApproved} onClick={() => void runRemoteAction(async () => {
+              const approvalToken = await beginRemoteTrustProfileApproval();
+              return prepareRemoteTrustProfile(approvalToken);
+            }, "Profil zaufania jest gotowy do bezpiecznego przeniesienia na iPhone'a.")}>Przygotuj profil zaufania iPhone'a</button>
             {remoteStatus.trustProfilePath && <>
               <p>Profil: <code>{remoteStatus.trustProfilePath}</code></p>
               <p>SHA-256 certyfikatu: <code className="remote-fingerprint">{remoteStatus.caFingerprint}</code></p>
@@ -717,6 +796,31 @@ export function ControlCenter(props: ControlCenterProps) {
                 "Serwer HTTPS został włączony tylko dla prywatnego interfejsu sieciowego.",
               )}>Uruchom serwer HTTPS</button>
             </>}
+            <label className="remote-trust-confirmation">
+              <input type="checkbox" checked={cleanupAcknowledged} onChange={(event) => setCleanupAcknowledged(event.target.checked)} />
+              Rozumiem, że cofnięcie zatrzyma serwer, usunie wygenerowany profil z katalogu przenośnego i odwoła wszystkie urządzenia.
+            </label>
+            <button type="button" disabled={!remoteStatusReady || remoteBusy || !cleanupAcknowledged} onClick={() => {
+              if (!remoteStatusReady || remoteBusy) return;
+              setRemoteBusy(true);
+              setRemoteError("");
+              setRemoteNotice("");
+              void (async () => {
+                try {
+                  const approvalToken = await beginRemoteTrustProfileApproval();
+                  const report = await cleanupRemoteTrustArtifacts(approvalToken);
+                  setRemoteStatus(await getRemoteAccessStatus());
+                  setProfileApproved(false);
+                  setCleanupAcknowledged(false);
+                  setTrustPreview(null);
+                  setRemoteNotice(`Cofnięcie: serwer zatrzymany=${report.serverStopped}, profil usunięty=${report.profileRemoved}, urządzenia odwołane=${report.devicesRevoked}. ${report.note}`);
+                } catch (cause) {
+                  setRemoteError(cause instanceof Error ? cause.message : "Nie udało się cofnąć danych zaufania.");
+                } finally {
+                  setRemoteBusy(false);
+                }
+              })();
+            }}>Wyczyść dane zaufania (cofnij)</button>
             <p className="cc-card-note">{REMOTE_ACCESS_DISABLED_REASON} Serwer domyślnie nie nasłuchuje w sieci.</p>
           </div>}
           {remoteStatusReady && remoteStatus.enabled && <div className="cc-remote-actions">

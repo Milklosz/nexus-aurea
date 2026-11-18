@@ -14,6 +14,7 @@ use crate::window_broker::{self, RestoreReason, RestoreResult};
 pub(crate) const SESSION_CHANGED_EVENT: &str = "velora-session-changed";
 pub(crate) const SESSION_ERROR_EVENT: &str = "velora-session-error";
 pub(crate) const RETURN_HOME_EVENT: &str = "velora-return-home";
+pub(crate) const STREAMING_QUIESCED_EVENT: &str = "velora-streaming-quiesced";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -550,9 +551,62 @@ fn streaming_revocation_for_transition(event: Option<&SessionChangedEvent>) -> b
     event.is_some()
 }
 
+/// Mirror of [`streaming_revocation_for_transition`] for media arming: a real
+/// transition must disarm playback controls exactly once. Deduplicated,
+/// replayed or stale commands produce no changed event, so they leave media
+/// arming untouched. Kept pure so first-vs-repeated behaviour is unit-tested.
+fn media_disarm_for_transition(event: Option<&SessionChangedEvent>) -> bool {
+    event.is_some()
+}
+
+/// Allowlisted, content-free receipt attached to a real-transition quiesce.
+/// Only closed enums/numbers and a constant boolean are serialized: no URLs,
+/// page text, window titles, tokens or free-form error strings.
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StreamingQuiescedReceipt {
+    revision: u64,
+    from: &'static str,
+    to: &'static str,
+    generation: u64,
+    reason: &'static str,
+    physical_hardware_verified: bool,
+}
+
+fn quiesce_reason(cause: TransitionCause) -> &'static str {
+    match cause {
+        TransitionCause::User => "user",
+        TransitionCause::GamepadHome => "gamepadHome",
+        TransitionCause::ControlService => "controlService",
+        TransitionCause::Launch => "launch",
+        TransitionCause::ProcessExit => "processExit",
+        TransitionCause::System => "system",
+    }
+}
+
+fn emit_streaming_quiesced(app: &AppHandle, event: &SessionChangedEvent, generation: u64) {
+    let _ = app.emit(
+        STREAMING_QUIESCED_EVENT,
+        StreamingQuiescedReceipt {
+            revision: event.revision,
+            from: event.from.as_str(),
+            to: event.to.as_str(),
+            generation,
+            reason: quiesce_reason(event.cause),
+            physical_hardware_verified: false,
+        },
+    );
+}
+
 fn revoke_streaming_if_transitioned(app: &AppHandle, event: Option<&SessionChangedEvent>) {
-    if streaming_revocation_for_transition(event) {
-        crate::streaming_control::invalidate_controller_streaming(app);
+    if !streaming_revocation_for_transition(event) {
+        return;
+    }
+    let generation = crate::streaming_control::invalidate_controller_streaming(app);
+    if media_disarm_for_transition(event) {
+        if let Some(event) = event {
+            emit_streaming_quiesced(app, event, generation);
+        }
     }
 }
 
@@ -1956,6 +2010,32 @@ mod tests {
         assert!(super::streaming_revocation_for_transition(real_home.as_ref()));
         let (_, deduped_home) = state.apply_command(&home_request, 50).unwrap();
         assert!(!super::streaming_revocation_for_transition(deduped_home.as_ref()));
+
+        // First vs repeated into a streaming service (S2.9-A): the first real
+        // transition into Cinema disarms media controls exactly once. The
+        // replayed command id is idempotent: no changed event, no second
+        // quiesce. This is the asymmetry that previously lost YouTube's pause.
+        let first_launch = request(SessionId::Cinema, "cinema-first");
+        let (_, first_event) = state.apply_command(&first_launch, 60).unwrap();
+        assert!(first_event.is_some());
+        assert!(super::media_disarm_for_transition(first_event.as_ref()));
+        let (_, repeated_event) = state.apply_command(&first_launch, 70).unwrap();
+        assert!(repeated_event.is_none());
+        assert!(!super::media_disarm_for_transition(repeated_event.as_ref()));
+        // The sanitized receipt uses only allowlisted enum labels and numbers.
+        let event = first_event.as_ref().expect("first launch changed the session");
+        assert_eq!(super::quiesce_reason(event.cause), "user");
+        let receipt = super::StreamingQuiescedReceipt {
+            revision: event.revision,
+            from: event.from.as_str(),
+            to: event.to.as_str(),
+            generation: 1,
+            reason: super::quiesce_reason(event.cause),
+            physical_hardware_verified: false,
+        };
+        assert_eq!(receipt.from, "veloraHome");
+        assert_eq!(receipt.to, "cinema");
+        assert!(!receipt.physical_hardware_verified);
 
         // Integration assertion for the owner of streaming_control.rs (not
         // editable from this crate module): after
