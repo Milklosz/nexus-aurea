@@ -29,9 +29,12 @@ import {
 } from "../services/livingRoom";
 import {
   beginRemotePairing,
+  beginRemoteTrustProfileApproval,
+  cleanupRemoteTrustArtifacts,
   disabledRemoteAccessStatus,
   getRemoteAccessStatus,
   inspectRemoteRecovery,
+  inspectRemoteTrustProfile,
   listenForRemoteAccessStatus,
   prepareRemoteTrustProfile,
   REMOTE_ACCESS_DISABLED_REASON,
@@ -43,6 +46,7 @@ import {
   type RemoteAccessStatus,
   type RemoteRecoveryMode,
   type RemoteRecoveryPlan,
+  type RemoteTrustProfilePreview,
 } from "../services/remoteAccess";
 import {
   buildPairingBootstrapUrl,
@@ -286,6 +290,11 @@ export function ControlCenter(props: ControlCenterProps) {
   const remoteStatusRequestInFlight = useRef(false);
   const [remoteBusy, setRemoteBusy] = useState(false);
   const [trustConfirmed, setTrustConfirmed] = useState(false);
+  // Explicit, unchecked-by-default consent for the one-time profile write and
+  // for the rollback. Both are local-only and require a fresh approval token.
+  const [profileApproved, setProfileApproved] = useState(false);
+  const [cleanupAcknowledged, setCleanupAcknowledged] = useState(false);
+  const [trustPreview, setTrustPreview] = useState<RemoteTrustProfilePreview | null>(null);
   const [remoteError, setRemoteError] = useState("");
   const [remoteNotice, setRemoteNotice] = useState("");
   const [recoveryPlan, setRecoveryPlan] = useState<RemoteRecoveryPlan | null>(null);
@@ -755,10 +764,24 @@ export function ControlCenter(props: ControlCenterProps) {
             {remoteStatusLoading ? "Odczytuję…" : "Ponów odczyt statusu"}
           </button>}
           {remoteStatusReady && !remoteStatus.enabled && <div className="cc-remote-actions">
-            <button type="button" disabled={!remoteStatusReady || remoteBusy} onClick={() => void runRemoteAction(
-              prepareRemoteTrustProfile,
-              "Profil zaufania jest gotowy do bezpiecznego przeniesienia na iPhone'a.",
-            )}>Przygotuj profil zaufania iPhone'a</button>
+            <p>Ścieżka profilu (podgląd): <code>{trustPreview?.path ?? remoteStatus.trustProfilePath ?? "jeszcze nieprzygotowany"}</code></p>
+            <p>Odcisk CA SHA-256 (podgląd): <code className="remote-fingerprint">{trustPreview?.fingerprint ?? remoteStatus.caFingerprint ?? "brak"}</code></p>
+            {trustPreview?.portable && <p className="cc-card-note">Wersja przenośna: profil jest zapisywany wyłącznie w katalogu danych przenośnych, nigdy w folderze Pobrane.</p>}
+            <label className="remote-trust-confirmation">
+              <input type="checkbox" checked={profileApproved} onChange={(event) => {
+                const checked = event.target.checked;
+                setProfileApproved(checked);
+                if (checked) void inspectRemoteTrustProfile().then(setTrustPreview).catch((cause: unknown) => {
+                  setProfileApproved(false);
+                  setRemoteError(cause instanceof Error ? cause.message : "Nie udało się odczytać podglądu profilu.");
+                });
+              }} />
+              Rozumiem, że jednorazowe zatwierdzenie zapisze plik .mobileconfig w podanym katalogu i że muszę ręcznie przenieść go na iPhone'a.
+            </label>
+            <button type="button" disabled={!remoteStatusReady || remoteBusy || !profileApproved} onClick={() => void runRemoteAction(async () => {
+              const approvalToken = await beginRemoteTrustProfileApproval();
+              return prepareRemoteTrustProfile(approvalToken);
+            }, "Profil zaufania jest gotowy do bezpiecznego przeniesienia na iPhone'a.")}>Przygotuj profil zaufania iPhone'a</button>
             {remoteStatus.trustProfilePath && <>
               <p>Profil: <code>{remoteStatus.trustProfilePath}</code></p>
               <p>SHA-256 certyfikatu: <code className="remote-fingerprint">{remoteStatus.caFingerprint}</code></p>
@@ -773,6 +796,31 @@ export function ControlCenter(props: ControlCenterProps) {
                 "Serwer HTTPS został włączony tylko dla prywatnego interfejsu sieciowego.",
               )}>Uruchom serwer HTTPS</button>
             </>}
+            <label className="remote-trust-confirmation">
+              <input type="checkbox" checked={cleanupAcknowledged} onChange={(event) => setCleanupAcknowledged(event.target.checked)} />
+              Rozumiem, że cofnięcie zatrzyma serwer, usunie wygenerowany profil z katalogu przenośnego i odwoła wszystkie urządzenia.
+            </label>
+            <button type="button" disabled={!remoteStatusReady || remoteBusy || !cleanupAcknowledged} onClick={() => {
+              if (!remoteStatusReady || remoteBusy) return;
+              setRemoteBusy(true);
+              setRemoteError("");
+              setRemoteNotice("");
+              void (async () => {
+                try {
+                  const approvalToken = await beginRemoteTrustProfileApproval();
+                  const report = await cleanupRemoteTrustArtifacts(approvalToken);
+                  setRemoteStatus(await getRemoteAccessStatus());
+                  setProfileApproved(false);
+                  setCleanupAcknowledged(false);
+                  setTrustPreview(null);
+                  setRemoteNotice(`Cofnięcie: serwer zatrzymany=${report.serverStopped}, profil usunięty=${report.profileRemoved}, urządzenia odwołane=${report.devicesRevoked}. ${report.note}`);
+                } catch (cause) {
+                  setRemoteError(cause instanceof Error ? cause.message : "Nie udało się cofnąć danych zaufania.");
+                } finally {
+                  setRemoteBusy(false);
+                }
+              })();
+            }}>Wyczyść dane zaufania (cofnij)</button>
             <p className="cc-card-note">{REMOTE_ACCESS_DISABLED_REASON} Serwer domyślnie nie nasłuchuje w sieci.</p>
           </div>}
           {remoteStatusReady && remoteStatus.enabled && <div className="cc-remote-actions">

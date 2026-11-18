@@ -27,4 +27,15 @@ Pełne zaufanie certyfikatowi głównemu pozwala iPhone'owi ufać certyfikatom T
 - W Control Center możesz odwołać dostęp jednego urządzenia lub wszystkich urządzeń. **Wyłącz serwer LAN** kończy nasłuchiwanie. Odwołanie połączenia iPhone'a nie usuwa profilu zaufania.
 - Po teście usuń profil w **Ustawienia → Ogólne → VPN i zarządzanie urządzeniem**; sprawdź też, że pełne zaufanie dla certyfikatu jest wyłączone.
 
-Ten przepływ nie był jeszcze sprawdzony na fizycznym iPhonie ani MSI. Wymaga testu na urządzeniach użytkownika przed użyciem poza kontrolowanym pilotem.
+## Wersja przenośna — odwracalna walidacja parowania (bezpieczny tryb testowy)
+
+W wersji przenośnej profil zaufania **nie jest** zapisywany do folderu Pobrane. Instalacja przebiega wyłącznie lokalnie i wymaga wyraźnej zgody:
+
+1. W panelu iPhone Remote zaznacz zgodę na przygotowanie profilu (pole jest domyślnie niezaznaczone). Przed zaznaczeniem zostaje wyświetlona rozwiązana ścieżka `<VELORA-Portable-Data>\trust\VELORA-LAN-Remote.mobileconfig` oraz odcisk SHA-256 certyfikatu CA.
+2. Kliknięcie **Przygotuj profil zaufania iPhone'a** wymaga jednorazowego potwierdzenia z lokalnego IPC (ważnego 120 sekund, jednorazowego). Profil jest zapisywany tylko w katalogu danych wersji przenośnej; weryfikacja w kodzie gwarantuje, że ścieżka znajduje się w tym katalogu. Ani certyfikat, ani magazyn zaufania systemu Windows nie są modyfikowane.
+3. Porównaj wyświetlony odcisk SHA-256 z odciskiem pokazywanym przez iOS przy instalacji profilu. Jeśli się nie zgadza — zatrzymaj test.
+4. Przenieś plik ręcznie zaufanym kanałem (np. AirDrop do własnego urządzenia) i zainstaluj go na iPhonie w **Ustawienia → Ogólne → VPN i zarządzanie urządzeniem**. Następnie włącz pełne zaufanie w **Ustawienia → Ogólne → To urządzenie → Ustawienia zaufania certyfikatów**.
+5. MSI i iPhone muszą być w tej samej prywatnej sieci Wi-Fi. Otwórz dokładny adres HTTPS z Control Center. Kod QR zawiera w fragmencie URL wyłącznie jednorazowy kod, adres serwera i krótki czas ważności — bez tokenu, klucza ani odcisku. **Nie omijaj ostrzeżeń TLS w Safari.**
+6. Po teście użyj **Wyczyść dane zaufania (cofnij)** z osobnym, wyraźnym potwierdzeniem: lokalna komenda zatrzymuje serwer, usuwa wygenerowany profil wyłącznie z katalogu przenośnego i odwołuje wszystkie urządzenia. Na iPhonie usuń profil w **Ustawienia → Ogólne → VPN i zarządzanie urządzeniem** i wyłącz pełne zaufanie w **Ustawienia zaufania certyfikatów**. Żadna z tych czynności nie jest dostępna przez sieć LAN.
+
+To jest wyłącznie bezpieczna, odwracalna metoda testowa. **Parowanie z prawdziwym iPhonem / MSI nie zostało zwalidowane** i pozostaje bramą sprzętową dla Lundy. Nie zgłaszaj wyniku "parowanie PASS" bez testu na fizycznym urządzeniu.

@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   beginRemotePairing,
+  beginRemoteTrustProfileApproval,
+  cleanupRemoteTrustArtifacts,
   disabledRemoteAccessStatus,
   formatPairingCountdown,
   getRemoteAccessStatus,
   inspectRemoteRecovery,
+  inspectRemoteTrustProfile,
   pairingRemainingSeconds,
+  prepareRemoteTrustProfile,
   runRemoteRecovery,
   startRemoteAccess,
 } from "../services/remoteAccess";
@@ -21,6 +25,15 @@ describe("iPhone Remote native access gate", () => {
 
   it("does not allow pairing from the browser preview", async () => {
     await expect(beginRemotePairing()).rejects.toThrow("aplikacji VELORA na Windows");
+  });
+});
+
+describe("iPhone Remote portable trust-profile approval gate", () => {
+  it("is unavailable outside the Windows app", async () => {
+    await expect(beginRemoteTrustProfileApproval()).rejects.toThrow("aplikacji VELORA na Windows");
+    await expect(inspectRemoteTrustProfile()).rejects.toThrow("aplikacji VELORA na Windows");
+    await expect(prepareRemoteTrustProfile("ABCD2345")).rejects.toThrow("aplikacji VELORA na Windows");
+    await expect(cleanupRemoteTrustArtifacts("ABCD2345")).rejects.toThrow("aplikacji VELORA na Windows");
   });
 });
 

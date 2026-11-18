@@ -14,6 +14,8 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
     time::{Duration, Instant},
 };
+#[cfg(windows)]
+use std::path::{Path, PathBuf};
 use tauri::State;
 
 use crate::remote_reliability::{classify_replay, CommandReceiptLog, ReplayDecision};
@@ -57,6 +59,13 @@ const UI_LOCK_WAIT: Duration = Duration::from_secs(5);
 const STATUS_LOCK_WAIT: Duration = Duration::from_millis(150);
 #[cfg(windows)]
 const RECOVERY_CONFIRMATION_TTL: Duration = Duration::from_secs(120);
+/// One-time, short-lived approval for writing the iOS trust profile / rolling
+/// it back. Issued only through local Tauri IPC, never through the LAN server.
+#[cfg(windows)]
+const TRUST_APPROVAL_TTL: Duration = Duration::from_secs(120);
+#[cfg(windows)]
+const TRUST_PROFILE_FILE_NAME: &str = "VELORA-LAN-Remote.mobileconfig";
+const REMOTE_WINDOWS_ONLY: &str = "Serwer iPhone Remote działa wyłącznie na MSI z Windows.";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -131,6 +140,29 @@ impl Default for RemoteAccessStatus {
             recovery_required: false,
         }
     }
+}
+
+/// Read-only preview of where a portable trust profile WOULD be written and of
+/// the CA fingerprint. It performs no file write and never touches the system
+/// trust store; the UI shows it before the user approves anything.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteTrustProfilePreview {
+    pub path: String,
+    pub fingerprint: Option<String>,
+    pub portable: bool,
+}
+
+/// Truthful outcome of each rollback step. No step is reported as done unless
+/// the corresponding local operation actually succeeded.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteTrustCleanupReport {
+    pub server_stopped: bool,
+    pub profile_removed: bool,
+    pub profile_path: String,
+    pub devices_revoked: bool,
+    pub note: String,
 }
 
 #[derive(Clone)]
@@ -347,6 +379,13 @@ struct RemoteInner {
     store_health: Mutex<Option<VaultError>>,
     #[cfg(windows)]
     recovery_confirmation: Mutex<Option<(String, Instant)>>,
+    /// One-time approval issued by the local UI for a single trust-profile
+    /// write OR rollback. Same shape/lifetime as `recovery_confirmation`, kept
+    /// in its own slot so it cannot be confused with a recovery confirmation.
+    /// A single use (by either operation) consumes it. Not an authorization
+    /// factor: the human consent is the explicit checkbox in the UI.
+    #[cfg(windows)]
+    trust_approval: Mutex<Option<(String, Instant)>>,
     pair_attempts: Mutex<HashMap<IpAddr, RateBucket>>,
     command_attempts: Mutex<HashMap<String, RateBucket>>,
     /// Bounds unauthenticated-looking hello probes before any credential-store
@@ -378,6 +417,7 @@ impl RemoteInner {
             state_lock,
             store_health: Mutex::new(None),
             recovery_confirmation: Mutex::new(None),
+            trust_approval: Mutex::new(None),
             pair_attempts: Mutex::new(HashMap::new()),
             command_attempts: Mutex::new(HashMap::new()),
             hello_attempts: Mutex::new(HashMap::new()),
@@ -537,6 +577,48 @@ fn is_allowed_request(
         return origin == Some(expected_origin);
     }
     true
+}
+
+/// Pure directory decision, unit-testable without an `AppHandle`. In portable
+/// mode ONLY the portable root is consulted: the installed download directory
+/// is not even available to this branch.
+#[cfg(windows)]
+fn trust_profile_dir(installed_download: Option<&Path>, portable_root: Option<&Path>) -> Result<PathBuf, String> {
+    if let Some(root) = portable_root {
+        Ok(root.join("trust"))
+    } else if let Some(download) = installed_download {
+        Ok(download.to_path_buf())
+    } else {
+        Err("Nie można ustalić katalogu profilu zaufania.".into())
+    }
+}
+
+/// Resolves the output directory once, for every code path that writes or
+/// removes the generated profile. Portable builds can never reach Downloads.
+#[cfg(windows)]
+fn resolve_trust_profile_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    use tauri::Manager;
+
+    if crate::portable::is_portable() {
+        trust_profile_dir(None, crate::portable::data_dir().as_deref())
+    } else {
+        let download = app
+            .path()
+            .download_dir()
+            .map_err(|_| "Nie można otworzyć folderu Pobrane.".to_string())?;
+        trust_profile_dir(Some(&download), None)
+    }
+}
+
+#[cfg(windows)]
+fn ca_fingerprint(cert_pem: &str) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+
+    let cert_der = der_from_pem(cert_pem)?;
+    Ok(Sha256::digest(&cert_der)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 impl RemoteAccess {
@@ -722,22 +804,41 @@ impl RemoteAccess {
         Ok((cert, key))
     }
 
+    /// Resolves the output directory and delegates to `prepare_trust_profile_in`.
+    /// Every caller (local command AND `start`) goes through this resolver, so
+    /// a portable build can never write outside its own data root.
     #[cfg(windows)]
     pub fn prepare_trust_profile(
         &self,
         app: &tauri::AppHandle,
     ) -> Result<RemoteAccessStatus, String> {
+        let dir = resolve_trust_profile_dir(app)?;
+        self.prepare_trust_profile_in(app, &dir)
+    }
+
+    #[cfg(windows)]
+    pub fn prepare_trust_profile_in(
+        &self,
+        _app: &tauri::AppHandle,
+        dir: &Path,
+    ) -> Result<RemoteAccessStatus, String> {
         use base64::{engine::general_purpose::STANDARD, Engine};
-        use sha2::{Digest, Sha256};
         use std::fs;
-        use tauri::Manager;
+
+        // Authoritative guard, independent of the caller: even if a future
+        // caller passed a wrong directory, a portable process may only write
+        // underneath the portable data root. Never falls back to Downloads.
+        if crate::portable::is_portable() {
+            let root = crate::portable::data_dir()
+                .ok_or("Brak katalogu danych wersji przenośnej.")?;
+            if !dir.starts_with(&root) {
+                return Err("Profil zaufania można zapisać wyłącznie w katalogu danych wersji przenośnej.".into());
+            }
+        }
 
         let (cert_pem, _) = self.ensure_trust_material()?;
         let cert_der = der_from_pem(&cert_pem)?;
-        let fingerprint = Sha256::digest(&cert_der)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let fingerprint = ca_fingerprint(&cert_pem)?;
         let ca_uuid = uuid_from_sha256(&cert_der);
         let profile_uuid = uuid_from_sha256(&[cert_der.as_slice(), b"profile"].concat());
         let profile = format!(
@@ -764,13 +865,10 @@ impl RemoteAccess {
             ca_uuid,
             profile_uuid
         );
-        let mut profile_path = app
-            .path()
-            .download_dir()
-            .map_err(|_| "Nie można otworzyć folderu Pobrane.".to_string())?;
+        let mut profile_path = dir.to_path_buf();
         fs::create_dir_all(&profile_path)
-            .map_err(|_| "Nie można przygotować folderu Pobrane.".to_string())?;
-        profile_path.push("VELORA-LAN-Remote.mobileconfig");
+            .map_err(|_| "Nie można przygotować folderu profilu zaufania.".to_string())?;
+        profile_path.push(TRUST_PROFILE_FILE_NAME);
         fs::write(&profile_path, profile)
             .map_err(|_| "Nie udało się zapisać profilu zaufania.".to_string())?;
         let mut status = lock(&self.inner.status);
@@ -784,7 +882,117 @@ impl RemoteAccess {
         &self,
         _app: &tauri::AppHandle,
     ) -> Result<RemoteAccessStatus, String> {
-        Err("Serwer iPhone Remote działa wyłącznie na MSI z Windows.".into())
+        Err(REMOTE_WINDOWS_ONLY.into())
+    }
+
+    /// Issues a one-time, 120 s local approval. Not an authorization factor —
+    /// the human at the keyboard still has to tick the explicit checkbox. A new
+    /// issuance replaces any previous token (single-use, like recovery).
+    #[cfg(windows)]
+    pub fn begin_trust_approval(&self) -> String {
+        use rand::Rng;
+
+        const ALPHABET: &[u8] = b"ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+        let mut rng = rand::thread_rng();
+        let token: String = (0..8)
+            .map(|_| char::from(ALPHABET[rng.gen_range(0..ALPHABET.len())]))
+            .collect();
+        *lock(&self.inner.trust_approval) =
+            Some((token.clone(), Instant::now() + TRUST_APPROVAL_TTL));
+        token
+    }
+
+    /// Consumes the one-time approval. A wrong, stale or already-used token
+    /// fails closed before any file or credential state is touched.
+    #[cfg(windows)]
+    fn take_trust_approval(&self, token: &str) -> Result<(), String> {
+        let issued = lock(&self.inner.trust_approval).take();
+        match issued {
+            Some((issued_token, expires_at))
+                if Instant::now() < expires_at && issued_token == token => Ok(()),
+            _ => Err("Potwierdzenie jest nieprawidłowe lub wygasło. Zaznacz zgodę ponownie.".into()),
+        }
+    }
+
+    #[cfg(windows)]
+    pub fn prepare_trust_profile_with_approval(
+        &self,
+        app: &tauri::AppHandle,
+        approval_token: &str,
+    ) -> Result<RemoteAccessStatus, String> {
+        self.take_trust_approval(approval_token)?;
+        self.prepare_trust_profile(app)
+    }
+
+    /// Read-only preview: resolves the path and derives the fingerprint WITHOUT
+    /// writing the `.mobileconfig` or changing any system trust store. Shown
+    /// before the user approves anything.
+    #[cfg(windows)]
+    pub fn inspect_trust_profile(
+        &self,
+        app: &tauri::AppHandle,
+    ) -> Result<RemoteTrustProfilePreview, String> {
+        let dir = resolve_trust_profile_dir(app)?;
+        let portable = crate::portable::is_portable();
+        let fingerprint = self.ensure_trust_material().ok().and_then(|(cert, _)| ca_fingerprint(&cert).ok());
+        Ok(RemoteTrustProfilePreview {
+            path: dir.join(TRUST_PROFILE_FILE_NAME).to_string_lossy().into_owned(),
+            fingerprint,
+            portable,
+        })
+    }
+
+    /// Reversible, local-only rollback. Explicit one-time approval required;
+    /// portable mode only, so the installed profile and system trust stores can
+    /// never be touched. Each reported step reflects what actually happened.
+    #[cfg(windows)]
+    pub fn cleanup_trust_artifacts(
+        &self,
+        app: &tauri::AppHandle,
+        approval_token: &str,
+    ) -> Result<RemoteTrustCleanupReport, String> {
+        use tauri::Emitter;
+
+        self.take_trust_approval(approval_token)?;
+        if !crate::portable::is_portable() {
+            return Err("Cofnięcie profilu jest dostępne tylko w wersji przenośnej.".into());
+        }
+        let root = crate::portable::data_dir()
+            .ok_or("Brak katalogu danych wersji przenośnej.")?;
+        let dir = resolve_trust_profile_dir(app)?;
+        if !dir.starts_with(&root) {
+            return Err("Profil można usunąć wyłącznie z katalogu danych wersji przenośnej.".into());
+        }
+
+        self.stop();
+        let path = dir.join(TRUST_PROFILE_FILE_NAME);
+        let (profile_removed, removal_note) = match std::fs::remove_file(&path) {
+            Ok(()) => (true, None),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound =>
+                (false, Some("Plik profilu już nie istniał.".to_string())),
+            Err(error) => (false, Some(format!("Nie udało się usunąć pliku profilu: {error}"))),
+        };
+        // A failed file removal must never prevent authorization revocation.
+        let revoke_result = self.revoke_all();
+        let devices_revoked = revoke_result.is_ok();
+        let revoke_note = match revoke_result {
+            Ok(_) => "Urządzenia odwołane. Usuń profil i wyłącz pełne zaufanie na iPhonie osobno w Ustawieniach.".to_string(),
+            Err(message) => format!("Odwołanie urządzeń nie zostało potwierdzone: {message}"),
+        };
+        let note = match removal_note {
+            Some(removal) => format!("Serwer zatrzymany. {removal} {revoke_note}"),
+            None => format!("Serwer zatrzymany. Profil usunięty. {revoke_note}"),
+        };
+        let report = RemoteTrustCleanupReport {
+            server_stopped: true,
+            profile_removed,
+            profile_path: path.to_string_lossy().into_owned(),
+            devices_revoked,
+            note,
+        };
+        let status = self.status();
+        let _ = app.emit("remote-access-status", status);
+        Ok(report)
     }
 
     #[cfg(windows)]
@@ -2490,21 +2698,82 @@ pub fn get_remote_access_status(service: State<'_, RemoteAccess>) -> RemoteAcces
     service.status()
 }
 
+/// Local-only, one-time, short-lived approval for the NEXT trust-profile write
+/// or rollback. It is never exposed on the LAN HTTP server.
+#[cfg(windows)]
+#[tauri::command]
+pub fn begin_remote_trust_approval(service: State<'_, RemoteAccess>) -> Result<String, String> {
+    Ok(service.begin_trust_approval())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+pub fn begin_remote_trust_approval(_service: State<'_, RemoteAccess>) -> Result<String, String> {
+    Err(REMOTE_WINDOWS_ONLY.into())
+}
+
+/// Read-only preview: resolved path + CA fingerprint before any approval.
+#[cfg(windows)]
+#[tauri::command]
+pub fn inspect_remote_trust_profile(
+    app: tauri::AppHandle,
+    service: State<'_, RemoteAccess>,
+) -> Result<RemoteTrustProfilePreview, String> {
+    service.inspect_trust_profile(&app)
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+pub fn inspect_remote_trust_profile(
+    _app: tauri::AppHandle,
+    _service: State<'_, RemoteAccess>,
+) -> Result<RemoteTrustProfilePreview, String> {
+    Err(REMOTE_WINDOWS_ONLY.into())
+}
+
+/// Writes the generated profile into the resolved directory. In portable mode
+/// that is `<VELORA-Portable-Data>\trust`; the installed mode is unchanged.
+#[cfg(windows)]
 #[tauri::command]
 pub fn prepare_remote_trust_profile(
     app: tauri::AppHandle,
+    approval_token: String,
     service: State<'_, RemoteAccess>,
 ) -> Result<RemoteAccessStatus, String> {
-    // The trust profile is written to the system Downloads folder, which the
-    // portable launcher cannot redirect. Refuse explicitly instead of leaking
-    // a file outside the portable data root.
-    if crate::portable::is_portable() {
-        return Err(
-            "Portable validation build: iOS trust-profile generation is disabled so that no file is written outside the portable data root."
-                .to_string(),
-        );
-    }
-    service.prepare_trust_profile(&app)
+    service.prepare_trust_profile_with_approval(&app, &approval_token)
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+pub fn prepare_remote_trust_profile(
+    _app: tauri::AppHandle,
+    _approval_token: String,
+    _service: State<'_, RemoteAccess>,
+) -> Result<RemoteAccessStatus, String> {
+    Err(REMOTE_WINDOWS_ONLY.into())
+}
+
+/// Reversible rollback: stops the server, removes ONLY the generated
+/// `.mobileconfig` from the portable trust dir and revokes all devices.
+/// No LAN route reaches this command; iOS-side steps remain manual.
+#[cfg(windows)]
+#[tauri::command]
+pub fn cleanup_remote_trust_artifacts(
+    app: tauri::AppHandle,
+    approval_token: String,
+    service: State<'_, RemoteAccess>,
+) -> Result<RemoteTrustCleanupReport, String> {
+    service.cleanup_trust_artifacts(&app, &approval_token)
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+pub fn cleanup_remote_trust_artifacts(
+    _app: tauri::AppHandle,
+    _approval_token: String,
+    _service: State<'_, RemoteAccess>,
+) -> Result<RemoteTrustCleanupReport, String> {
+    Err(REMOTE_WINDOWS_ONLY.into())
 }
 
 #[tauri::command]
@@ -2567,6 +2836,98 @@ mod tests {
     use super::*;
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
+
+    #[cfg(windows)]
+    #[test]
+    fn resolved_trust_dir_uses_portable_root_or_installed_downloads() {
+        let portable_root = Path::new(r"C:\VELORA-Portable-Validation\VELORA-Portable-Data");
+        let downloads = Path::new(r"C:\Users\tester\Downloads");
+
+        // Portable: only the portable root, under `<root>\trust`.
+        let portable = trust_profile_dir(None, Some(portable_root)).expect("portable dir");
+        assert_eq!(portable, portable_root.join("trust"));
+        assert!(portable.starts_with(portable_root));
+        assert!(!portable.starts_with(downloads));
+
+        // Installed: unchanged behaviour — the system Downloads folder.
+        let installed = trust_profile_dir(Some(downloads), None).expect("installed dir");
+        assert_eq!(installed, downloads);
+
+        // No source of a directory => fail closed, never invent a path.
+        assert!(trust_profile_dir(None, None).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn trust_approval_is_single_use_and_expires() {
+        let remote = RemoteAccess::default();
+        assert!(remote.take_trust_approval("ABCD2345").is_err());
+
+        *lock(&remote.inner.trust_approval) =
+            Some(("ABCD2345".into(), Instant::now() + TRUST_APPROVAL_TTL));
+        // Like `run_recovery`, any attempt consumes the slot: a wrong or stale
+        // token can neither be replayed nor brute-forced against a live token.
+        assert!(remote.take_trust_approval("WRONG123").is_err());
+        assert!(remote.take_trust_approval("ABCD2345").is_err());
+
+        *lock(&remote.inner.trust_approval) =
+            Some(("ABCD2345".into(), Instant::now() + TRUST_APPROVAL_TTL));
+        assert!(remote.take_trust_approval("ABCD2345").is_ok());
+        // Replay fails: the slot is empty after the single successful use.
+        assert!(remote.take_trust_approval("ABCD2345").is_err());
+
+        *lock(&remote.inner.trust_approval) =
+            Some(("EXPIRED1".into(), Instant::now() - Duration::from_secs(1)));
+        assert!(remote.take_trust_approval("EXPIRED1").is_err());
+        assert!(lock(&remote.inner.trust_approval).is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn no_download_dir_is_reachable_from_the_portable_write_path() {
+        let source = include_str!("remote_access.rs").replace("\r\n", "\n");
+
+        let start = source
+            .find("fn trust_profile_dir(")
+            .expect("directory resolver exists");
+        let end = start
+            + source[start..]
+                .find("fn ca_fingerprint(")
+                .expect("fingerprint helper follows the resolvers");
+        let resolvers = &source[start..end];
+        // Split at the authoritative portable guard: the portable branch must
+        // not mention download_dir(); only the installed branch may.
+        let after_guard = resolvers
+            .split("if crate::portable::is_portable()")
+            .nth(1)
+            .expect("portable guard present in the resolver");
+        let (portable_branch, installed_branch) = after_guard
+            .split_once("} else {")
+            .expect("installed branch follows the portable branch");
+        assert!(!portable_branch.contains("download_dir()"));
+        assert!(portable_branch.contains("crate::portable::data_dir()"));
+        assert!(installed_branch.contains("download_dir()"));
+
+        let write_start = source
+            .find("pub fn prepare_trust_profile_in(")
+            .expect("inherent write path exists");
+        let write_end = write_start
+            + source[write_start..]
+                .find("#[cfg(not(windows))]")
+                .expect("end of windows write path");
+        let write = &source[write_start..write_end];
+        assert!(write.contains("crate::portable::is_portable()"));
+        assert!(write.contains("dir.starts_with(&root)"));
+        assert!(!write.contains("download_dir()"));
+        assert!(!write.contains("app.path()"));
+
+        // `start` must go through the resolver, not a raw directory.
+        let start_fn = source.find("pub async fn start(").expect("start exists");
+        let call = "let prepared = self.prepare_trust_profile(&app)?;";
+        let start_call = source.find(call).expect("start uses the resolved path");
+        assert!(start_call > start_fn);
+        assert!(!source[start_fn..start_call].contains("download_dir()"));
+    }
 
     #[test]
     fn host_and_origin_are_exact_for_mutating_api_requests() {

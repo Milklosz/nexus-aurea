@@ -38,6 +38,22 @@ export type RemoteStoreState =
   | "rolled-back"
   | "recovery-pending";
 
+/** Read-only preview of the resolved profile path and CA fingerprint. */
+export type RemoteTrustProfilePreview = {
+  path: string;
+  fingerprint: string | null;
+  portable: boolean;
+};
+
+/** Truthful result of each local-only rollback step. */
+export type RemoteTrustCleanupReport = {
+  serverStopped: boolean;
+  profileRemoved: boolean;
+  profilePath: string;
+  devicesRevoked: boolean;
+  note: string;
+};
+
 export type RemoteRecoveryMode = "revoke-all-devices" | "reset-trust";
 
 export type RemoteRecoveryOption = {
@@ -80,9 +96,38 @@ export async function getRemoteAccessStatus(): Promise<RemoteAccessStatus> {
   return invoke<RemoteAccessStatus>("get_remote_access_status");
 }
 
-export async function prepareRemoteTrustProfile(): Promise<RemoteAccessStatus> {
+/**
+ * Local-only, one-time approval (120 s, single use) for the next trust-profile
+ * write or rollback. Never available on the LAN HTTPS server. The UI checkbox
+ * is the actual human consent; this token is only a freshness guard.
+ */
+export async function beginRemoteTrustProfileApproval(): Promise<string> {
+  if (!isTauri()) throw new Error("Zatwierdzenie profilu jest możliwe tylko w aplikacji VELORA na Windows.");
+  return invoke<string>("begin_remote_trust_approval");
+}
+
+/** Read-only: shows where the profile WOULD be written and the CA fingerprint. */
+export async function inspectRemoteTrustProfile(): Promise<RemoteTrustProfilePreview> {
+  if (!isTauri()) throw new Error("Podgląd profilu zaufania jest możliwy tylko w aplikacji VELORA na Windows.");
+  return invoke<RemoteTrustProfilePreview>("inspect_remote_trust_profile");
+}
+
+/** Requires the one-time token from `beginRemoteTrustProfileApproval`. */
+export async function prepareRemoteTrustProfile(approvalToken: string): Promise<RemoteAccessStatus> {
   if (!isTauri()) throw new Error("Profil zaufania można przygotować tylko w aplikacji VELORA na Windows.");
-  return invoke<RemoteAccessStatus>("prepare_remote_trust_profile");
+  if (!approvalToken) throw new Error("Najpierw zatwierdź przygotowanie profilu.");
+  return invoke<RemoteAccessStatus>("prepare_remote_trust_profile", { approvalToken });
+}
+
+/**
+ * Portable-only rollback: stops the server, removes the generated profile from
+ * the portable trust directory and revokes every device. iOS-side profile
+ * removal and full-trust disablement remain manual steps on the iPhone.
+ */
+export async function cleanupRemoteTrustArtifacts(approvalToken: string): Promise<RemoteTrustCleanupReport> {
+  if (!isTauri()) throw new Error("Czyszczenie danych zaufania jest możliwe tylko w aplikacji VELORA na Windows.");
+  if (!approvalToken) throw new Error("Najpierw zatwierdź czyszczenie danych zaufania.");
+  return invoke<RemoteTrustCleanupReport>("cleanup_remote_trust_artifacts", { approvalToken });
 }
 
 export async function startRemoteAccess(trustConfirmed: boolean): Promise<RemoteAccessStatus> {
