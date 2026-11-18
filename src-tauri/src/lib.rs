@@ -21,6 +21,7 @@ mod platform_launchers;
 mod playnite_library;
 #[allow(dead_code)]
 mod playnite_manifest;
+pub(crate) mod portable;
 mod pointer_indicator;
 mod process_table;
 mod remote_access;
@@ -42,6 +43,25 @@ mod window_broker;
 #[cfg(test)]
 #[allow(dead_code)]
 mod build_support;
+
+/// Build the Tauri context from the checked-in configuration, applying the
+/// portable isolation override only when the launcher supplied a data root.
+///
+/// `appDirectoriesOverride` also redirects Tauri's default WebView2 user-data
+/// directory on Windows, so the main window's localStorage/cache stay inside
+/// the portable data root instead of `%LOCALAPPDATA%\pl.nexus.aurea`.
+fn portable_context() -> tauri::Context<tauri::Wry> {
+    let mut context = tauri::generate_context!();
+    if let Some(root) = portable::data_dir() {
+        use tauri::utils::config::AppDirectoriesOverride;
+        context.config_mut().app.app_directories_override =
+            Some(AppDirectoriesOverride::Root(root));
+        if let Some(window) = context.config_mut().app.windows.first_mut() {
+            window.title = portable::window_title().to_string();
+        }
+    }
+    context
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -162,7 +182,7 @@ pub fn run() {
             }
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(portable_context())
         .expect("error while building VELORA");
 
     app.run(|app, event| {

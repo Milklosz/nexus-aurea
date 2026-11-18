@@ -11,6 +11,7 @@
     "test": "vitest run",
     "test:soak": "vitest run src/__tests__/soakTransitions.test.ts",
     "test:provenance": "node --test scripts/build-provenance-node-check.mjs",
+    "test:portable-manifest": "node --test scripts/portable-manifest-node-check.mjs",
     "test:claude-usage": "node --test scripts/claude-usage-node-check.mjs",
     "tauri": "tauri",
     "tauri:windows": "tauri build --target x86_64-pc-windows-msvc"

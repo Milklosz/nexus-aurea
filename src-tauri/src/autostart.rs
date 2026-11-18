@@ -126,6 +126,14 @@ pub fn get_autostart_status() -> AutostartStatus {
 
 #[tauri::command]
 pub fn set_autostart_enabled(enabled: bool, windowed: bool) -> Result<AutostartStatus, String> {
+    // The portable candidate must never write HKCU\...\Run. The guard lives
+    // here, at the only system-writing command, so no UI path can bypass it.
+    if crate::portable::is_portable() {
+        return Err(
+            "Portable validation build: changing Windows autostart is disabled to protect the installed VELORA configuration."
+                .to_string(),
+        );
+    }
     #[cfg(target_os = "windows")]
     {
         windows::apply(enabled, windowed)
