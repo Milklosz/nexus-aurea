@@ -72,7 +72,7 @@ describe("couch-only session controls", () => {
     await waitFor(() => expect(service.setStreaming).toHaveBeenCalledWith(false, false));
   });
 
-  it("does not stack reads after timeout while either native status request is still pending", async () => {
+  it("retries after a timeout but does not stack reads while a retry is still pending", async () => {
     vi.useFakeTimers();
     service.getStreaming.mockRejectedValueOnce(new Error("unavailable"));
     let finishFallback!: (status: typeof disabledFallbackHomeStatus) => void;
@@ -80,11 +80,22 @@ describe("couch-only session controls", () => {
     render(<SessionControllerControls homeEnabled nativeRunning />);
     await act(async () => { await vi.advanceTimersByTimeAsync(8_001); });
     expect(screen.getByText(/Stan sterowania z kanapy jest niedostępny/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Odśwież stan sterowania" }));
-    expect(service.getStreaming).toHaveBeenCalledTimes(1);
-    expect(service.getFallback).toHaveBeenCalledTimes(1);
-    await act(async () => { finishFallback(disabledFallbackHomeStatus); await Promise.resolve(); });
+
+    // A timed-out read no longer holds the reservation: the retry really re-reads.
     fireEvent.click(screen.getByRole("button", { name: "Odśwież stan sterowania" }));
     expect(service.getStreaming).toHaveBeenCalledTimes(2);
+    expect(service.getFallback).toHaveBeenCalledTimes(2);
+    // The stale first IPC settling late must not clobber the newer, successful read.
+    await act(async () => { finishFallback(disabledFallbackHomeStatus); await Promise.resolve(); });
+    expect(screen.queryByText(/Stan sterowania z kanapy jest niedostępny/)).toBeNull();
+
+    // While a retry is pending, further clicks are ignored instead of stacking requests.
+    let finishRetryFallback!: (status: typeof disabledFallbackHomeStatus) => void;
+    service.getFallback.mockImplementationOnce(() => new Promise(resolve => { finishRetryFallback = resolve; }));
+    const refresh = screen.getByRole("button", { name: "Odśwież stan sterowania" });
+    fireEvent.click(refresh); fireEvent.click(refresh);
+    expect(service.getStreaming).toHaveBeenCalledTimes(3);
+    expect(service.getFallback).toHaveBeenCalledTimes(3);
+    await act(async () => { finishRetryFallback(disabledFallbackHomeStatus); await Promise.resolve(); });
   });
 });

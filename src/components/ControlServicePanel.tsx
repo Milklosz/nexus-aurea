@@ -13,6 +13,8 @@ import {
   type FallbackHotkey,
 } from "../services/controlService";
 import { classifyForegroundProcess } from "../services/controllerOwnership";
+import { messageFromUnknown } from "../contracts/errors";
+import { STATUS_READ_TIMEOUT_MS, withTimeout } from "../services/withTimeout";
 
 const foregroundProcessLabels = {
   velora: "VELORA na pierwszym planie",
@@ -49,11 +51,16 @@ export function ControlServicePanel() {
     let stopServiceListener: (() => void) | undefined;
     const initialStatusGeneration = actionGeneration.current;
 
-    void getControlServiceStatus().then((next) => {
+    void withTimeout(getControlServiceStatus(), STATUS_READ_TIMEOUT_MS, "Status Windows").then((next) => {
       if (active && initialStatusGeneration === actionGeneration.current) setStatus(next);
-    }).catch(() => {
+    }).catch((cause) => {
       if (active && initialStatusGeneration === actionGeneration.current) {
-        setError("Nie udało się odczytać stanu usługi.");
+        // The last known status stays in place: a failed read is "unknown", not "unavailable".
+        // Live status events below remain the recovery path; no polling is added.
+        const reason = (messageFromUnknown(cause) ?? "").slice(0, 160);
+        setError(reason.includes("brak odpowiedzi")
+          ? `Nie udało się odczytać stanu Windows. Brak odpowiedzi w ciągu ${STATUS_READ_TIMEOUT_MS / 1000} s — stan jest nieznany; monitorowanie zdarzeń pozostaje aktywne.`
+          : `Nie udało się odczytać stanu Windows.${reason ? ` Powód: ${reason}.` : ""} Stan jest nieznany; monitorowanie zdarzeń pozostaje aktywne.`);
       }
     });
     void listenForControlServiceStatus((next) => {
@@ -125,7 +132,7 @@ export function ControlServicePanel() {
   return <section className="control-service" aria-label="VELORA Control Service" data-remote-admin="">
     <h3>VELORA Control Service · prototyp Windows</h3>
     {!status.windows
-      ? <p>Ta funkcja wymaga natywnej aplikacji VELORA w Windows.</p>
+      ? <><p>Ta funkcja wymaga natywnej aplikacji VELORA w Windows.</p>{error && <p role="alert">{error}</p>}</>
       : <>
         <p role="status">
           Stan: {status.running ? (status.gameMode ? "tryb gry" : "aktywny") : "wyłączony"}

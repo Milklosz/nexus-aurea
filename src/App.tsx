@@ -40,10 +40,11 @@ import { useFocusRestoreOnClose } from "./hooks/useFocusRestoreOnClose";
 import { useLaunchGuard } from "./hooks/useLaunchGuard";
 import { getDialogNavigationControls, shouldUseNativeDialogArrowKey } from "./services/dialogNavigation";
 import { useToast } from "./hooks/useToast";
-import { withTimeout } from "./services/withTimeout";
+import { messageFromUnknown } from "./contracts/errors";
+import { STATUS_READ_TIMEOUT_MS, withTimeout } from "./services/withTimeout";
 import { useWeather } from "./hooks/useWeather";
 import { openStreamingService, streamingServiceErrorMessage } from "./services/openStreamingService";
-import { getControlServiceStatus, setControlGameMode } from "./services/controlService";
+import { getControlServiceStatus, setControlGameMode, type ControlServiceStatus } from "./services/controlService";
 import { launchManagedApp, listenForLaunchEvent, listenForManagedAppExit, managedAppErrorMessage } from "./services/appManager";
 import { getSessionState, requestSessionTransition, returnVeloraHome, type ReturnHomeEvent, type SessionId } from "./services/sessionOrchestrator";
 import { useStartupRecoveryNotice } from "./hooks/useStartupRecoveryNotice";
@@ -499,7 +500,18 @@ export default function App() {
       if (nextProfile === "cinema") await windowMode(true);
       if (nextProfile === "desktop") await windowMode(false);
       if ((nextProfile === "gaming" || previous === "gaming") && nextProfile !== previous) {
-        const status = await getControlServiceStatus();
+        let status: ControlServiceStatus;
+        try {
+          status = await withTimeout(getControlServiceStatus(), STATUS_READ_TIMEOUT_MS, "Status Windows");
+        } catch (cause) {
+          // A failed read means "state unknown", not "backend unavailable": do not
+          // pretend the profile was applied without knowing the Control Service state.
+          const reason = (messageFromUnknown(cause) ?? "").slice(0, 160);
+          showToast(reason.includes("brak odpowiedzi")
+            ? `Nie udało się odczytać stanu Windows. Brak odpowiedzi w ciągu ${STATUS_READ_TIMEOUT_MS / 1000} s — stan jest nieznany; ponów próbę zmiany profilu.`
+            : `Nie udało się odczytać stanu Windows.${reason ? ` Powód: ${reason}.` : ""} Stan jest nieznany; ponów próbę.`);
+          return false;
+        }
         controlServiceRunning = status.running;
         if (status.running) await setControlGameMode(nextProfile === "gaming");
       }

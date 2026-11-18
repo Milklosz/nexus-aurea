@@ -14,20 +14,47 @@ const mocks = vi.hoisted(() => {
     pairedDevices: [], origin: null, caFingerprint: null, trustProfilePath: null, pairingCode: null,
     pairingExpiresInSeconds: 0,
   };
+  const streamingStatus = {
+    windows: true, enabled: false, pointerMode: false, activeService: null,
+    lastResult: null, acceptedActions: 0, rejectedActions: 0,
+  };
+  const fallbackStatus = {
+    enabled: false, gesture: "disabled" as const, holdMs: 2000 as const,
+    physicalMappingValidated: true, validationNote: "", primaryChordSuppressed: false,
+    armed: false, holdingSinceMs: null, lastTriggeredAtMs: null,
+  };
   return {
     controlStatus,
     remoteStatus,
+    streamingStatus,
+    fallbackStatus,
     getStatus: vi.fn(),
     getRemoteStatus: vi.fn(async () => remoteStatus),
+    controlStatusListener: null as ((status: typeof controlStatus) => void) | null,
+    listenControlStatus: vi.fn(async (listener: (status: never) => void) => {
+      mocks.controlStatusListener = listener as typeof mocks.controlStatusListener;
+      return () => { mocks.controlStatusListener = null; };
+    }),
+    getStreamingStatus: vi.fn(async () => streamingStatus),
+    getFallbackStatus: vi.fn(async () => fallbackStatus),
   };
 });
 
 vi.mock("../services/controlService", () => ({
   disabledControlServiceStatus: mocks.controlStatus,
   getControlServiceStatus: mocks.getStatus,
+  listenForControlServiceStatus: mocks.listenControlStatus,
   getFallbackHotkeyOptions: vi.fn(async () => []),
   setFallbackHotkey: vi.fn(async () => mocks.controlStatus),
 }));
+vi.mock("../services/livingRoom", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/livingRoom")>();
+  return {
+    ...actual,
+    getStreamingControlStatus: mocks.getStreamingStatus,
+    getControllerFallbackStatus: mocks.getFallbackStatus,
+  };
+});
 vi.mock("../services/remoteAccess", () => ({
   disabledRemoteAccessStatus: mocks.remoteStatus,
   REMOTE_ACCESS_DISABLED_REASON: "Serwer domyślnie nie nasłuchuje w sieci.",
@@ -70,12 +97,19 @@ describe("status read timeout", () => {
   beforeEach(() => {
     setupDialog();
     vi.useFakeTimers();
+    mocks.getStatus.mockReset();
+    mocks.getStatus.mockImplementation(async () => mocks.controlStatus);
+    mocks.getStreamingStatus.mockReset();
+    mocks.getStreamingStatus.mockImplementation(async () => mocks.streamingStatus);
+    mocks.getFallbackStatus.mockReset();
+    mocks.getFallbackStatus.mockImplementation(async () => mocks.fallbackStatus);
   });
 
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
     vi.clearAllMocks();
+    mocks.controlStatusListener = null;
   });
 
   it("reports a Windows status read that never answers, and re-enables the retry", async () => {
@@ -99,6 +133,70 @@ describe("status read timeout", () => {
       fireEvent.click(retry);
     });
     expect(screen.queryByText(/Nie udało się odczytać stanu Windows/)).toBeNull();
+  });
+
+  it("ignores a stale first read that resolves after a successful retry (startup race)", async () => {
+    let resolveStale!: (status: typeof mocks.controlStatus) => void;
+    mocks.getStatus.mockImplementationOnce(() => new Promise((resolve) => { resolveStale = resolve; }));
+    renderCenter();
+
+    await act(async () => {
+      vi.advanceTimersByTime(STATUS_READ_TIMEOUT_MS);
+    });
+    expect(screen.getByText(/Backend Windows: nieznany/)).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toMatch(/brak odpowiedzi/i);
+
+    mocks.getStatus.mockImplementationOnce(async () => ({ ...mocks.controlStatus, windows: true }));
+    const retry = screen.getByRole("button", { name: "Ponów odczyt statusu Windows" }) as HTMLButtonElement;
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+    expect(screen.getByText(/Backend Windows: dostępny/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Głośność +" })).toBeTruthy();
+
+    // The original IPC settles late with an outdated "unavailable" snapshot.
+    await act(async () => {
+      resolveStale({ ...mocks.controlStatus, windows: false });
+    });
+
+    expect(screen.getByText(/Backend Windows: dostępny/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Głośność +" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Ponów odczyt statusu Windows" })).toBeNull();
+  });
+
+  it("retries SessionControllerControls after its status read times out", async () => {
+    let resolveStale!: (status: typeof mocks.streamingStatus) => void;
+    mocks.getStreamingStatus.mockImplementationOnce(() => new Promise((resolve) => { resolveStale = resolve; }));
+    renderCenter();
+
+    const section = screen.getByLabelText("Sterowanie z kanapy");
+    const refreshButton = screen.getByRole("button", { name: "Odśwież stan sterowania" }) as HTMLButtonElement;
+
+    await act(async () => {
+      vi.advanceTimersByTime(STATUS_READ_TIMEOUT_MS);
+    });
+    expect(section.textContent).toContain("Stan sterowania z kanapy jest niedostępny");
+    expect(refreshButton.disabled).toBe(false);
+
+    // A retry is reserved while pending, then succeeds once its IPC resolves.
+    let resolveRetry!: (status: typeof mocks.streamingStatus) => void;
+    mocks.getStreamingStatus.mockImplementationOnce(() => new Promise((resolve) => { resolveRetry = resolve; }));
+    await act(async () => {
+      fireEvent.click(refreshButton);
+    });
+    expect(refreshButton.disabled).toBe(true);
+    await act(async () => {
+      resolveRetry({ ...mocks.streamingStatus, enabled: true });
+    });
+    expect(section.textContent).toContain("sterowanie włączone");
+    expect(section.textContent).not.toContain("Stan sterowania z kanapy jest niedostępny");
+
+    // The first attempt's IPC settles late and must not clobber the newer state.
+    await act(async () => {
+      resolveStale({ ...mocks.streamingStatus, enabled: false });
+    });
+    expect(section.textContent).toContain("sterowanie włączone");
+    expect(refreshButton.disabled).toBe(false);
   });
 });
 
