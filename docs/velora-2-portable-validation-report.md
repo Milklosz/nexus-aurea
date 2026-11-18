@@ -6,7 +6,8 @@
 
 | Item | Value |
 | --- | --- |
-| Source commit (all build inputs) | `95f3a953af9bc8ab5505839d091f1c3be00d3ed6` |
+| Canonical reviewed build commit | `95f3a953af9bc8ab5505839d091f1c3be00d3ed6` |
+| Later rebuild of the final PR head | `b225f18dbfd503d736ea9a35aace1d8a5ddcacfb` (see §3.1) |
 | Validated candidate base | Draft PR #65 @ `446ad37e8ff9a32ff0eff9b8e0cc7d3867bc40d8` |
 | New Draft PR | **[#71](https://github.com/Milklosz/nexus-aurea/pull/71)** — base `feat/hy4-s2-5`, head `feat/portable-validation-build` |
 | Portable workflow run | **[#44319186358](https://github.com/Milklosz/nexus-aurea/actions/runs/44319186358)** — `pull_request`, attempt 1, Windows x64 |
@@ -15,7 +16,7 @@
 | App version | `0.12.0-rc.1` |
 | Build target | `x86_64-pc-windows-msvc`, release, `--no-bundle` |
 
-The artifact was produced from commit `95f3a95…`. Any later commit on the PR branch is documentation-only and does not change a build input; the manifest records the build commit, not the documentation commit.
+An artifact is identified by the commit SHA in its name and by `manifest.source.sourceSha`; the manifest always names the commit that was actually compiled. `build.rs` embeds the source SHA in the binary, so every rebuild has its own EXE hash. The table above records both runs that were reviewed.
 
 ## 2. Why the standalone smoke artifact was skipped on PR #65
 
@@ -58,6 +59,20 @@ certutil -hashfile VELORA-Portable-Windows-x64.zip SHA256
 ```
 
 This was re-checked after downloading the published artifact: downloaded ZIP hash, `SHA256SUMS.txt` and manifest all matched. Hashes are **byte-consistency evidence, not a digital signature**; the build is unsigned.
+
+### 3.1 Independent rebuild of the final PR head
+
+After the report was added, a second portable run rebuilt from commit `b225f18dbfd503d736ea9a35aace1d8a5ddcacfb`:
+
+| Item | Value |
+| --- | --- |
+| Run | [44321305906](https://github.com/Milklosz/nexus-aurea/actions/runs/44321305906) (`pull_request`), companion push run `44321293597` |
+| Artifact | `VELORA-Portable-Windows-x64-b225f18dbfd503d736ea9a35aace1d8a5ddcacfb` |
+| ZIP SHA-256 | `245797882646cce7d1953866a729c47c39c147e316d599a923b1c9f0e1b4d8be` |
+| EXE SHA-256 | `ebb5b8e1cc164d912871250906549664e2e8c5bc7e2414a54f9312ac04d7b9bc` |
+| Smoke | `PASS` (same isolation assertions) |
+
+Both builds are valid candidates; use the one whose artifact name matches the commit you want to audit. The hashes differ because the build embeds the source SHA and ZIP metadata.
 
 ## 4. MSI download, extraction and launch
 
