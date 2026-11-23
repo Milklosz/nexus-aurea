@@ -50,6 +50,21 @@ impl LaunchPhase {
     pub(crate) fn is_active(self) -> bool {
         !self.is_terminal()
     }
+
+    /// Stable, content-free label used by read-only status projections
+    /// (e.g. `get_game_process_state`).
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Requested => "requested",
+            Self::ProcessStarted => "processStarted",
+            Self::WindowAppeared => "windowAppeared",
+            Self::SessionActive => "sessionActive",
+            Self::ExitPending => "exitPending",
+            Self::Ended => "ended",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1787,6 +1802,31 @@ pub(crate) fn launch_by_id(app: &AppHandle, launch_id: &str) -> Option<LaunchSes
         .iter()
         .find(|tracked| tracked.session.id == launch_id)
         .map(|tracked| tracked.session.clone())
+}
+
+/// All game launches (any phase) that belong to one VELORA game id. Accepts both
+/// the canonical `steam:<appid>` id and the legacy bare numeric appid, so the
+/// read-only `get_game_process_state` lookup works for both launch paths.
+pub(crate) fn launches_matching_game(app: &AppHandle, game_id: &str) -> Vec<LaunchSession> {
+    let bare = game_id
+        .strip_prefix(crate::steam_library::STEAM_GAME_ID_PREFIX)
+        .unwrap_or(game_id);
+    app.state::<LaunchRegistry>()
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .launches
+        .iter()
+        .filter(|tracked| {
+            tracked.session.kind == LaunchKind::Game
+                && tracked
+                    .session
+                    .app_id
+                    .as_deref()
+                    .is_some_and(|app_id| app_id == game_id || app_id == bare)
+        })
+        .map(|tracked| tracked.session.clone())
+        .collect()
 }
 
 /// Explicit cancellation. It is idempotent for terminal launches: a repeated

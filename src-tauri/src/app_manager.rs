@@ -188,14 +188,7 @@ fn app_manager_snapshot() -> AppManagerSnapshot {
                 }
             })
             .collect();
-        let (games, games_error) = if app_path("steamBigPicture").is_some() {
-            match steam_games_cached() {
-                Ok(games) => (games, None),
-                Err(error) => (Vec::new(), Some(error)),
-            }
-        } else {
-            (Vec::new(), None)
-        };
+        let (games, games_error) = merged_gaming_library();
         AppManagerSnapshot {
             windows: true,
             foreground_process: crate::control_service::foreground_process_name(),
@@ -226,6 +219,49 @@ fn app_manager_snapshot() -> AppManagerSnapshot {
                 .collect(),
         }
     }
+}
+
+/// Merged, read-only gaming library for Gaming Hub 3.0: Steam games discovered
+/// by the read-only `steam_library` scanner (`id = steam:<appid>`,
+/// `launcher = "steam"`) alongside Playnite games from the validated manifest
+/// (`id = playnite:<guid>`, `launcher = "playnite"`). Existing Playnite behavior
+/// is preserved: without a validated manifest no Playnite entries are invented.
+#[cfg(target_os = "windows")]
+fn merged_gaming_library() -> (Vec<ManagedGame>, Option<String>) {
+    let mut games: Vec<ManagedGame> = Vec::new();
+    let mut games_error = None;
+    if app_path("steamBigPicture").is_some()
+        || crate::steam_library::discover_steam_root().is_some()
+    {
+        match crate::steam_library::cached_library_games() {
+            Ok(entries) => {
+                for entry in entries {
+                    if let Some(id) = crate::steam_library::steam_game_id(&entry.appid) {
+                        games.push(ManagedGame {
+                            id,
+                            name: entry.name,
+                            launcher: "steam".into(),
+                        });
+                    }
+                }
+            }
+            Err(error) => games_error = Some(error),
+        }
+    }
+    if let Ok(manifest) = crate::playnite_manifest::read_default_manifest() {
+        for game in &manifest.games {
+            if crate::playnite_manifest::launch_uri_for_game(&manifest, &game.id).is_err() {
+                continue;
+            }
+            games.push(ManagedGame {
+                id: format!("playnite:{}", game.id),
+                name: game.name.clone(),
+                launcher: "playnite".into(),
+            });
+        }
+    }
+    games.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    (games, games_error)
 }
 
 /// Runs only when requested from Gaming Hub. Checks known install locations and
@@ -930,7 +966,10 @@ fn steam_games() -> Result<Vec<ManagedGame>, String> {
 
 const STEAM_LIBRARY_CACHE_MS: u64 = 60_000;
 
+/// Kept for compatibility with the legacy `steam.exe`-path scan used by
+/// `launch_managed_game`; the merged snapshot now scans via `steam_library`.
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 fn steam_games_cached() -> Result<Vec<ManagedGame>, String> {
     use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};

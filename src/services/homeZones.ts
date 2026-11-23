@@ -1,27 +1,32 @@
 /**
  * Vertical zones of the home screen, top to bottom. Up/down move between zones;
- * left/right keep their existing meaning inside a zone (the dock is the only zone
- * with several items). Zones that are not on screen are skipped, never focused.
+ * left/right keep their existing meaning inside a zone (the dock and the context
+ * sections row each have several items). Zones that are not on screen are
+ * skipped, never focused.
  */
-export const HOME_ZONES = ["controlCenter", "smartHome", "music", "dock", "diagnostics"] as const;
+export const HOME_ZONES = ["controlCenter", "smartHome", "music", "sections", "dock", "diagnostics"] as const;
 export type HomeZone = (typeof HOME_ZONES)[number];
-export type HomeZoneAvailability = Record<HomeZone, boolean>;
+/** Zones that predate the context sections row; "sections" is optional so older callers keep working. */
+export type CoreHomeZone = Exclude<HomeZone, "sections">;
+export type HomeZoneAvailability = Record<CoreHomeZone, boolean> & { sections?: boolean };
 
 /** Only VELORA's own elements are matched, so zone detection cannot touch other windows. */
 export const HOME_ZONE_MEMBERS: Record<HomeZone, string> = {
   controlCenter: ".quick-settings-trigger, .home-actions:not(.smart-home-panel)",
   smartHome: ".smart-home-panel",
   music: ".music-mini-player",
+  sections: ".lr-sections",
   dock: ".dock, .lr-dock",
   diagnostics: ".diagnostics-trigger",
 };
 
 /** Element that receives focus when a zone is entered. The dock is focused by the caller. */
-/** Tried in order. The Living Room top bar remembers its last action (data-remembered); the legacy Home has one trigger. */
+/** Tried in order. The Living Room top bar and the sections row remember their last item (data-remembered); the legacy Home has one trigger. */
 const HOME_ZONE_FOCUS: Record<Exclude<HomeZone, "dock">, readonly string[]> = {
   controlCenter: [".home-actions:not(.smart-home-panel) [data-remembered=\"true\"]", ".home-actions:not(.smart-home-panel) button", ".quick-settings-trigger"],
   smartHome: [".smart-home-panel button:not(:disabled)"],
   music: [".music-mini-player button:not(:disabled)"],
+  sections: [".lr-sections [data-remembered=\"true\"]", ".lr-sections button:not(:disabled)"],
   diagnostics: [".diagnostics-trigger"],
 };
 
@@ -56,10 +61,14 @@ export function homeZoneOfElement(element: Element | null): HomeZone | null {
 
 /** Availability read from the live DOM. The dock and Control Center are always present. */
 export function homeZoneAvailability(root: ParentNode): HomeZoneAvailability {
+  // The sections zone counts only while its row is actually on screen (it carries tiles);
+  // the key stays absent otherwise, which nextHomeZone treats as unavailable.
+  const sections = root.querySelector(HOME_ZONE_MEMBERS.sections) !== null;
   return {
     controlCenter: root.querySelector(HOME_ZONE_MEMBERS.controlCenter) !== null,
     smartHome: root.querySelector(HOME_ZONE_MEMBERS.smartHome) !== null,
     music: root.querySelector(HOME_ZONE_MEMBERS.music) !== null,
+    ...(sections ? { sections: true as const } : {}),
     dock: root.querySelector(HOME_ZONE_MEMBERS.dock) !== null,
     diagnostics: root.querySelector(HOME_ZONE_MEMBERS.diagnostics) !== null,
   };

@@ -1,9 +1,10 @@
 /**
- * Left/right inside the Home top-bar actions (Szukaj, Pilot, Ustawienia).
+ * The focusable horizontal rows of the Home screen: the top-bar actions
+ * (Szukaj, Pilot, Ustawienia) and the context sections row (.lr-sections).
  * Pure DOM helper so keyboard, controller and remote share it. Never wraps and
  * never leaves the row: at an end the move is consumed and focus stays put.
  */
-export const HOME_ACTIONS_SELECTOR = ".home-actions";
+export const HOME_ACTIONS_SELECTOR = ".home-actions, .lr-sections";
 
 /** Circle closes the focused Home disclosure before returning to the dock. */
 export function closeHomeDisclosure(active: Element | null): boolean {
@@ -14,9 +15,9 @@ export function closeHomeDisclosure(active: Element | null): boolean {
 }
 
 /**
- * Returns true when `active` is inside the actions row (the move is handled, even
- * when focus is already at an end). Returns false otherwise so the caller can
- * fall back to moving through the dock.
+ * Returns true when `active` is inside a Home row (the top-bar actions or the
+ * sections row; the move is handled, even when focus is already at an end).
+ * Returns false otherwise so the caller can fall back to moving through the dock.
  */
 export function moveWithinHomeActions(active: Element | null, delta: -1 | 1): boolean {
   if (!active || typeof active.closest !== "function") return false;
@@ -31,8 +32,9 @@ export function moveWithinHomeActions(active: Element | null, delta: -1 | 1): bo
 }
 
 /**
- * Confirm on a Home top-bar action presses that action. Returns false when focus is
- * elsewhere, so the caller falls back to launching the selected dock app.
+ * Confirm on a Home row item (top-bar action or section tile) presses that item.
+ * Returns false when focus is elsewhere, so the caller falls back to launching
+ * the selected dock app.
  */
 export function activateHomeAction(active: Element | null): boolean {
   if (!active || typeof active.closest !== "function" || !active.closest(HOME_ACTIONS_SELECTOR)) return false;

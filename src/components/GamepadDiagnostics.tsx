@@ -96,7 +96,7 @@ export function GamepadDiagnostics({
       const resolvedProfile = resolveControllerProfile(pad, profile);
       const confirmButton = resolvedProfile === "playstation" ? 1 : 0;
       const backButton = resolvedProfile === "playstation" ? 2 : 1;
-      return <section key={pad.index}>
+      return <section key={pad.index} aria-label={`Pad ${pad.index + 1}: ${pad.id}`}>
         <h3>#{pad.index} {pad.id}</h3>
         <p>Mapowanie API: {pad.mapping || "niestandardowe"} · Profil wejścia: {resolvedProfile ?? "nierozpoznany"}</p>
         {resolvedProfile

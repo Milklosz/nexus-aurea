@@ -246,6 +246,38 @@ export const IPC_COMMANDS = {
     sideEffect: "write",
     since: "v0.9.2",
   },
+
+  // --- VELORA 3.0 genesis (promoted from forward-looking at integration) ---
+  // S3.2 Gaming Hub (Agent B): read-only Steam library + canonical steam:// launch.
+  get_steam_library: {
+    name: "get_steam_library",
+    args: [],
+    returns: "Result<SteamLibrarySnapshot, String> (read-only appmanifest/libraryfolders VDF; no credential/save/DRM access)",
+    sideEffect: "read-only",
+    since: "velora-3-genesis",
+  },
+  launch_steam_game: {
+    name: "launch_steam_game",
+    args: ["appid"],
+    returns: "Result<SteamLaunchReceipt, String> — canonical steam://run/<appid> only; never kills a process",
+    sideEffect: "launch",
+    since: "velora-3-genesis",
+  },
+  get_game_process_state: {
+    name: "get_game_process_state",
+    args: ["id"],
+    returns: "Result<GameProcessState, String> (observation-only; never kills the process)",
+    sideEffect: "read-only",
+    since: "velora-3-genesis",
+  },
+  // S3.4 Reliability (Agent D): read-only WebView2 working-set watch.
+  get_memory_watch_status: {
+    name: "get_memory_watch_status",
+    args: [],
+    returns: "MemoryWatchStatus (read-only working-set sample; no GC API, no process action)",
+    sideEffect: "read-only",
+    since: "velora-3-genesis",
+  },
 } as const satisfies Record<string, IpcDescriptor>;
 
 export type IpcCommandName = keyof typeof IPC_COMMANDS;
@@ -257,3 +289,19 @@ export function isIpcCommandName(value: string): value is IpcCommandName {
 export function ipcDescriptor(name: string): IpcDescriptor | null {
   return isIpcCommandName(name) ? IPC_COMMANDS[name] : null;
 }
+
+/**
+ * ---------------------------------------------------------------------------
+ * FORWARD-LOOKING ENTRIES — VELORA 3.0 genesis workstreams S3.1–S3.4.
+ *
+ * At integration the S3.2/S3.4 commands (get_steam_library, launch_steam_game,
+ * get_game_process_state, get_memory_watch_status) were PROMOTED into
+ * `IPC_COMMANDS` above because their handlers now exist in
+ * `src-tauri/src/lib.rs`. This export is kept as an empty reserved slot for any
+ * future additive command that an agent documents before its handler lands;
+ * existing `IPC_COMMANDS` entries are never modified or removed.
+ * ---------------------------------------------------------------------------
+ */
+export const FORWARD_LOOKING_IPC_COMMANDS = {} as const satisfies Record<string, IpcDescriptor>;
+
+export type ForwardLookingIpcCommandName = keyof typeof FORWARD_LOOKING_IPC_COMMANDS;

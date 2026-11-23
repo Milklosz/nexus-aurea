@@ -14,6 +14,7 @@ mod edge_cinema;
 mod gamepad_home;
 mod launch_registry;
 mod lifecycle_control;
+mod memory_watch;
 mod music_service;
 mod operation_registry;
 mod pad_hub;
@@ -34,6 +35,7 @@ mod session_orchestrator;
 mod session_store;
 mod single_instance;
 mod spatial_navigation;
+mod steam_library;
 mod streaming_control;
 mod tv_mode;
 mod tv_navigation;
@@ -114,6 +116,7 @@ pub fn run() {
             display_audio::get_display_audio_status,
             diagnostics::get_diagnostics_snapshot,
             diagnostics::export_diagnostics_report,
+            memory_watch::get_memory_watch_status,
             remote_access::get_remote_access_status,
             remote_access::begin_remote_trust_approval,
             remote_access::inspect_remote_trust_profile,
@@ -156,6 +159,9 @@ pub fn run() {
             playnite_library::get_playnite_library,
             playnite_library::launch_playnite_game,
             playnite_manifest::get_playnite_manifest,
+            steam_library::get_steam_library,
+            steam_library::launch_steam_game,
+            steam_library::get_game_process_state,
         ])
         .setup(|app| {
             #[cfg(target_os = "windows")]
@@ -175,6 +181,7 @@ pub fn run() {
             edge_cinema::reconcile_edge_marker(app.handle());
             display_audio::start_monitor(app.handle().clone());
             session_monitor::start(app.handle().clone());
+            memory_watch::start(app.handle().clone());
             if std::env::args().any(|arg| arg == "--windowed") {
                 if let Some(window) = app.get_webview_window("main") {
                     window.set_fullscreen(false)?;
@@ -198,6 +205,7 @@ pub fn run() {
             window_broker::stop_foreground_monitor();
             display_audio::stop_monitor();
             session_monitor::stop();
+            memory_watch::stop();
             single_instance::release_for_shutdown();
         }
     });
