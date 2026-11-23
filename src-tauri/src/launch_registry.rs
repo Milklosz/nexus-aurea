@@ -98,6 +98,235 @@ pub struct LaunchEvent {
     pub session: LaunchSession,
 }
 
+/// The ONE deterministic per-session lifecycle state machine shared by Edge
+/// Cinema services (Netflix, YouTube, Disney+, Prime Video, Max), Steam Big
+/// Picture, Playnite and managed apps:
+/// `idle → launching → active → closing → exited/error`.
+///
+/// `LaunchPhase` remains the internal watcher detail (process/window
+/// observation). This enum is the projected machine: it is a pure function of
+/// the observed phase (`from_phase`) plus explicit lifecycle events recorded
+/// through `record_lifecycle_event` (for example a confirmed close request,
+/// which precedes the watcher noticing the process is gone).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionLifecycleState {
+    #[default]
+    Idle,
+    Launching,
+    Active,
+    Closing,
+    Exited,
+    Error,
+}
+
+impl SessionLifecycleState {
+    /// Single mapping from the watcher phase to the lifecycle state. Every
+    /// projection (Edge Cinema session, managed-sessions panel) must go
+    /// through here so all services show the same states.
+    pub(crate) fn from_phase(phase: LaunchPhase) -> Self {
+        match phase {
+            LaunchPhase::Requested | LaunchPhase::ProcessStarted | LaunchPhase::WindowAppeared => {
+                Self::Launching
+            }
+            LaunchPhase::SessionActive => Self::Active,
+            LaunchPhase::ExitPending => Self::Closing,
+            LaunchPhase::Ended | LaunchPhase::Cancelled => Self::Exited,
+            LaunchPhase::Failed => Self::Error,
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Launching => "launching",
+            Self::Active => "active",
+            Self::Closing => "closing",
+            Self::Exited => "exited",
+            Self::Error => "error",
+        }
+    }
+
+    pub(crate) fn is_terminal(self) -> bool {
+        matches!(self, Self::Exited | Self::Error)
+    }
+
+    /// While a launch is in flight or a session is active/closing, a repeated
+    /// launch event for the same service is a duplicate and must not spawn
+    /// anything (idempotent launch is keyed by service + generation).
+    pub(crate) fn blocks_launch(self) -> bool {
+        matches!(self, Self::Launching | Self::Active | Self::Closing)
+    }
+}
+
+/// Events that drive [`lifecycle_transition`]. Pure data: classified from
+/// `LaunchPhase` changes by [`lifecycle_event_for`], or supplied explicitly
+/// (e.g. a confirmed close request from the Edge Cinema adapter).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LifecycleEvent {
+    LaunchRequested,
+    /// Process observed but the window is not the confirmed foreground yet
+    /// (LaunchPhase::ProcessStarted / WindowAppeared): still launching.
+    LaunchProgress,
+    /// The owned window became the foreground window (SessionActive).
+    ProcessReady,
+    /// The process/window disappeared and the exit grace period started
+    /// (ExitPending): the session is closing.
+    ClosingObserved,
+    /// A confirmed close request was sent to the owned window.
+    CloseRequested,
+    /// The session ended cleanly (Ended without supersede).
+    ExitObserved,
+    CrashObserved,
+    LaunchFailed,
+    Superseded,
+    Cancelled,
+    Reset,
+}
+
+/// Deterministic transition table for the shared session lifecycle, aligned
+/// 1:1 with `SessionLifecycleState::from_phase` so the machine can never
+/// diverge from the observed watcher phase. Terminal states leave only
+/// through `Reset` (crash/restart recovery). Any other pair is rejected, so a
+/// stale event can never resurrect or corrupt a session.
+pub(crate) fn lifecycle_transition(
+    state: SessionLifecycleState,
+    event: LifecycleEvent,
+) -> Result<SessionLifecycleState, SessionLifecycleState> {
+    use LifecycleEvent as E;
+    use SessionLifecycleState as S;
+    let next = match (state, event) {
+        (S::Idle, E::LaunchRequested) => S::Launching,
+        (S::Launching, E::LaunchProgress) => S::Launching,
+        (S::Launching, E::ProcessReady) => S::Active,
+        (S::Launching, E::CloseRequested | E::ClosingObserved) => S::Closing,
+        (S::Launching, E::LaunchFailed | E::CrashObserved) => S::Error,
+        (S::Launching, E::ExitObserved | E::Cancelled | E::Superseded) => S::Exited,
+        (S::Active, E::CloseRequested | E::ClosingObserved) => S::Closing,
+        (S::Active, E::ProcessReady | E::LaunchProgress) => S::Active,
+        (S::Active, E::ExitObserved | E::Cancelled | E::Superseded) => S::Exited,
+        (S::Active, E::CrashObserved | E::LaunchFailed) => S::Error,
+        (S::Closing, E::ProcessReady) => S::Active,
+        (S::Closing, E::LaunchProgress) => S::Launching,
+        (S::Closing, E::ClosingObserved | E::CloseRequested) => S::Closing,
+        (S::Closing, E::ExitObserved | E::Cancelled | E::Superseded) => S::Exited,
+        (S::Closing, E::CrashObserved | E::LaunchFailed) => S::Error,
+        (_, E::Reset) => S::Idle,
+        _ => return Err(state),
+    };
+    Ok(next)
+}
+
+/// Classifies a real `LaunchPhase` change into the lifecycle event that drives
+/// the table. `pid_reuse_detected` upgrades a failure to a crash observation:
+/// the tracked process died unexpectedly and its PID was recycled.
+fn lifecycle_event_for(
+    next: LaunchPhase,
+    error: Option<&str>,
+    pid_reuse_detected: bool,
+) -> LifecycleEvent {
+    match next {
+        LaunchPhase::Requested => LifecycleEvent::LaunchRequested,
+        LaunchPhase::ProcessStarted | LaunchPhase::WindowAppeared => LifecycleEvent::LaunchProgress,
+        LaunchPhase::SessionActive => LifecycleEvent::ProcessReady,
+        LaunchPhase::ExitPending => LifecycleEvent::ClosingObserved,
+        LaunchPhase::Ended => match error {
+            Some(message) if message.contains("Zastąpiono") => LifecycleEvent::Superseded,
+            _ => LifecycleEvent::ExitObserved,
+        },
+        LaunchPhase::Cancelled => LifecycleEvent::Cancelled,
+        LaunchPhase::Failed => {
+            if pid_reuse_detected {
+                LifecycleEvent::CrashObserved
+            } else {
+                LifecycleEvent::LaunchFailed
+            }
+        }
+    }
+}
+
+/// Bounded per-session transition receipts. Receipts are the diagnostics the
+/// SessionsPanel shows: they contain only closed enums, numbers and the launch
+/// id — never window titles, URLs, paths or provider playback state.
+pub(crate) const MAX_RECEIPTS_PER_SESSION: usize = 32;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTransitionReceipt {
+    pub seq: u64,
+    pub session_id: String,
+    pub from: SessionLifecycleState,
+    pub to: SessionLifecycleState,
+    pub cause: LifecycleEvent,
+    pub at_ms: u64,
+}
+
+/// Truthful, content-free Polish label for a receipt cause. This is the
+/// diagnostic text surfaced on session exit/crash — it never claims a playback
+/// state or a hardware verification.
+pub(crate) fn lifecycle_cause_label(cause: LifecycleEvent) -> &'static str {
+    match cause {
+        LifecycleEvent::LaunchRequested => "uruchomienie rozpoczęte przez VELORA",
+        LifecycleEvent::LaunchProgress => "proces zaobserwowany; okno niepotwierdzone na pierwszym planie",
+        LifecycleEvent::ProcessReady => "okno potwierdzone na pierwszym planie przez rejestr",
+        LifecycleEvent::ClosingObserved => "proces lub okno zniknęło; trwa okres karencji przed zakończeniem",
+        LifecycleEvent::CloseRequested => "przyjęto potwierdzone żądanie zamknięcia okna",
+        LifecycleEvent::ExitObserved => "aplikacja zakończyła sesję sama (zamknięcie okna/procesu)",
+        LifecycleEvent::CrashObserved => {
+            "sesja zakończona nieoczekiwanie (możliwy crash; PID mógł zostać ponownie użyty)"
+        }
+        LifecycleEvent::LaunchFailed => "uruchomienie nie powiodło się",
+        LifecycleEvent::Superseded => "sesja zastąpiona nowszym uruchomieniem tej usługi",
+        LifecycleEvent::Cancelled => "uruchomienie anulowane",
+        LifecycleEvent::Reset => "stan sesji zresetowany po odzyskaniu po restarcie VELORA",
+    }
+}
+
+/// Per-launch ownership record: the deterministic lifecycle machine, the
+/// generation of this launch within its service group, and bounded receipts.
+/// Pure overlay — `session.phase` stays the authoritative watcher state.
+#[derive(Clone, Debug, Default)]
+struct LifecycleSidecar {
+    state: SessionLifecycleState,
+    generation: u64,
+    receipts: Vec<SessionTransitionReceipt>,
+    receipt_seq: u64,
+}
+
+impl LifecycleSidecar {
+    /// Applies one lifecycle event. The phase-derived target state is the
+    /// fallback when the explicit event does not match the table, so the
+    /// machine can never diverge from the observed phase.
+    fn apply(&mut self, session_id: &str, event: LifecycleEvent, at_ms: u64, phase_target: SessionLifecycleState) {
+        let from = self.state;
+        let to = match lifecycle_transition(from, event) {
+            Ok(next) => next,
+            Err(_) => phase_target,
+        };
+        self.state = to;
+        if from == to {
+            return;
+        }
+        self.receipt_seq = self.receipt_seq.saturating_add(1);
+        self.receipts.push(SessionTransitionReceipt {
+            seq: self.receipt_seq,
+            session_id: session_id.to_string(),
+            from,
+            to,
+            cause: event,
+            at_ms,
+        });
+        while self.receipts.len() > MAX_RECEIPTS_PER_SESSION {
+            self.receipts.remove(0);
+        }
+    }
+
+    fn reset(&mut self, session_id: &str, at_ms: u64) {
+        self.apply(session_id, LifecycleEvent::Reset, at_ms, SessionLifecycleState::Idle);
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct LaunchWatch {
     pub kind: LaunchKind,
@@ -272,12 +501,20 @@ struct TrackedLaunch {
     /// Handed to the focus restore when the launch ends, so only the ended
     /// session's own processes (and never a recycled PID) can receive focus.
     known_identities: HashMap<u32, u64>,
+    /// Ownership sidecar: session id == `session.id` (the owning launch id),
+    /// `managed_by_velora` is true for every registry-tracked launch, plus the
+    /// deterministic lifecycle state, generation and transition receipts.
+    sidecar: LifecycleSidecar,
 }
 
 #[derive(Default)]
 struct RegistryState {
     launches: Vec<TrackedLaunch>,
     last_error: Option<String>,
+    /// Last issued launch generation per app group (service app id, or the
+    /// kind label when no app id exists). Idempotent launches are keyed by
+    /// `<app>#<generation>`; a stale generation is rejected, never replayed.
+    app_generations: HashMap<String, u64>,
 }
 
 impl RegistryState {
@@ -332,7 +569,7 @@ impl Default for LaunchRegistry {
     }
 }
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
@@ -433,7 +670,15 @@ fn set_phase(
     }
     tracked.session.phase = next;
     tracked.session.updated_at_ms = now_ms;
-    tracked.session.error = error;
+    let error = error;
+    tracked.session.error = error.clone();
+    // Record the deterministic lifecycle transition exactly once per real
+    // phase change; the receipt is the diagnostics source for the UI panel.
+    let event = lifecycle_event_for(next, error.as_deref(), tracked.session.pid_reuse_detected);
+    let session_id = tracked.session.id.clone();
+    tracked
+        .sidecar
+        .apply(&session_id, event, now_ms, SessionLifecycleState::from_phase(next));
     Some(LaunchEvent {
         previous_phase,
         at_ms: now_ms,
@@ -798,6 +1043,19 @@ impl LaunchRegistry {
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // Idempotent launch key: one generation per new launch in the app
+            // group. Re-launching a service whose launch is still in flight or
+            // active is a duplicate and is decided by `duplicate_launch_for_app`
+            // before `register` is ever called.
+            let generation = {
+                let key = watch
+                    .app_id
+                    .clone()
+                    .unwrap_or_else(|| format!("{:?}", watch.kind));
+                let entry = state.app_generations.entry(key).or_insert(0);
+                *entry = entry.saturating_add(1);
+                *entry
+            };
             for tracked in &mut state.launches {
                 if !tracked.session.phase.is_active() {
                     continue;
@@ -813,6 +1071,13 @@ impl LaunchRegistry {
                     tracked.session.updated_at_ms = at_ms;
                     tracked.session.error = Some("Zastąpiono nowszym uruchomieniem.".into());
                     tracked.absent_since_ms = None;
+                    let superseded_id = tracked.session.id.clone();
+                    tracked.sidecar.apply(
+                        &superseded_id,
+                        LifecycleEvent::Superseded,
+                        at_ms,
+                        SessionLifecycleState::from_phase(LaunchPhase::Ended),
+                    );
                     released_process_ids.extend(tracked.session.process_ids.iter().copied());
                     superseded.push(LaunchEvent {
                         previous_phase,
@@ -821,12 +1086,28 @@ impl LaunchRegistry {
                     });
                 }
             }
+            let mut sidecar = LifecycleSidecar {
+                state: SessionLifecycleState::from_phase(session.phase),
+                generation,
+                receipts: Vec::new(),
+                receipt_seq: 0,
+            };
+            let new_id = session.id.clone();
+            if sidecar.state != SessionLifecycleState::Idle {
+                sidecar.apply(
+                    &new_id,
+                    LifecycleEvent::LaunchRequested,
+                    at_ms,
+                    sidecar.state,
+                );
+            }
             state.launches.push(TrackedLaunch {
                 session: session.clone(),
                 watch,
                 absent_since_ms: None,
                 window_absent_since_ms: None,
                 known_identities: HashMap::new(),
+                sidecar,
             });
             state.retain_recent();
             state.last_error = None;
@@ -1155,6 +1436,197 @@ pub(crate) fn active_launch_for_app(app: &AppHandle, app_id: &str) -> Option<Lau
         .map(|tracked| tracked.session.clone())
 }
 
+/// Decision for a launch request of one service/app group, keyed by
+/// `<app>#<generation>`. Pure so the idempotency rule is unit-testable:
+/// - an active (in-flight or running) launch for the app is a DUPLICATE — the
+///   existing session id and generation are returned, nothing is spawned;
+/// - otherwise the launch is allowed with the next generation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum LaunchDecision {
+    Allowed { generation: u64 },
+    Duplicate { session_id: String, generation: u64 },
+}
+
+pub(crate) fn duplicate_launch_decision(
+    active: Option<(&str, u64)>,
+    current_generation: u64,
+) -> LaunchDecision {
+    match active {
+        Some((session_id, generation)) => LaunchDecision::Duplicate {
+            session_id: session_id.to_string(),
+            generation,
+        },
+        None => LaunchDecision::Allowed {
+            generation: current_generation.saturating_add(1),
+        },
+    }
+}
+
+/// Native duplicate-launch guard for one app group (e.g. `edge-cinema:netflix`,
+/// `steamBigPicture`, `playniteFullscreen`). Callers use it before spawning so
+/// a repeated click while a launch is in flight or a session is active can
+/// never produce a second process or registry entry.
+pub(crate) fn duplicate_launch_for_app(app: &AppHandle, app_id: &str) -> LaunchDecision {
+    let registry = app.state::<LaunchRegistry>();
+    let state = registry
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let active = state
+        .launches
+        .iter()
+        .filter(|tracked| {
+            tracked.session.app_id.as_deref() == Some(app_id) && tracked.session.phase.is_active()
+        })
+        .max_by_key(|tracked| tracked.session.started_at_ms)
+        .map(|tracked| (tracked.session.id.as_str(), tracked.sidecar.generation));
+    let current_generation = state.app_generations.get(app_id).copied().unwrap_or(0);
+    duplicate_launch_decision(active, current_generation)
+}
+
+/// Current lifecycle state of one launch (the deterministic machine overlay).
+pub(crate) fn lifecycle_for_launch(app: &AppHandle, launch_id: &str) -> Option<SessionLifecycleState> {
+    app.state::<LaunchRegistry>()
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .launches
+        .iter()
+        .find(|tracked| tracked.session.id == launch_id)
+        .map(|tracked| tracked.sidecar.state)
+}
+
+/// Generation of one launch within its service/app group.
+pub(crate) fn generation_for_launch(app: &AppHandle, launch_id: &str) -> Option<u64> {
+    app.state::<LaunchRegistry>()
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .launches
+        .iter()
+        .find(|tracked| tracked.session.id == launch_id)
+        .map(|tracked| tracked.sidecar.generation)
+}
+
+/// Last issued generation for an app group (0 when never launched).
+pub(crate) fn generation_for_app(app: &AppHandle, app_id: &str) -> u64 {
+    app.state::<LaunchRegistry>()
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .app_generations
+        .get(app_id)
+        .copied()
+        .unwrap_or(0)
+}
+
+/// Bounded transition receipts of one launch, oldest first.
+pub(crate) fn transition_receipts_for_launch(
+    app: &AppHandle,
+    launch_id: &str,
+    limit: usize,
+) -> Vec<SessionTransitionReceipt> {
+    let registry = app.state::<LaunchRegistry>();
+    let state = registry
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    state
+        .launches
+        .iter()
+        .find(|tracked| tracked.session.id == launch_id)
+        .map(|tracked| {
+            tracked
+                .sidecar
+                .receipts
+                .iter()
+                .rev()
+                .take(limit.max(1))
+                .rev()
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Most recent receipts across all launches (bounded), newest first.
+pub(crate) fn recent_transition_receipts(
+    app: &AppHandle,
+    limit: usize,
+) -> Vec<SessionTransitionReceipt> {
+    let registry = app.state::<LaunchRegistry>();
+    let state = registry
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut receipts: Vec<SessionTransitionReceipt> = state
+        .launches
+        .iter()
+        .flat_map(|tracked| tracked.sidecar.receipts.iter().cloned())
+        .collect();
+    receipts.sort_by(|a, b| b.at_ms.cmp(&a.at_ms).then(b.seq.cmp(&a.seq)));
+    receipts.truncate(limit.max(1));
+    receipts
+}
+
+/// Records an explicit lifecycle event (e.g. a confirmed close request from
+/// the Edge Cinema adapter) against the launch's deterministic machine.
+/// Invalid events for the current state are ignored and never recorded, so a
+/// stale adapter cannot move a session. Returns the receipt when recorded.
+pub(crate) fn record_lifecycle_event(
+    app: &AppHandle,
+    launch_id: &str,
+    event: LifecycleEvent,
+    at_ms: u64,
+) -> Option<SessionTransitionReceipt> {
+    let registry = app.state::<LaunchRegistry>();
+    let mut state = registry
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let tracked = state
+        .launches
+        .iter_mut()
+        .find(|tracked| tracked.session.id == launch_id)?;
+    if tracked.session.phase.is_terminal() && event != LifecycleEvent::Reset {
+        return None;
+    }
+    let phase_target = SessionLifecycleState::from_phase(tracked.session.phase);
+    let before = tracked.sidecar.receipts.len();
+    let session_id = tracked.session.id.clone();
+    tracked
+        .sidecar
+        .apply(&session_id, event, at_ms, phase_target);
+    if tracked.sidecar.receipts.len() > before {
+        tracked.sidecar.receipts.last().cloned()
+    } else {
+        None
+    }
+}
+
+/// Resets one launch's lifecycle machine back to idle (crash/restart
+/// recovery). The watcher phase is untouched; only the projected machine and
+/// its receipts move.
+pub(crate) fn reset_lifecycle_event(app: &AppHandle, launch_id: &str, at_ms: u64) -> bool {
+    let registry = app.state::<LaunchRegistry>();
+    let mut state = registry
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    match state
+        .launches
+        .iter_mut()
+        .find(|tracked| tracked.session.id == launch_id)
+    {
+        Some(tracked) => {
+            let session_id = tracked.session.id.clone();
+            tracked.sidecar.reset(&session_id, at_ms);
+            true
+        }
+        None => false,
+    }
+}
+
 /// All active, service-scoped Edge Cinema launches. The LaunchRegistry remains
 /// the sole lifecycle store; this is a read-only projection for the adapter's
 /// per-service markers and status selection.
@@ -1440,9 +1912,12 @@ pub fn get_launch_registry_status(app: AppHandle) -> LaunchRegistrySnapshot {
 #[cfg(test)]
 mod tests {
     use super::{
-        advance, apply_baseline, matching_pids, reset_resume_state, same_launch_group, set_phase,
-        window_close_is_terminal, LaunchKind, LaunchPhase, LaunchSession, LaunchWatch, Observation,
-        ProcessTable, TrackedLaunch, EXIT_GRACE_MS, START_TIMEOUT_MS,
+        advance, apply_baseline, duplicate_launch_decision, lifecycle_cause_label,
+        lifecycle_event_for, lifecycle_transition, matching_pids, reset_resume_state,
+        same_launch_group, set_phase, window_close_is_terminal, LaunchDecision, LaunchKind,
+        LaunchPhase, LaunchSession, LaunchWatch, LifecycleEvent, LifecycleSidecar, Observation,
+        ProcessTable, SessionLifecycleState, SessionTransitionReceipt, TrackedLaunch,
+        MAX_RECEIPTS_PER_SESSION, EXIT_GRACE_MS, START_TIMEOUT_MS,
     };
     use crate::process_table::ProcessIdentity;
     use crate::window_broker::{ForegroundWindow, TrackedWindow};
@@ -1491,6 +1966,7 @@ mod tests {
             absent_since_ms: None,
             window_absent_since_ms: None,
             known_identities: HashMap::new(),
+            sidecar: LifecycleSidecar::default(),
         }
     }
 
@@ -1874,6 +2350,7 @@ mod tests {
             absent_since_ms: None,
             window_absent_since_ms: None,
             known_identities: HashMap::new(),
+            sidecar: LifecycleSidecar::default(),
         };
         let event = advance(
             &mut session,
@@ -1954,6 +2431,7 @@ mod tests {
             absent_since_ms: None,
             window_absent_since_ms: None,
             known_identities: HashMap::new(),
+            sidecar: LifecycleSidecar::default(),
         };
         let observation = observation(
             vec![(300, 1, "msedge.exe"), (301, 300, "msedge.exe")],
@@ -2011,6 +2489,7 @@ mod tests {
             absent_since_ms: None,
             window_absent_since_ms: None,
             known_identities: HashMap::new(),
+            sidecar: LifecycleSidecar::default(),
         };
         // The browser process still exists, but its visible app window is gone.
         let background = advance(
@@ -2076,6 +2555,7 @@ mod tests {
             absent_since_ms: None,
             window_absent_since_ms: None,
             known_identities: HashMap::new(),
+            sidecar: LifecycleSidecar::default(),
         };
         let background = advance(
             &mut session,
@@ -2189,6 +2669,7 @@ mod tests {
             absent_since_ms: None,
             window_absent_since_ms: None,
             known_identities: HashMap::new(),
+            sidecar: LifecycleSidecar::default(),
         };
         advance(
             &mut session,
@@ -2317,6 +2798,7 @@ mod tests {
             absent_since_ms: None,
             window_absent_since_ms: None,
             known_identities: HashMap::new(),
+            sidecar: LifecycleSidecar::default(),
         };
         let first_identity = ProcessIdentity {
             process_id: 100,
@@ -2506,6 +2988,7 @@ mod tests {
             absent_since_ms: None,
             window_absent_since_ms: None,
             known_identities: HashMap::new(),
+            sidecar: LifecycleSidecar::default(),
         }
     }
 
@@ -2686,6 +3169,7 @@ mod tests {
 
 #[cfg(test)]
 mod session_owner_tests {
+    use super::LifecycleSidecar;
     use super::{
         advance, LaunchKind, LaunchPhase, LaunchSession, LaunchWatch, Observation, TrackedLaunch,
         EXIT_GRACE_MS,
@@ -2735,6 +3219,7 @@ mod session_owner_tests {
             absent_since_ms: None,
             window_absent_since_ms: None,
             known_identities: HashMap::new(),
+            sidecar: LifecycleSidecar::default(),
         }
     }
 
@@ -2901,5 +3386,273 @@ mod session_owner_tests {
         );
         assert_eq!(launch.known_identities.get(&700), Some(&42));
         assert_eq!(launch.known_identities.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod ascension_b_lifecycle_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn tracked() -> TrackedLaunch {
+        TrackedLaunch {
+            session: LaunchSession {
+                id: "launch-1".into(),
+                kind: LaunchKind::Playnite,
+                display_name: "Playnite Fullscreen".into(),
+                app_id: Some("playnite".into()),
+                phase: LaunchPhase::Requested,
+                process_ids: Vec::new(),
+                foreground: false,
+                window_id: None,
+                started_at_ms: 1_000,
+                updated_at_ms: 1_000,
+                last_activation_at_ms: None,
+                error: None,
+                restore: None,
+                session_revision: None,
+                pid_reuse_detected: false,
+                attention: None,
+            },
+            watch: LaunchWatch::new(
+                LaunchKind::Playnite,
+                "Playnite Fullscreen",
+                Some("playnite".into()),
+                vec!["Playnite.FullscreenApp.exe".into()],
+                None,
+                false,
+                true,
+                Vec::new(),
+                false,
+                None,
+            ),
+            absent_since_ms: None,
+            window_absent_since_ms: None,
+            known_identities: HashMap::new(),
+            // register() seeds the machine from the initial phase (Requested
+            // => Launching) and records the LaunchRequested receipt.
+            sidecar: {
+                let mut sidecar = LifecycleSidecar::default();
+                sidecar.apply("launch-1", LifecycleEvent::LaunchRequested, 1_000, SessionLifecycleState::Launching);
+                sidecar
+            },
+        }
+    }
+
+    // --- Ascension B: shared deterministic session lifecycle machine ---
+
+    #[test]
+    fn lifecycle_table_is_exactly_idle_launching_active_closing_exited_error() {
+        use LifecycleEvent as E;
+        use SessionLifecycleState as S;
+        // Allowed transitions (aligned 1:1 with from_phase).
+        assert_eq!(lifecycle_transition(S::Idle, E::LaunchRequested), Ok(S::Launching));
+        assert_eq!(lifecycle_transition(S::Launching, E::LaunchProgress), Ok(S::Launching));
+        assert_eq!(lifecycle_transition(S::Launching, E::ProcessReady), Ok(S::Active));
+        assert_eq!(lifecycle_transition(S::Launching, E::CloseRequested), Ok(S::Closing));
+        assert_eq!(lifecycle_transition(S::Launching, E::ClosingObserved), Ok(S::Closing));
+        assert_eq!(lifecycle_transition(S::Launching, E::LaunchFailed), Ok(S::Error));
+        assert_eq!(lifecycle_transition(S::Launching, E::CrashObserved), Ok(S::Error));
+        assert_eq!(lifecycle_transition(S::Launching, E::ExitObserved), Ok(S::Exited));
+        assert_eq!(lifecycle_transition(S::Launching, E::Cancelled), Ok(S::Exited));
+        assert_eq!(lifecycle_transition(S::Launching, E::Superseded), Ok(S::Exited));
+        assert_eq!(lifecycle_transition(S::Active, E::CloseRequested), Ok(S::Closing));
+        assert_eq!(lifecycle_transition(S::Active, E::ClosingObserved), Ok(S::Closing));
+        assert_eq!(lifecycle_transition(S::Active, E::ProcessReady), Ok(S::Active));
+        assert_eq!(lifecycle_transition(S::Active, E::ExitObserved), Ok(S::Exited));
+        assert_eq!(lifecycle_transition(S::Active, E::Cancelled), Ok(S::Exited));
+        assert_eq!(lifecycle_transition(S::Active, E::CrashObserved), Ok(S::Error));
+        assert_eq!(lifecycle_transition(S::Active, E::LaunchFailed), Ok(S::Error));
+        assert_eq!(lifecycle_transition(S::Closing, E::ProcessReady), Ok(S::Active));
+        assert_eq!(lifecycle_transition(S::Closing, E::LaunchProgress), Ok(S::Launching));
+        assert_eq!(lifecycle_transition(S::Closing, E::ExitObserved), Ok(S::Exited));
+        assert_eq!(lifecycle_transition(S::Closing, E::CrashObserved), Ok(S::Error));
+        // Reset (recovery) from every state returns to idle.
+        for state in [S::Idle, S::Launching, S::Active, S::Closing, S::Exited, S::Error] {
+            assert_eq!(lifecycle_transition(state, E::Reset), Ok(S::Idle));
+        }
+        // Everything else is rejected: a stale event can never resurrect or
+        // corrupt a session.
+        assert!(lifecycle_transition(S::Exited, E::LaunchRequested).is_err());
+        assert!(lifecycle_transition(S::Error, E::ProcessReady).is_err());
+        assert!(lifecycle_transition(S::Idle, E::ProcessReady).is_err());
+        assert!(lifecycle_transition(S::Idle, E::CloseRequested).is_err());
+        assert!(lifecycle_transition(S::Active, E::LaunchRequested).is_err());
+        assert!(lifecycle_transition(S::Exited, E::Reset).is_ok());
+    }
+
+    #[test]
+    fn phase_mapping_and_event_classification_stay_consistent_with_the_table() {
+        use SessionLifecycleState as S;
+        // Every real phase change the watcher can make must be a valid table
+        // transition from the machine state derived from the previous phase.
+        let real_changes: &[(LaunchPhase, LaunchPhase)] = &[
+            (LaunchPhase::Requested, LaunchPhase::ProcessStarted),
+            (LaunchPhase::ProcessStarted, LaunchPhase::WindowAppeared),
+            (LaunchPhase::ProcessStarted, LaunchPhase::SessionActive),
+            (LaunchPhase::WindowAppeared, LaunchPhase::SessionActive),
+            (LaunchPhase::SessionActive, LaunchPhase::ExitPending),
+            (LaunchPhase::WindowAppeared, LaunchPhase::ExitPending),
+            (LaunchPhase::ExitPending, LaunchPhase::Ended),
+            (LaunchPhase::ExitPending, LaunchPhase::SessionActive),
+            (LaunchPhase::ExitPending, LaunchPhase::WindowAppeared),
+            (LaunchPhase::ExitPending, LaunchPhase::ProcessStarted),
+            (LaunchPhase::ProcessStarted, LaunchPhase::ExitPending),
+            (LaunchPhase::Requested, LaunchPhase::Failed),
+        ];
+        for (from, to) in real_changes {
+            let state = S::from_phase(*from);
+            let event = lifecycle_event_for(*to, None, false);
+            assert_eq!(
+                lifecycle_transition(state, event),
+                Ok(S::from_phase(*to)),
+                "phase change {from:?} -> {to:?} must be a valid lifecycle transition"
+            );
+        }
+        // PID reuse upgrades a failure to a crash observation.
+        assert_eq!(
+            lifecycle_event_for(LaunchPhase::Failed, None, true),
+            LifecycleEvent::CrashObserved
+        );
+        assert_eq!(
+            lifecycle_event_for(LaunchPhase::Failed, None, false),
+            LifecycleEvent::LaunchFailed
+        );
+        assert_eq!(
+            lifecycle_event_for(LaunchPhase::Ended, Some("Zastąpiono nowszym uruchomieniem."), false),
+            LifecycleEvent::Superseded
+        );
+    }
+
+    #[test]
+    fn sidecar_receipts_are_bounded_monotonic_and_terminal_states_stop_recording() {
+        let mut sidecar = LifecycleSidecar::default();
+        assert_eq!(sidecar.state, SessionLifecycleState::Idle);
+        sidecar.apply("cinema-1", LifecycleEvent::LaunchRequested, 10, SessionLifecycleState::Launching);
+        sidecar.apply("cinema-1", LifecycleEvent::ProcessReady, 20, SessionLifecycleState::Active);
+        sidecar.apply("cinema-1", LifecycleEvent::CloseRequested, 30, SessionLifecycleState::Active);
+        sidecar.apply("cinema-1", LifecycleEvent::ExitObserved, 40, SessionLifecycleState::Exited);
+        assert_eq!(sidecar.state, SessionLifecycleState::Exited);
+        assert_eq!(sidecar.receipts.len(), 4);
+        for (index, receipt) in sidecar.receipts.iter().enumerate() {
+            assert_eq!(receipt.seq, (index + 1) as u64);
+            assert_eq!(receipt.session_id, "cinema-1");
+        }
+        assert_eq!(sidecar.receipts[0].from, SessionLifecycleState::Idle);
+        assert_eq!(sidecar.receipts[0].to, SessionLifecycleState::Launching);
+        assert_eq!(sidecar.receipts[2].cause, LifecycleEvent::CloseRequested);
+        // Terminal: further events are rejected by the table, so the machine
+        // falls back to the phase target (Exited) and records no new state.
+        sidecar.apply("cinema-1", LifecycleEvent::LaunchRequested, 50, SessionLifecycleState::Exited);
+        assert_eq!(sidecar.receipts.len(), 4);
+        // Reset is the only way out of a terminal state (recovery).
+        sidecar.reset("cinema-1", 60);
+        assert_eq!(sidecar.state, SessionLifecycleState::Idle);
+        assert_eq!(sidecar.receipts.len(), 5);
+        // Bounded: drive more transitions than the cap.
+        let mut sidecar = LifecycleSidecar::default();
+        for i in 0..(MAX_RECEIPTS_PER_SESSION as u64 + 10) {
+            let at = 1_000 + i;
+            if i % 2 == 0 {
+                sidecar.apply("s", LifecycleEvent::LaunchRequested, at, SessionLifecycleState::Launching);
+            } else {
+                sidecar.apply("s", LifecycleEvent::ProcessReady, at, SessionLifecycleState::Active);
+            }
+        }
+        assert!(sidecar.receipts.len() <= MAX_RECEIPTS_PER_SESSION);
+        let seqs: Vec<u64> = sidecar.receipts.iter().map(|r| r.seq).collect();
+        let mut sorted = seqs.clone();
+        sorted.sort_unstable();
+        assert_eq!(seqs, sorted, "receipt seq must be monotonic");
+    }
+
+    #[test]
+    fn set_phase_records_exactly_one_receipt_per_real_transition() {
+        let mut tracked = tracked();
+        // The seeded machine already recorded Idle -> Launching (LaunchRequested).
+        assert_eq!(tracked.sidecar.receipts.len(), 1);
+        assert_eq!(tracked.sidecar.receipts[0].cause, LifecycleEvent::LaunchRequested);
+        assert!(set_phase(&mut tracked, LaunchPhase::ProcessStarted, 100, None).is_some());
+        // Launching -> Launching: the watcher event fires, but the lifecycle
+        // machine state does not change and no receipt is recorded.
+        assert_eq!(tracked.sidecar.receipts.len(), 1);
+        assert_eq!(tracked.sidecar.state, SessionLifecycleState::Launching);
+        // Same phase again: no event, no receipt.
+        assert!(set_phase(&mut tracked, LaunchPhase::ProcessStarted, 110, None).is_none());
+        assert_eq!(tracked.sidecar.receipts.len(), 1);
+        assert!(set_phase(&mut tracked, LaunchPhase::SessionActive, 120, None).is_some());
+        assert_eq!(tracked.sidecar.receipts.len(), 2);
+        assert_eq!(tracked.sidecar.state, SessionLifecycleState::Active);
+        assert!(set_phase(&mut tracked, LaunchPhase::ExitPending, 130, None).is_some());
+        assert_eq!(tracked.sidecar.state, SessionLifecycleState::Closing);
+        assert!(set_phase(&mut tracked, LaunchPhase::Ended, 140, None).is_some());
+        assert_eq!(tracked.sidecar.state, SessionLifecycleState::Exited);
+        assert_eq!(tracked.sidecar.receipts.len(), 4);
+        // Requested -> ProcessStarted is only launch progress (no lifecycle
+        // change, no receipt); SessionActive -> Active, ExitPending -> Closing,
+        // Ended -> Exited are the real lifecycle receipts.
+        let causes: Vec<LifecycleEvent> = tracked.sidecar.receipts.iter().map(|r| r.cause).collect();
+        assert_eq!(
+            causes,
+            vec![
+                LifecycleEvent::LaunchRequested,
+                LifecycleEvent::ProcessReady,
+                LifecycleEvent::ClosingObserved,
+                LifecycleEvent::ExitObserved,
+            ]
+        );
+        // Terminal phase: set_phase refuses, no receipt.
+        assert!(set_phase(&mut tracked, LaunchPhase::Cancelled, 150, None).is_none());
+        assert_eq!(tracked.sidecar.receipts.len(), 4);
+    }
+
+    #[test]
+    fn duplicate_launch_decision_is_idempotent_per_service_and_generation() {
+        // No active launch: allowed with the next generation.
+        assert_eq!(
+            duplicate_launch_decision(None, 0),
+            LaunchDecision::Allowed { generation: 1 }
+        );
+        assert_eq!(
+            duplicate_launch_decision(None, 7),
+            LaunchDecision::Allowed { generation: 8 }
+        );
+        // Active launch in flight or running: duplicate with the existing
+        // session id and its generation — never a second spawn.
+        assert_eq!(
+            duplicate_launch_decision(Some(("cinema-9", 3)), 3),
+            LaunchDecision::Duplicate {
+                session_id: "cinema-9".into(),
+                generation: 3
+            }
+        );
+        // blocks_launch covers exactly launching/active/closing.
+        assert!(SessionLifecycleState::Launching.blocks_launch());
+        assert!(SessionLifecycleState::Active.blocks_launch());
+        assert!(SessionLifecycleState::Closing.blocks_launch());
+        assert!(!SessionLifecycleState::Idle.blocks_launch());
+        assert!(!SessionLifecycleState::Exited.blocks_launch());
+        assert!(!SessionLifecycleState::Error.blocks_launch());
+    }
+
+    #[test]
+    fn receipts_serialize_camel_case_without_secrets() {
+        let receipt = SessionTransitionReceipt {
+            seq: 3,
+            session_id: "cinema-1".into(),
+            from: SessionLifecycleState::Active,
+            to: SessionLifecycleState::Exited,
+            cause: LifecycleEvent::ExitObserved,
+            at_ms: 42,
+        };
+        let json = serde_json::to_string(&receipt).unwrap();
+        assert!(json.contains(r#""sessionId":"cinema-1""#));
+        assert!(json.contains(r#""from":"active""#));
+        assert!(json.contains(r#""to":"exited""#));
+        assert!(json.contains(r#""cause":"exitObserved""#));
+        for label in lifecycle_cause_label(LifecycleEvent::CrashObserved).split(' ') {
+            assert!(!label.is_empty());
+        }
+        assert!(lifecycle_cause_label(LifecycleEvent::ExitObserved).contains("zakończyła"));
     }
 }

@@ -2,8 +2,14 @@
 use serde::Serialize;
 use tauri::AppHandle;
 
-use crate::launch_registry::{self, LaunchKind, LaunchPhase, LaunchSession};
+use crate::launch_registry::{
+    self, LaunchKind, LaunchPhase, LaunchSession, LifecycleEvent, SessionLifecycleState,
+    SessionTransitionReceipt,
+};
 use crate::{process_table, window_broker};
+
+/// How many transition receipts are projected per session (bounded read).
+pub(crate) const PROJECTED_RECEIPTS_PER_SESSION: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +50,24 @@ pub struct ManagedSession {
     pub can_resume: bool,
     pub can_close: bool,
     pub last_failure: Option<String>,
+    /// The owning launch id. For registry-tracked sessions this equals
+    /// `session_id`; the field exists so ownership is explicit in the wire
+    /// contract instead of implied.
+    pub launch_id: String,
+    /// True only for launches registered by VELORA itself. Every session in
+    /// this snapshot is registry-owned, so this is always true here; foreign
+    /// windows never appear in the registry at all.
+    pub managed_by_velora: bool,
+    /// The shared deterministic lifecycle state
+    /// (idle|launching|active|closing|exited|error) of this session.
+    pub lifecycle: SessionLifecycleState,
+    /// Launch generation within the service/app group; idempotent launches are
+    /// keyed by `<app>#<generation>`.
+    pub generation: u64,
+    /// Newest transition receipt (diagnostics for exit/crash reporting).
+    pub last_transition: Option<SessionTransitionReceipt>,
+    /// Bounded transition receipts of this session, oldest first.
+    pub transition_receipts: Vec<SessionTransitionReceipt>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -182,7 +206,48 @@ fn projection(
             || launch.pid_reuse_detected
             || state == ManagedSessionState::Unavailable)
             .then(|| "Sesja jest niedostępna lub wymaga ponownego odczytu.".into()),
+        launch_id: launch.id.clone(),
+        managed_by_velora: true,
+        lifecycle: SessionLifecycleState::from_phase(launch.phase),
+        generation: 0,
+        last_transition: None,
+        transition_receipts: Vec::new(),
     }
+}
+
+/// Full projection used by the IPC read: attaches the deterministic lifecycle
+/// machine state, the launch generation and the bounded transition receipts of
+/// the owning launch. The exit/crash diagnostic is derived truthfully from the
+/// last receipt cause — never from provider playback state (which VELORA does
+/// not read) — and stays content-free.
+fn projection_full(
+    app: &AppHandle,
+    launch: &LaunchSession,
+    owned_window_available: bool,
+    supported: bool,
+) -> ManagedSession {
+    let mut session = projection(launch, owned_window_available, supported);
+    let lifecycle = launch_registry::lifecycle_for_launch(app, &launch.id)
+        .unwrap_or_else(|| SessionLifecycleState::from_phase(launch.phase));
+    let generation = launch_registry::generation_for_launch(app, &launch.id).unwrap_or(0);
+    let receipts =
+        launch_registry::transition_receipts_for_launch(app, &launch.id, PROJECTED_RECEIPTS_PER_SESSION);
+    let last_transition = receipts.last().cloned();
+    if let Some(receipt) = &last_transition {
+        if matches!(
+            receipt.cause,
+            LifecycleEvent::CrashObserved | LifecycleEvent::LaunchFailed
+        ) || launch.pid_reuse_detected
+        {
+            session.last_failure =
+                Some(format!("{}.", launch_registry::lifecycle_cause_label(receipt.cause)));
+        }
+    }
+    session.lifecycle = lifecycle;
+    session.generation = generation;
+    session.last_transition = last_transition;
+    session.transition_receipts = receipts;
+    session
 }
 
 fn owned_target(
@@ -209,7 +274,8 @@ pub fn get_managed_sessions(app: AppHandle) -> ManagedSessionsSnapshot {
         .iter()
         .take(20)
         .map(|launch| {
-            projection(
+            projection_full(
+                &app,
                 launch,
                 owned_target(&app, launch).is_some(),
                 cfg!(target_os = "windows"),
@@ -435,5 +501,52 @@ mod tests {
         for id in ["", "cinema\n1", &"x".repeat(129)] {
             assert!(validate_session_id(id).is_err());
         }
+    }
+
+    #[test]
+    fn projection_exposes_ownership_fields_and_shared_lifecycle_state() {
+        let launch = launch();
+        let session = projection(&launch, true, true);
+        // session id == owning launch id, and the flag is explicit on the wire.
+        assert_eq!(session.launch_id, "cinema-1");
+        assert_eq!(session.session_id, session.launch_id);
+        assert!(session.managed_by_velora);
+        // The shared machine maps the watcher phase: SessionActive -> active.
+        assert_eq!(
+            session.lifecycle,
+            crate::launch_registry::SessionLifecycleState::Active
+        );
+        assert_eq!(session.lifecycle.as_str(), "active");
+        assert!(session.generation == 0, "pure projection defaults to generation 0");
+        assert!(session.last_transition.is_none());
+        assert!(session.transition_receipts.is_empty());
+        let json = serde_json::to_string(&session).unwrap();
+        assert!(json.contains("\"managedByVelora\":true"));
+        assert!(json.contains("\"launchId\":\"cinema-1\""));
+        assert!(json.contains("\"lifecycle\":\"active\""));
+    }
+
+    #[test]
+    fn lifecycle_mapping_covers_every_watcher_phase_exactly_once() {
+        use crate::launch_registry::LaunchPhase as P;
+        use crate::launch_registry::SessionLifecycleState as S;
+        let expected = [
+            (P::Requested, S::Launching),
+            (P::ProcessStarted, S::Launching),
+            (P::WindowAppeared, S::Launching),
+            (P::SessionActive, S::Active),
+            (P::ExitPending, S::Closing),
+            (P::Ended, S::Exited),
+            (P::Cancelled, S::Exited),
+            (P::Failed, S::Error),
+        ];
+        for (phase, lifecycle) in expected {
+            assert_eq!(SessionLifecycleState::from_phase(phase), lifecycle);
+            assert_eq!(SessionLifecycleState::from_phase(phase).as_str().len() > 0, true);
+        }
+        assert!(S::Exited.is_terminal() && S::Error.is_terminal());
+        assert!(!S::Idle.is_terminal() && !S::Active.is_terminal());
+        assert!(S::Launching.blocks_launch() && S::Active.blocks_launch() && S::Closing.blocks_launch());
+        assert!(!S::Idle.blocks_launch() && !S::Exited.blocks_launch() && !S::Error.blocks_launch());
     }
 }

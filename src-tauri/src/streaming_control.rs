@@ -26,6 +26,16 @@ const MAX_ACTIONS_PER_SIMULATOR_LEASE: u64 = 1_000_000;
 const LEFT_STICK_DEADZONE: f32 = 0.35;
 const RIGHT_STICK_DEADZONE: f32 = 0.25;
 
+/// EXPLICIT LIMITATION (DRM boundary): VELORA never reads, persists or
+/// restores provider playback state for Netflix, YouTube, Disney+, Prime
+/// Video or Max. Media keys (Space/K) are a BLIND TOGGLE — there is no
+/// readback that would let VELORA know whether playback is paused — and no
+/// DRM/HDCP/browser-security bypass exists anywhere in this module. When an
+/// accessibility/readback API is unavailable, the truthful state is
+/// "unknown", never a guess. Tests below pin this constant so it cannot be
+/// silently flipped.
+pub(crate) const PLAYBACK_STATE_READ_SUPPORTED: bool = false;
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StreamingControlStatus {
@@ -3282,6 +3292,20 @@ mod tests {
             ));
         }
     }
+    #[test]
+    fn playback_state_read_is_explicitly_unsupported_blind_toggle_only() {
+        // Pinned limitation: no provider playback-state read/persist/restore
+        // exists (DRM boundary). Media control stays a blind toggle and the
+        // truthful fallback state is "unknown".
+        assert!(!super::PLAYBACK_STATE_READ_SUPPORTED);
+        // Play/Pause maps to a single key (Space = 0x20) for Netflix/Prime —
+        // a toggle, not a state command; there is no readback path at all.
+        assert_eq!(
+            service_media_key("netflix", NavigationAction::PlayPause),
+            Some(0x20)
+        );
+    }
+
     #[test]
     fn media_profiles_never_confuse_rewind_with_pause_or_enable_unknown_service() {
         assert_eq!(
