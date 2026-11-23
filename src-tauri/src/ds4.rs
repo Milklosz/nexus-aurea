@@ -1088,6 +1088,29 @@ mod tests {
     }
 
     #[test]
+    fn reconnect_with_a_held_button_emits_connected_and_the_held_state_in_one_ingest() {
+        let mut tracker = Ds4Tracker::default();
+        let mut report = usb_report();
+        report[6] |= 0x20; // Options held
+        let first = feed(&mut tracker, USB_PATH, &report, 0);
+        assert!(matches!(first.first(), Some(PadEvent::Connected { .. })));
+        assert!(matches!(tracker.on_removed(USB_PATH), Some(PadEvent::Disconnected { .. })));
+        // Reconnect while Options is STILL held: Connected and the held State are
+        // emitted in the same ingest, so the frontend applies both before its next
+        // tick and primes the engine on the held state instead of firing on release.
+        let again = feed(&mut tracker, USB_PATH, &report, 1_000);
+        assert!(matches!(again.first(), Some(PadEvent::Connected { .. })));
+        match again.get(1) {
+            Some(PadEvent::State(snapshot)) => {
+                assert!(snapshot.buttons.contains(&Ds4Button::Options));
+            }
+            other => panic!("expected the held state in the same ingest, got {other:?}"),
+        }
+        // The stored snapshot is the real held state, not a stale neutral one.
+        assert!(tracker.snapshots()[0].buttons.contains(&Ds4Button::Options));
+    }
+
+    #[test]
     fn tracker_caps_the_number_of_pads_without_evicting_active_ones() {
         let mut tracker = Ds4Tracker::default();
         for index in 0..MAX_TRACKED_PADS {

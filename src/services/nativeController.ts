@@ -281,6 +281,15 @@ export interface NativeControllerModel {
   lastInputAt: number | null;
   /** When the current snapshot was last confirmed by a native event (state or heartbeat). */
   snapshotAt: number | null;
+  /**
+   * Monotonic connection epoch. Bumped on every `connected` / `disconnected` /
+   * `unavailable` event, so a reconnect is always visible as a new epoch even when
+   * the same device label returns. Consumers (the input hook, the cross-source
+   * gate) use it to reject input that was produced before the boundary: no stuck
+   * "armed"/held state can survive a disconnect/reconnect. Never decreases, even
+   * across a store stop/start.
+   */
+  epoch: number;
 }
 
 export const NEUTRAL_SNAPSHOT: NativeSnapshot = {
@@ -298,6 +307,7 @@ export const initialNativeControllerModel: NativeControllerModel = {
   lastButton: null,
   lastInputAt: null,
   snapshotAt: null,
+  epoch: 0,
 };
 
 /** A healthy native DS4 is the sole navigation source until it disconnects. */
@@ -318,6 +328,16 @@ export function isNeutral(snapshot: NativeSnapshot | null): boolean {
  * Pure reducer over native events. `now` is injected so tests do not depend on a clock.
  * A second pad never steals control from the active pad mid-press: it takes over only
  * once the active pad is neutral and the newcomer produces input.
+ *
+ * Every connection boundary (`connected` / `disconnected` / `unavailable`) bumps
+ * `epoch`, so a reconnect of the same device label is a visible new epoch. When the
+ * ACTIVE pad disconnects (Bluetooth drop, USB replug, stale prune), its held state is
+ * fully released at once: `snapshot` becomes neutral (or null), `lastButton` and
+ * `lastInputAt` are cleared, so no armed/held input and no "active" link state can
+ * leak across the boundary. Ownership falls to another pad or back to the Gamepad
+ * API path (`chooseInputSource`), and a reconnecting pad starts from a NEUTRAL
+ * snapshot, which re-primes the input engine: the first sample after a reconnect is
+ * a prime, never a release.
  */
 export function reduceNativeController(
   model: NativeControllerModel,
@@ -326,7 +346,7 @@ export function reduceNativeController(
 ): NativeControllerModel {
   switch (event.kind) {
     case "unavailable":
-      return { ...initialNativeControllerModel, unavailableReason: event.reason || "unavailable" };
+      return { ...initialNativeControllerModel, unavailableReason: event.reason || "unavailable", epoch: model.epoch + 1 };
     case "connected": {
       const pad: NativePad = { device: event.device, revision: event.revision, transport: event.transport };
       const pads = [...model.pads.filter((known) => known.device !== event.device), pad];
@@ -339,14 +359,25 @@ export function reduceNativeController(
         // A connected active pad always has a snapshot, so the first real press is a press, not a prime.
         snapshot: becomesActive ? NEUTRAL_SNAPSHOT : model.snapshot,
         snapshotAt: becomesActive ? now : model.snapshotAt,
+        epoch: model.epoch + 1,
       };
     }
     case "disconnected": {
       const pads = model.pads.filter((known) => known.device !== event.device);
-      if (model.activeDevice !== event.device) return { ...model, pads };
+      if (model.activeDevice !== event.device) return { ...model, pads, epoch: model.epoch + 1 };
       // The active pad left: every input is released at once and another pad, if any, takes over.
       const next = pads[0]?.device ?? null;
-      return { ...model, pads, activeDevice: next, snapshot: next ? NEUTRAL_SNAPSHOT : null, snapshotAt: next ? now : null };
+      return {
+        ...model,
+        pads,
+        activeDevice: next,
+        snapshot: next ? NEUTRAL_SNAPSHOT : null,
+        snapshotAt: next ? now : null,
+        // No stuck held/armed state across the boundary.
+        lastButton: null,
+        lastInputAt: null,
+        epoch: model.epoch + 1,
+      };
     }
     case "state": {
       // A state event is also proof the pad exists, even if the connect event was missed.

@@ -685,6 +685,41 @@ mod tests {
     }
 
     #[test]
+    fn reconnect_after_removal_requires_a_neutral_rearm() {
+        let mut supervisor = enabled(1_500);
+        supervisor.observe_report("pad-a", buttons(false, false, false), 10);
+        supervisor.observe_report("pad-a", buttons(true, true, true), 20);
+        supervisor.observe_report("pad-a", buttons(true, true, true), 700);
+        supervisor.observe_report("pad-a", buttons(true, true, true), 1_400);
+        assert!(
+            supervisor
+                .observe_report("pad-a", buttons(true, true, true), 1_520)
+                .triggered
+        );
+        // Device removal (Bluetooth drop / unplug): the per-device state is gone.
+        supervisor.remove_device("pad-a");
+        // Reconnect with the chord still held: must NOT complete the old hold.
+        let held = supervisor.observe_report("pad-a", buttons(true, true, true), 2_000);
+        assert!(!held.triggered);
+        assert_eq!(
+            supervisor.status().last_outcome,
+            ControllerFallbackOutcome::AwaitingNeutral
+        );
+        assert_eq!(supervisor.status().armed, false);
+        // One neutral sample rearms; a fresh deliberate hold fires once.
+        supervisor.observe_report("pad-a", buttons(false, false, false), 2_010);
+        assert_eq!(supervisor.status().armed, true);
+        supervisor.observe_report("pad-a", buttons(true, true, true), 2_020);
+        supervisor.observe_report("pad-a", buttons(true, true, true), 2_700);
+        supervisor.observe_report("pad-a", buttons(true, true, true), 3_300);
+        assert!(
+            supervisor
+                .observe_report("pad-a", buttons(true, true, true), 3_520)
+                .triggered
+        );
+    }
+
+    #[test]
     fn disable_and_invalid_configuration_are_safe() {
         let mut supervisor = enabled(1_500);
         let invalid_hold = ControllerFallbackConfig {

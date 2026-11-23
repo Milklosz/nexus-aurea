@@ -69,8 +69,17 @@ export function useNativeController(
     const engine = new ControllerEngine({ optionsOnRelease: true });
     const bumpers = new BumperEdges();
     let selectedDevice: string | null = null;
-    const dispatch = (action: ControllerAction) => {
-      if (!crossSourceGate.accept("native", action, performance.now())) return;
+    // The connection epoch of the model we last synced to. Any change (pad
+    // disconnect/reconnect, native layer unavailable) opens a new cross-source
+    // arbitration epoch, so input tagged before the boundary can never fire.
+    let modelEpoch = nativeControllerStore.getModel().epoch;
+    const syncEpoch = (model: NativeControllerModel) => {
+      if (model.epoch === modelEpoch) return;
+      modelEpoch = model.epoch;
+      crossSourceGate.advanceEpoch();
+    };
+    const dispatch = (action: ControllerAction, epochTag: number) => {
+      if (!crossSourceGate.accept("native", action, performance.now(), epochTag)) return;
       const handlers = actionsRef.current;
       if (action.type === "move") handlers.move(action.delta);
       else if (action.type === "vertical") handlers.vertical?.(action.delta);
@@ -78,6 +87,8 @@ export function useNativeController(
     };
     const tick = () => {
       const model = nativeControllerStore.getModel();
+      syncEpoch(model);
+      const epochTag = crossSourceGate.currentEpoch;
       const focused = document.hasFocus() && document.visibilityState === "visible";
       // Not focused, suspended, or no native pad: release everything. Held inputs are
       // re-primed on return, so a button held across a focus change never fires late.
@@ -100,12 +111,19 @@ export function useNativeController(
       // While the native pad is in use the browser path is secondary (virtual pads, same press).
       if (!isNeutral(live)) crossSourceGate.noteNativeActivity(performance.now(), sampleFromNative(live));
       const sample = sampleFromNative(live, bindingsRef.current);
-      for (const action of engine.update(sample, performance.now(), true)) dispatch(action);
+      for (const action of engine.update(sample, performance.now(), true)) dispatch(action, epochTag);
       const held = new Set((stale ? NEUTRAL_SNAPSHOT : model.snapshot)?.buttons ?? []);
       for (const delta of bumpers.update(held.has("l1"), held.has("r1"))) actionsRef.current.section?.(delta);
     };
     const timer = window.setInterval(tick, NATIVE_TICK_MS);
-    const reconcile = () => { void nativeControllerStore.reconcile(); };
+    const reconcile = () => {
+      // Regaining foreground is a resync boundary: anything tagged before it is
+      // stale (double-activation suppression for the recovery path), and the model
+      // epoch is re-synced so the next tick does not advance again.
+      crossSourceGate.advanceEpoch();
+      modelEpoch = nativeControllerStore.getModel().epoch;
+      void nativeControllerStore.reconcile();
+    };
     window.addEventListener("focus", reconcile);
     return () => {
       window.clearInterval(timer);
