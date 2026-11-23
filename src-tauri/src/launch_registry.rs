@@ -1466,6 +1466,7 @@ pub(crate) fn duplicate_launch_decision(
 /// `steamBigPicture`, `playniteFullscreen`). Callers use it before spawning so
 /// a repeated click while a launch is in flight or a session is active can
 /// never produce a second process or registry entry.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn duplicate_launch_for_app(app: &AppHandle, app_id: &str) -> LaunchDecision {
     let registry = app.state::<LaunchRegistry>();
     let state = registry
@@ -1508,18 +1509,6 @@ pub(crate) fn generation_for_launch(app: &AppHandle, launch_id: &str) -> Option<
         .map(|tracked| tracked.sidecar.generation)
 }
 
-/// Last issued generation for an app group (0 when never launched).
-pub(crate) fn generation_for_app(app: &AppHandle, app_id: &str) -> u64 {
-    app.state::<LaunchRegistry>()
-        .state
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .app_generations
-        .get(app_id)
-        .copied()
-        .unwrap_or(0)
-}
-
 /// Bounded transition receipts of one launch, oldest first.
 pub(crate) fn transition_receipts_for_launch(
     app: &AppHandle,
@@ -1549,30 +1538,11 @@ pub(crate) fn transition_receipts_for_launch(
         .unwrap_or_default()
 }
 
-/// Most recent receipts across all launches (bounded), newest first.
-pub(crate) fn recent_transition_receipts(
-    app: &AppHandle,
-    limit: usize,
-) -> Vec<SessionTransitionReceipt> {
-    let registry = app.state::<LaunchRegistry>();
-    let state = registry
-        .state
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut receipts: Vec<SessionTransitionReceipt> = state
-        .launches
-        .iter()
-        .flat_map(|tracked| tracked.sidecar.receipts.iter().cloned())
-        .collect();
-    receipts.sort_by(|a, b| b.at_ms.cmp(&a.at_ms).then(b.seq.cmp(&a.seq)));
-    receipts.truncate(limit.max(1));
-    receipts
-}
-
 /// Records an explicit lifecycle event (e.g. a confirmed close request from
 /// the Edge Cinema adapter) against the launch's deterministic machine.
 /// Invalid events for the current state are ignored and never recorded, so a
 /// stale adapter cannot move a session. Returns the receipt when recorded.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn record_lifecycle_event(
     app: &AppHandle,
     launch_id: &str,
@@ -1601,29 +1571,6 @@ pub(crate) fn record_lifecycle_event(
         tracked.sidecar.receipts.last().cloned()
     } else {
         None
-    }
-}
-
-/// Resets one launch's lifecycle machine back to idle (crash/restart
-/// recovery). The watcher phase is untouched; only the projected machine and
-/// its receipts move.
-pub(crate) fn reset_lifecycle_event(app: &AppHandle, launch_id: &str, at_ms: u64) -> bool {
-    let registry = app.state::<LaunchRegistry>();
-    let mut state = registry
-        .state
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    match state
-        .launches
-        .iter_mut()
-        .find(|tracked| tracked.session.id == launch_id)
-    {
-        Some(tracked) => {
-            let session_id = tracked.session.id.clone();
-            tracked.sidecar.reset(&session_id, at_ms);
-            true
-        }
-        None => false,
     }
 }
 

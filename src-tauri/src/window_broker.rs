@@ -199,6 +199,7 @@ pub(crate) fn classify_foreground_denial(
 /// foreground focus, and an unexplained denial is reported as `unknown`, never
 /// guessed. Used for session-exit diagnostics (the UI surfaces these when a
 /// managed session ends and VELORA tries to come back).
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn restore_outcome_label(
     outcome: RestoreOutcome,
     denial: Option<ForegroundDenial>,

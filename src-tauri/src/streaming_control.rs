@@ -34,6 +34,7 @@ const RIGHT_STICK_DEADZONE: f32 = 0.25;
 /// accessibility/readback API is unavailable, the truthful state is
 /// "unknown", never a guess. Tests below pin this constant so it cannot be
 /// silently flipped.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const PLAYBACK_STATE_READ_SUPPORTED: bool = false;
 
 #[derive(Clone, Debug, Serialize)]
