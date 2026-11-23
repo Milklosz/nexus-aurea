@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  closeManagedSession, emptyManagedSessions, getManagedSessions, listenForManagedSessionUpdate,
-  managedSessionLabels, resumeManagedSession, type ManagedSession, type ManagedSessionsSnapshot,
+  closeManagedSession, emptyManagedSessions, getManagedSessions, lifecycleCauseLabel, listenForManagedSessionUpdate,
+  managedSessionLabels, normalizeSessionReceipt, normalizeSessionReceipts, PLAYBACK_STATE_LIMITATION,
+  resumeManagedSession, safeLifecycleState,
+  type ManagedSession, type ManagedSessionsSnapshot, type SessionTransitionReceipt,
 } from "../services/veloraSessionManager";
+import { resolveSessionSelectionOnFocusRegain } from "../services/windowFocusRestore";
+import { sharedSessionLaunchCoordinator } from "../services/openStreamingService";
+import { withTimeout, STATUS_READ_TIMEOUT_MS } from "../services/withTimeout";
 import "./SessionsPanel.css";
 import { recordSmartHomeLaunch } from "../services/smartHome";
 
 const CLOSE_CONFIRMATION_DELAY_MS = 6500;
+/** How many transition receipts are rendered per session (bounded diagnostics). */
+const RENDERED_RECEIPTS_PER_SESSION = 8;
 type CloseObservation = { sessionId: string; name: string; generation: number; deadlineReached: boolean; timer: number | null };
 
 /** Application-level sessions only: never promises a video timestamp or private account metadata. */
@@ -18,6 +25,8 @@ export function SessionsPanel() {
   const [message, setMessage] = useState("");
   const [reading, setReading] = useState(true);
   const [showIdleApps, setShowIdleApps] = useState(false);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [openDiagnostics, setOpenDiagnostics] = useState<string | null>(null);
   const [unconfirmedClose, setUnconfirmedClose] = useState<{ sessionId: string; name: string } | null>(null);
   const alive = useRef(false);
   const busy = useRef(false);
@@ -25,6 +34,19 @@ export function SessionsPanel() {
   const dirty = useRef(false);
   const actionGeneration = useRef(0);
   const closeObservation = useRef<CloseObservation | null>(null);
+  const selectedSessionRef = useRef<string | null>(null);
+  selectedSessionRef.current = selectedSessionId;
+
+  /** Restores the session selection (e.g. when VELORA regains window focus). */
+  const restoreSelection = useCallback((next: ManagedSessionsSnapshot) => {
+    const decision = resolveSessionSelectionOnFocusRegain({
+      sessions: next.sessions,
+      selectedSessionId: selectedSessionRef.current,
+      overlayOpen: false,
+    });
+    if (decision.action === "restore") setSelectedSessionId(decision.sessionId);
+    else if (decision.action === "clear") setSelectedSessionId(null);
+  }, []);
 
   const cancelCloseObservation = useCallback(() => {
     const observation = closeObservation.current;
@@ -45,10 +67,16 @@ export function SessionsPanel() {
         dirty.current = false;
         readGeneration = actionGeneration.current;
         const expiredObservation = closeObservation.current?.deadlineReached === true;
-        const next = await getManagedSessions();
+        // Bounded read: reuse the withTimeout pattern so a hung IPC reports a
+        // truthful failure instead of freezing the panel. No new polling.
+        const next = await withTimeout(getManagedSessions(), STATUS_READ_TIMEOUT_MS, "Odczyt sesji");
         if (!alive.current) return;
         if (readGeneration !== actionGeneration.current) { dirty.current = true; continue; }
         setSnapshot(next);
+        // Keep the client-side launch coordinator in sync with the native
+        // registry (single source of truth for duplicate-launch prevention).
+        sharedSessionLaunchCoordinator.syncFromSnapshot(next);
+        restoreSelection(next);
         setConfirmClose(current => next.sessions.some(session => session.sessionId === current && session.canClose) ? current : null);
         const closing = closeObservation.current;
         if (closing && closing.generation === readGeneration) {
@@ -89,7 +117,12 @@ export function SessionsPanel() {
       if (!disposed) stop = unlisten;
       else unlisten();
     }).catch(() => {});
-    const onFocus = () => { void refresh(); };
+    const onFocus = () => {
+      // VELORA regained window focus: refresh (bounded) and restore the
+      // session selection. Foreground restoration of a managed window is a
+      // separate native, best-effort action — Windows may deny it.
+      void refresh();
+    };
     window.addEventListener("focus", onFocus);
     return () => {
       disposed = true; alive.current = false; actionGeneration.current += 1;
@@ -151,20 +184,40 @@ export function SessionsPanel() {
     </header>
     {!snapshot.supported && !reading && <p>Sesje aplikacji są dostępne w natywnej wersji Windows.</p>}
     {snapshot.supported && snapshot.sessions.length === 0 && !reading && <p>Brak sesji. Otwórz usługę z ekranu głównego.</p>}
-    {snapshot.sessions.map(session => <article className="velora-session" key={session.sessionId}>
-      <div><strong>{session.name}</strong><span>{managedSessionLabels[session.state]}</span></div>
+    {snapshot.sessions.map(session => {
+      const selected = session.sessionId === selectedSessionId;
+      const receipts = normalizeSessionReceipts(session.transitionReceipts, RENDERED_RECEIPTS_PER_SESSION);
+      const lastTransition = normalizeSessionReceipt(session.lastTransition) ?? receipts[receipts.length - 1] ?? null;
+      const lifecycle = session.lifecycle !== undefined ? safeLifecycleState(session.lifecycle) : null;
+      return <article className={selected ? "velora-session velora-session--selected" : "velora-session"} key={session.sessionId}
+        aria-current={selected ? "true" : undefined}>
+      <div><strong>{session.name}</strong><span>{managedSessionLabels[session.state]}{lifecycle ? ` · ${lifecycle}` : ""}</span></div>
       <div className="velora-session-actions">
         <button type="button" disabled={!session.canResume || pending !== null || reading} onClick={() => void act(session, "resume")}
           aria-label={`Wznów ${session.name}`} aria-busy={pending === session.sessionId}>Wznów</button>
         {session.canClose && <button type="button" disabled={pending !== null || reading}
           onClick={() => setConfirmClose(session.sessionId)} aria-label={`Zamknij ${session.name}`}>Zamknij okno</button>}
+        <button type="button" disabled={reading} aria-expanded={openDiagnostics === session.sessionId}
+          aria-controls={`velora-session-diagnostics-${session.sessionId}`}
+          onClick={() => setOpenDiagnostics(current => current === session.sessionId ? null : session.sessionId)}
+          aria-label={`Diagnostyka ${session.name}`}>Diagnostyka</button>
       </div>
       {confirmClose === session.sessionId && <div className="velora-session-confirm" role="group" aria-label={`Potwierdzenie zamknięcia ${session.name}`}>
         <p>Zamknąć okno {session.name}? Odtwarzanie może zostać przerwane.</p>
         <button type="button" disabled={pending !== null} onClick={() => void act(session, "close")}>Potwierdź zamknięcie {session.name}</button>
         <button type="button" disabled={pending !== null} onClick={() => setConfirmClose(null)}>Anuluj zamknięcie</button>
       </div>}
-    </article>)}
+      {openDiagnostics === session.sessionId && <div className="velora-session-diagnostics" id={`velora-session-diagnostics-${session.sessionId}`}>
+        <p>Właściciel sesji: {session.managedByVelora === false ? "inny program" : "VELORA"}{typeof session.launchId === "string" ? ` (launch ${session.launchId})` : ""}{typeof session.generation === "number" ? `, generacja ${session.generation}` : ""}</p>
+        {session.lastFailure && <p className="velora-session-error">Ostatni błąd: {session.lastFailure}</p>}
+        {lastTransition && <p>Ostatnie przejście: {lastTransition.from} → {lastTransition.to} — {lifecycleCauseLabel(lastTransition.cause)}</p>}
+        {receipts.length > 0 && <ul>{receipts.map((receipt: SessionTransitionReceipt) =>
+          <li key={receipt.seq}>#{receipt.seq} {receipt.from} → {receipt.to} — {lifecycleCauseLabel(receipt.cause)}</li>)}
+        </ul>}
+        <p>{PLAYBACK_STATE_LIMITATION}</p>
+      </div>}
+    </article>;
+    })}
     {snapshot.supported && (snapshot.applications ?? []).some(app => app.state === "notRunning") && <div>
       <button type="button" aria-expanded={showIdleApps} aria-controls="velora-idle-applications"
         onClick={() => setShowIdleApps(current => !current)}>Pozostałe aplikacje</button>

@@ -1,4 +1,4 @@
-import type { SessionRecovery } from "./sessionOrchestrator";
+import type { RecoveryReason, SessionRecovery } from "./sessionOrchestrator";
 
 /**
  * Text for the one-time notice shown after VELORA restarts.
@@ -12,4 +12,15 @@ export function startupRecoveryNotice(recovery: SessionRecovery | null | undefin
   if (!recovery) return null;
   const message = recovery.message.trim();
   return message.length > 0 ? message : null;
+}
+
+/** Truthful Polish label for a crash/restart recovery reason (mirror of Rust `recovery_reason_label`). */
+export function recoveryCauseLabel(reason: RecoveryReason | null | undefined): string {
+  switch (reason) {
+    case "unexpectedExit": return "nieoczekiwane zakończenie poprzedniego procesu VELORA";
+    case "cleanRestart": return "czysty restart VELORA";
+    case "corruptState": return "uszkodzony zapisany stan sesji";
+    case "orphanedLaunch": return "osierocony kontekst uruchomienia";
+    default: return "nieznana przyczyna odzyskania stanu";
+  }
 }
