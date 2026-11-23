@@ -3147,15 +3147,22 @@ mod tests {
     #[test]
     fn phase3_no_alternate_transport_or_weak_tls_literals_in_the_lan_server() {
         let source = production_source();
+        // The forbidden tokens are assembled at runtime so this test module
+        // itself never introduces the raw literal into the scanned file (the
+        // TypeScript invariant suite scans this file as text and fails on them).
         for forbidden in [
-            "danger_accept_invalid_certs",
-            "danger_accept_invalid_hostnames",
-            "accept_invalid",
-            "no-cors",
+            concat!("danger_accept_", "invalid_certs"),
+            concat!("danger_accept_", "invalid_hostnames"),
+            concat!("accept_", "invalid"),
+            concat!("no-", "cors"),
+            concat!("skip ", "verification"),
             "WebSocket",
-            "send_beacon",
+            concat!("send_", "beacon"),
         ] {
-            assert!(!source.contains(forbidden), "remote_access.rs must not contain {forbidden}");
+            assert!(
+                !source.contains(forbidden),
+                "remote_access.rs must not contain {forbidden}"
+            );
         }
         // TLS stays rustls from the vault CA; the trust gate is unchanged.
         assert!(source.contains("RustlsConfig::from_pem"));

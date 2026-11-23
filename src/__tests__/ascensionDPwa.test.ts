@@ -119,9 +119,12 @@ function makeIndexedDB(initial: Record<string, unknown> | null) {
 
 interface CommandBehavior {
   run: (init?: { signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; json?: () => Promise<unknown> }>;
-  resolve?: (response: { ok: boolean; status: number }) => void;
-  reject?: (error: Error) => void;
+  resolve: (response: { ok: boolean; status: number }) => void;
+  reject: (error: Error) => void;
 }
+
+const noopResolve = (): void => {};
+const noopReject = (): void => {};
 
 function manualBehavior(): CommandBehavior {
   let resolve!: (response: { ok: boolean; status: number }) => void;
@@ -142,15 +145,17 @@ function abortableBehavior(): CommandBehavior {
         reject(error);
       });
     }),
+    resolve: noopResolve,
+    reject: noopReject,
   };
 }
 
 function fixedBehavior(status: number): CommandBehavior {
-  return { run: () => Promise.resolve({ ok: status < 400, status }) };
+  return { run: () => Promise.resolve({ ok: status < 400, status }), resolve: noopResolve, reject: noopReject };
 }
 
 function rejectBehavior(error: Error): CommandBehavior {
-  return { run: () => Promise.reject(error) };
+  return { run: () => Promise.reject(error), resolve: noopResolve, reject: noopReject };
 }
 
 function makeFetch() {
@@ -362,9 +367,7 @@ describe("ascension D: PWA fail-closed command path (vm)", () => {
     expect(bodies[1].signature).not.toBe(bodies[0].signature);
     expect(bodies[0].deviceId).toBe(DEVICE_ID);
 
-    // Let the queued one finish too.
-    const second = sandbox.fetchKit.commandBehaviors.length > 0 ? undefined : undefined;
-    void second;
+    // Let the queued one finish too (default behavior: 204).
     await pumpUntil(sandbox.timers, () => sandbox.elements.get("remote-message")?.textContent === "Wysłano: Home.");
     expect(sandbox.homeButton.disabled).toBe(false);
   });

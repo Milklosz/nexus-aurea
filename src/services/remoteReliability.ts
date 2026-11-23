@@ -933,7 +933,7 @@ export class RemoteOutboundPipeline {
         await this.dispatchEntry(entry, request);
         // Only remove the entry when it left the queue (settled / unknown).
         // A Wi-Fi loss re-queues it: it stays in front for the next pump.
-        if (entry.state !== "queued") this.queue.dequeue();
+        if ((entry.state as OutboundEntryState) !== "queued") this.queue.dequeue();
       }
     } finally {
       this.inFlight = false;

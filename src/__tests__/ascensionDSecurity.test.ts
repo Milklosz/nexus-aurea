@@ -56,7 +56,6 @@ const rust = read("src-tauri/src/remote_access.rs");
 const reliability = read("src-tauri/src/remote_reliability.rs");
 const allPwa = pwaFiles.map(read).join("\n");
 const allTs = tsFiles.map(read).join("\n");
-const allRust = rustFiles.map(read).join("\n");
 
 describe("ascension D: no weakened TLS / alternate transports / web-storage secrets in remote code", () => {
   it("forbids certificate-validation bypasses and no-cors in every owned remote file", () => {
