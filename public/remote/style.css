@@ -61,6 +61,10 @@ h1 { margin: 10px 0; font-size: clamp(2rem, 8vw, 3rem); font-weight: 450; letter
 .remote-row > span { min-width: 0; }
 .remote-note { margin: 18px 0 0; padding-top: 14px; border-top: 1px solid rgba(255,255,255,.12); }
 .remote-note[data-kind="error"] { color: #e9b1a7; }
+.unknown-panel { margin-top: 12px; padding: 12px 14px; border: 1px solid rgba(228,143,130,.5); border-radius: 14px; background: rgba(228,143,130,.07); }
+.unknown-panel[hidden] { display: none; }
+.unknown-panel .remote-note { margin: 0; padding-top: 0; border-top: 0; color: #e9b1a7; }
+.unknown-panel button { min-height: 42px; margin-top: 8px; padding: 6px 14px; border-radius: 12px; font-size: 11px; }
 button:disabled { cursor: not-allowed; opacity: .42; }
 footer { width: min(100%, 520px); padding-top: 18px; color: #8f8981; font-size: 9px; letter-spacing: .12em; text-align: center; }
 @media (max-height: 720px) {

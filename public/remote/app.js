@@ -17,6 +17,18 @@
     rejectedUnconfirmedRecord: false,
   };
   const RECONNECT_MAX_ATTEMPTS = 8;
+  // Phase 3 (fail-closed outbound pipeline): bounded AUTOMATIC retries apply ONLY
+  // to requests that provably never reached the server. An ambiguous timeout
+  // after send is marked "unknown" and needs explicit re-confirmation — it is
+  // never blindly retried (the server persists last_sequence before emit).
+  const OUTBOUND_MAX_AUTO_RETRIES = 3;
+  // Prepared outbound entries, deduped by commandId; at most one is in flight.
+  const outboundQueue = [];
+  // Entries whose outcome is unknown after send — re-sent ONLY on explicit
+  // user re-confirmation, with the SAME sequence + signature (never re-signed).
+  const unknownOutbound = [];
+  // User taps accepted while another command is in flight or while offline.
+  const pendingIntents = [];
   let statusRequestId = 0;
   let commandRequestId = 0;
   const connection = document.getElementById("connection-state");
@@ -125,6 +137,74 @@
     return new Uint8Array(bytes);
   }
 
+  // Deterministic correlation id (FNV-1a 32-bit over deviceId + sequence) — NOT a
+  // signature, never sent to the server; used only to dedup the local queue.
+  function commandIdFor(deviceId, sequence) {
+    const joined = ["remote", String(deviceId), String(sequence)].join("\u001f");
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < joined.length; index += 1) {
+      hash ^= joined.charCodeAt(index);
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return "velora-" + hash.toString(16).padStart(8, "0");
+  }
+
+  function outboundHasId(commandId) {
+    return outboundQueue.some((entry) => entry.commandId === commandId)
+      || unknownOutbound.some((entry) => entry.commandId === commandId);
+  }
+
+  function removeOutboundEntry(entry) {
+    let index = outboundQueue.indexOf(entry);
+    if (index >= 0) outboundQueue.splice(index, 1);
+    index = unknownOutbound.indexOf(entry);
+    if (index >= 0) unknownOutbound.splice(index, 1);
+    renderUnknownPanel();
+  }
+
+  // An outcome that is unknown after send (timeout / 409 / connection lost after
+  // send) must never be blindly retried: the server may have applied it already.
+  // The entry moves to the "unknown" list and waits for explicit re-confirmation.
+  function markEntryUnknown(entry) {
+    if (entry.state === "unknown") return;
+    entry.state = "unknown";
+    const index = outboundQueue.indexOf(entry);
+    if (index >= 0) outboundQueue.splice(index, 1);
+    if (!unknownOutbound.includes(entry)) unknownOutbound.push(entry);
+    renderUnknownPanel();
+  }
+
+  function setElementText(id, text) {
+    const element = document.getElementById(id);
+    if (element) element.textContent = text;
+  }
+
+  function renderUnknownPanel() {
+    const panel = document.getElementById("unknown-panel");
+    const confirm = document.getElementById("unknown-confirm");
+    const note = document.getElementById("unknown-note");
+    const hasUnknown = unknownOutbound.length > 0;
+    if (panel) panel.hidden = !hasUnknown;
+    if (confirm) {
+      confirm.hidden = !hasUnknown;
+      confirm.disabled = !state.secure || !navigator.onLine || state.inFlight || state.statusInFlight || !state.paired;
+    }
+    if (note && hasUnknown) {
+      note.textContent = "Nieznany wynik: "
+        + unknownOutbound.map((entry) => commandLabels[entry.command] || entry.command).join(", ")
+        + ". Dotknij tego samego przycisku, aby potwierdzić wysłanie dokładnie tego samego podpisanego polecenia.";
+    }
+  }
+
+  function waitMs(ms) {
+    return new Promise((resolve) => { setTimeout(resolve, ms); });
+  }
+
+  // Bounded exponential backoff for provably never-sent automatic retries.
+  function outboundRetryDelayMs(attempt) {
+    return Math.min(200 * 2 ** Math.max(0, attempt), 1600);
+  }
+
   function updateControls() {
     const canSend = state.secure && state.serverReady && state.storageReady && state.paired && navigator.onLine && !state.inFlight && !state.statusInFlight;
     for (const button of commandButtons) button.disabled = !canSend;
@@ -132,6 +212,9 @@
     if (!canSend) touchGesture = null;
     pairButton.disabled = !state.secure || !state.serverReady || !state.storageReady || state.paired || !navigator.onLine || state.inFlight || state.statusInFlight;
     if (retryButton) retryButton.disabled = !state.secure || !navigator.onLine || state.statusInFlight || state.inFlight;
+    // Pairing lifecycle UX: this device's identity is visible once paired.
+    setElementText("device-id", state.record && state.record.deviceId ? state.record.deviceId : "—");
+    renderUnknownPanel();
   }
 
   function bytesToBase64Url(bytes) {
@@ -330,6 +413,9 @@
       }
       updateControls();
     }
+    // After a verified reconnect, resume ONLY the never-sent queued intents.
+    // "unknown" entries are never auto-replayed — they need re-confirmation.
+    void drainPendingIntents();
   }
 
   function onReconnect(requirePriorVerification = false) {
@@ -582,25 +668,89 @@
             showMessage("Inna karta pilota wysyła polecenie. Poczekaj i spróbuj ręcznie.", true);
             return;
           }
-          await sendCommandUnlocked(command);
+          await sendCommandQueued(command);
         });
       } catch {
         showMessage("Nie można bezpiecznie zarezerwować polecenia. Odśwież pilot.", true);
       }
       return;
     }
-    await sendCommandUnlocked(command);
+    await sendCommandQueued(command);
+  }
+
+  // Phase 3 fail-closed entry point. Re-tapping a command whose outcome is
+  // "unknown" re-sends the SAME signed entry (explicit re-confirmation);
+  // otherwise the tap joins the outbound queue behind the single in-flight
+  // request — or waits while the iPhone is offline.
+  async function sendCommandQueued(command) {
+    if (!Object.prototype.hasOwnProperty.call(commandLabels, command)) return;
+    if (!state.secure || !state.serverReady || !state.storageReady || !state.paired || !state.record) return;
+    const unknown = unknownOutbound.find((entry) => entry.command === command);
+    if (unknown) {
+      if (state.inFlight || state.statusInFlight || !navigator.onLine) return;
+      await reconfirmEntry(unknown);
+      return;
+    }
+    if (!navigator.onLine) {
+      // Wi-Fi loss: queue the command. It was never on the wire, so sending it
+      // after a verified reconnect cannot replay anything.
+      pendingIntents.push(command);
+      showMessage("iPhone jest offline. Polecenie zapisane w kolejce — zostanie wysłane po ponownym połączeniu.", true);
+      return;
+    }
+    if (state.inFlight || state.statusInFlight) {
+      pendingIntents.push(command);
+      showMessage("Polecenie czeka w kolejce za bieżącym.");
+      return;
+    }
+    await runSingleCommand(command);
+  }
+
+  async function runSingleCommand(command) {
+    state.inFlight = true;
+    showMessage("Wysyłam: " + (commandLabels[command] || "polecenie") + "…");
+    updateControls();
+    try {
+      await sendCommandUnlocked(command);
+    } finally {
+      state.inFlight = false;
+      updateControls();
+      void drainPendingIntents();
+    }
+  }
+
+  // Sends the never-sent queued intents one at a time (single in-flight kept).
+  // "unknown" entries are deliberately NOT drained here.
+  async function drainPendingIntents() {
+    while (pendingIntents.length > 0
+      && !state.inFlight && !state.statusInFlight
+      && navigator.onLine && state.secure && state.serverReady
+      && state.storageReady && state.paired && state.record) {
+      const next = pendingIntents.shift();
+      await runSingleCommand(next);
+    }
+  }
+
+  // Explicit user re-confirmation: re-sends the EXACT same signed entry (same
+  // sequence + signature). The server can only answer dedup-2xx / 409 / 401 —
+  // a second side effect is impossible.
+  async function reconfirmEntry(entry) {
+    state.inFlight = true;
+    showMessage("Potwierdzam ponownie: " + (commandLabels[entry.command] || "polecenie") + "…");
+    updateControls();
+    try {
+      await dispatchEntry(entry, state.record, ++commandRequestId);
+    } finally {
+      state.inFlight = false;
+      updateControls();
+    }
   }
 
   async function sendCommandUnlocked(command) {
     if (!Object.prototype.hasOwnProperty.call(commandLabels, command)
       || !state.secure || !state.serverReady || !state.storageReady || !state.paired
-      || !state.record || state.inFlight || state.statusInFlight || !navigator.onLine) return;
+      || !state.record || state.statusInFlight || !navigator.onLine) return;
     const requestId = ++commandRequestId;
-    state.inFlight = true;
-    const commandLabel = commandLabels[command] || "polecenie";
-    showMessage("Wysyłam: " + commandLabel + "…");
-    updateControls();
     try {
       const expectedRecord = state.record;
       const record = await reserveSequence(expectedRecord);
@@ -619,48 +769,115 @@
         new TextEncoder().encode(payload),
       );
       if (requestId !== commandRequestId) return;
-      const response = await fetchWithTimeout("./api/command", {
-        method: "POST",
-        cache: "no-store",
-        credentials: "omit",
-        referrerPolicy: "no-referrer",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          deviceId: record.deviceId,
-          sequence,
-          command,
-          signature: bytesToBase64Url(new Uint8Array(signature)),
-        }),
-      });
-      if (requestId !== commandRequestId) return;
-      if (response.status === 401) {
-        state.authorizationRejected = true;
-        state.verified = false;
-        state.rejectedRecord = { deviceId: record.deviceId, credentialGeneration: record.credentialGeneration };
-        state.record = null;
-        state.paired = false;
-        pairingForm.hidden = false;
-        pairingState.textContent = "wymagane ponowne parowanie";
-        setConnectionState("wymagane parowanie", "needs-pairing");
-        await rejectStoredRecord(record);
+      const commandId = commandIdFor(record.deviceId, sequence);
+      if (outboundHasId(commandId)) return; // dedup by commandId
+      const entry = {
+        command,
+        sequence,
+        commandId,
+        deviceId: record.deviceId,
+        credentialGeneration: record.credentialGeneration,
+        signature: bytesToBase64Url(new Uint8Array(signature)),
+        attempts: 0,
+        state: "sending",
+      };
+      outboundQueue.push(entry);
+      await dispatchEntry(entry, record, requestId);
+    } catch {
+      if (requestId === commandRequestId) {
+        showMessage("Połączenie przerwane. Polecenie nie zostało automatycznie ponowione.", true);
+      }
+    }
+  }
+
+  // One outbound attempt loop with the fail-closed retry policy. EVERY attempt
+  // reuses the entry's EXACT signed bytes — the sequence is never incremented
+  // and the payload is never re-signed on a retry.
+  async function dispatchEntry(entry, record, requestId) {
+    const commandLabel = commandLabels[entry.command] || "polecenie";
+    try {
+      while (true) {
+        let response;
+        try {
+          response = await fetchWithTimeout("./api/command", {
+            method: "POST",
+            cache: "no-store",
+            credentials: "omit",
+            referrerPolicy: "no-referrer",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              deviceId: entry.deviceId,
+              sequence: entry.sequence,
+              command: entry.command,
+              signature: entry.signature,
+            }),
+          });
+        } catch (error) {
+          const label = String((error && (error.name + " " + error.message)) || error || "");
+          // "never reached the server" is provable only when the browser is
+          // offline, or on a DNS / connect-refused network error before send.
+          const neverReached = !navigator.onLine
+            || (!/abort|timeout|timed.?out/i.test(label)
+              && /network|failed to fetch|fetch failed|econnreset|econnrefused|enotfound|dns/i.test(label));
+          // Bounded automatic retries ONLY for provably never-sent requests,
+          // with exponential backoff, reusing the SAME sequence + signature.
+          if (neverReached && entry.attempts < OUTBOUND_MAX_AUTO_RETRIES) {
+            entry.attempts += 1;
+            await waitMs(outboundRetryDelayMs(entry.attempts));
+            if (requestId !== commandRequestId) return;
+            if (!navigator.onLine) {
+              // Dropped again mid-wait: keep it queued for a verified
+              // reconnect — it was never sent, so it is not "unknown".
+              entry.state = "queued";
+              return;
+            }
+            continue;
+          }
+          // Ambiguous after send (our deadline fired after the request left, or
+          // any other post-send loss): NEVER blindly retried — the server may
+          // have persisted the sequence and applied the command already.
+          markEntryUnknown(entry);
+          if (requestId === commandRequestId) {
+            showMessage("Połączenie przerwane. Polecenie nie zostało automatycznie ponowione.", true);
+          }
+          return;
+        }
         if (requestId !== commandRequestId) return;
-        showMessage("VELORA nie akceptuje już poświadczeń tego iPhone'a. Sparuj go ponownie z nowym kodem.", true);
-      } else if (response.status === 409) {
-        showMessage("VELORA nie może potwierdzić wyniku polecenia. Sprawdź stan urządzenia przed ręcznym ponowieniem.", true);
-      } else if (response.status === 429) {
-        showMessage("VELORA chwilowo ogranicza liczbę poleceń. Poczekaj i sprawdź stan urządzenia.", true);
-      } else if (!response.ok) {
-        showMessage("VELORA nie potwierdziła polecenia. Sprawdź stan urządzenia przed ręcznym ponowieniem.", true);
-      } else {
-        showMessage("Wysłano: " + commandLabel + ".");
+        if (response.status === 401) {
+          // Replay-rejected / revoked: surface a clear state and unpair.
+          state.authorizationRejected = true;
+          state.verified = false;
+          state.rejectedRecord = { deviceId: entry.deviceId, credentialGeneration: entry.credentialGeneration };
+          state.record = null;
+          state.paired = false;
+          pairingForm.hidden = false;
+          pairingState.textContent = "wymagane ponowne parowanie";
+          setConnectionState("wymagane parowanie", "needs-pairing");
+          removeOutboundEntry(entry);
+          await rejectStoredRecord(record);
+          if (requestId !== commandRequestId) return;
+          showMessage("VELORA nie akceptuje już poświadczeń tego iPhone'a. Sparuj go ponownie z nowym kodem.", true);
+        } else if (response.status === 409) {
+          // Sequence reserved but no receipt: the outcome is unknown. Surface
+          // it; re-confirmation re-sends the same signed bytes.
+          markEntryUnknown(entry);
+          showMessage("VELORA nie może potwierdzić wyniku polecenia. Sprawdź stan urządzenia przed ręcznym ponowieniem.", true);
+        } else if (response.status === 429) {
+          removeOutboundEntry(entry);
+          showMessage("VELORA chwilowo ogranicza liczbę poleceń. Poczekaj i sprawdź stan urządzenia.", true);
+        } else if (!response.ok) {
+          removeOutboundEntry(entry);
+          showMessage("VELORA nie potwierdziła polecenia. Sprawdź stan urządzenia przed ręcznym ponowieniem.", true);
+        } else {
+          removeOutboundEntry(entry);
+          showMessage("Wysłano: " + commandLabel + ".");
+        }
+        return;
       }
     } catch {
       if (requestId === commandRequestId) {
         showMessage("Połączenie przerwane. Polecenie nie zostało automatycznie ponowione.", true);
       }
-    } finally {
-      state.inFlight = false;
-      updateControls();
     }
   }
 
@@ -712,8 +929,17 @@
   // Read and clear the short-lived fragment once, on every load. The value is
   // a transient prefill hint only; clearing prevents a later navigation from
   // reusing the code.
+  let rawFragment = "";
+  try { rawFragment = String(window.location.hash || ""); } catch { rawFragment = ""; }
+  const hadPairFragment = /^#pair=\d{6}&exp=\d{1,12}$/.test(rawFragment);
   const fragmentPairing = readPairingFragment();
   clearPairingFragment();
+  // QR onboarding status states (purely local — the code never leaves the page).
+  setElementText("qr-onboarding-state", fragmentPairing
+    ? "kod z QR aktywny"
+    : hadPairFragment
+      ? "kod z QR wygasł — wygeneruj nowy w Control Center"
+      : "—");
 
   if (!state.secure || !window.crypto?.subtle || !window.indexedDB) {
     state.secure = false;
@@ -723,6 +949,10 @@
     for (const button of commandButtons) {
       button.addEventListener("click", () => void sendCommand(button.dataset.command));
     }
+    document.getElementById("unknown-confirm")?.addEventListener("click", () => {
+      const entry = unknownOutbound[0];
+      if (entry) void reconfirmEntry(entry);
+    });
     if (fragmentPairing) {
       const codeInput = document.getElementById("pairing-code");
       if (codeInput) codeInput.value = fragmentPairing.code;
@@ -740,6 +970,12 @@
   window.addEventListener("offline", () => {
     statusRequestId += 1;
     commandRequestId += 1;
+    // Wi-Fi loss: an in-flight command is now AMBIGUOUS (it may or may not have
+    // been applied). It is marked "unknown" and queued for explicit
+    // re-confirmation — never automatically re-sent.
+    for (const entry of [...outboundQueue]) {
+      if (entry.state === "sending") markEntryUnknown(entry);
+    }
     showOfflineStatus();
   });
     window.addEventListener("online", () => onReconnect(true));
