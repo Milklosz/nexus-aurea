@@ -54,6 +54,9 @@ import {
   formatPairingCountdown,
   pairingRemainingSeconds,
 } from "../services/remoteReliability";
+import { SystemOverviewCard } from "./SystemOverviewCard";
+import { RecoveryActionsPanel } from "./RecoveryActionsPanel";
+import "./ControlCenterExtra.css";
 
 const STORE_STATE_LABELS: Record<string, string> = {
   unavailable: "niedostępny",
@@ -614,6 +617,7 @@ export function ControlCenter(props: ControlCenterProps) {
     </nav>
 
     <div className="cc-stage">
+      <SystemOverviewCard remoteStatus={remoteStatus} remoteStatusReady={remoteStatusReady} remoteStatusLoading={remoteStatusLoading} />
       <section id="cc-panel-cinema" className="cc-panel cc-cinema-panel" role="tabpanel"
         aria-labelledby="cc-tab-cinema" tabIndex={0} hidden={activePanel !== "cinema"}>
         <div className="cc-card-grid">
@@ -701,6 +705,7 @@ export function ControlCenter(props: ControlCenterProps) {
           <AutostartPanel />
           <AudioControls />
           <DesktopRecoveryControls />
+          <RecoveryActionsPanel onShowDesktop={props.onShowDesktop} />
           {activePanel === "cinema" && <TvModePanel />}
         </div>
         {error && <p className="cc-feedback cc-error" role="alert">{error}</p>}
