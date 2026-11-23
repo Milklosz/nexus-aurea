@@ -102,6 +102,18 @@
   /* ---- focus lift (tile) ---- */
   --lr-lift: translateY(calc(var(--lr-px) * -6)) scale(1.06);
   --lr-press: translateY(calc(var(--lr-px) * -3)) scale(1.03);
+
+  /* ---- 4K fluid type & spacing for the Home sections row ----
+     clamp() between the 1080p reference floor and the 4K ceiling, so the row
+     scales smoothly with the window instead of jumping at breakpoints. */
+  --lr-fs-section-title: clamp(16px, calc(var(--lr-px) * 22), 40px);
+  --lr-fs-section-tile: clamp(18px, calc(var(--lr-px) * 26), 48px);
+  --lr-fs-section-badge: clamp(13px, calc(var(--lr-px) * 18), 32px);
+  --lr-s-section-gap: clamp(10px, calc(var(--lr-px) * 16), 32px);
+  --lr-s-section-row-gap: clamp(14px, calc(var(--lr-px) * 24), 48px);
+  --lr-section-tile-w: clamp(140px, calc(var(--lr-px) * 200), 380px);
+  --lr-section-tile-h: clamp(56px, calc(var(--lr-px) * 72), 140px);
+  --lr-section-radius: clamp(10px, calc(var(--lr-px) * 14), 26px);
 }
 
 /* Control Center, diagnostics and the on-screen keyboard are rem-based. Scale the root with the canvas so they stay readable at 4K

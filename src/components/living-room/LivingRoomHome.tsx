@@ -1,9 +1,11 @@
-import { useRef, type ReactNode, type RefObject } from "react";
+import { useEffect, useRef, type ReactNode, type RefObject } from "react";
 import type { StreamingService } from "../../data/streamingServices";
 import { useAppManagerSnapshot } from "../../hooks/useAppManagerSnapshot";
 import { focusContext } from "../../theme/living-room/content";
+import { readHomeFocusMemory, saveHomeDockFocus } from "../../services/homeSections";
 import { FocusInfo } from "./FocusInfo";
 import { dockServiceState, LivingDock } from "./LivingDock";
+import { HomeSections } from "./HomeSections";
 import { SceneLayer } from "./SceneLayer";
 import { TopBar } from "./TopBar";
 import "../../theme/living-room/livingRoom.css";
@@ -42,6 +44,27 @@ export function LivingRoomHome(props: LivingRoomHomeProps) {
     lastIndex.current = props.activeIndex;
   }
 
+  // Focus memory: persist the last-focused dock tile and restore it on Home mount,
+  // so returning to Home lands where the user left, not always on the first tile.
+  const propsRef = useRef(props);
+  propsRef.current = props;
+  useEffect(() => {
+    const initial = propsRef.current;
+    const memory = readHomeFocusMemory();
+    const index = memory.dockIndex;
+    if (index !== null && index >= 0 && index < initial.services.length) {
+      initial.onFocus(index);
+      initial.buttonRefs.current[index]?.focus({ preventScroll: true });
+    }
+    // Runs once on Home mount; later focus changes go through handleDockFocus below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleDockFocus = (index: number) => {
+    saveHomeDockFocus(index);
+    props.onFocus(index);
+  };
+
   return (
     <>
       <SceneLayer sceneId={selected.id} />
@@ -56,13 +79,20 @@ export function LivingRoomHome(props: LivingRoomHomeProps) {
       />
       {props.aside}
       <FocusInfo serviceId={selected.id} title={selected.name} parts={context.parts} direction={direction.current} />
+      <HomeSections
+        services={props.services}
+        launchingIds={props.launchingIds}
+        appManager={appManager}
+        onActivate={props.onActivate}
+        onUnavailable={props.onUnavailable}
+      />
       <LivingDock
         services={props.services}
         activeIndex={props.activeIndex}
         launchingIds={props.launchingIds}
         appManager={appManager}
         buttonRefs={props.buttonRefs}
-        onFocus={props.onFocus}
+        onFocus={handleDockFocus}
         onActivate={props.onActivate}
         onUnavailable={props.onUnavailable}
       />
