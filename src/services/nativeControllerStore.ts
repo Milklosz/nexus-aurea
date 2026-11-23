@@ -152,11 +152,19 @@ export class NativeControllerStore {
     void this.reconcile();
   }
 
+  /**
+   * A fresh model whose connection epoch never goes backwards, so a replayed
+   * pre-stop/pre-reset event tag can never become current again after a restart.
+   */
+  private freshModel(): NativeControllerModel {
+    return { ...initialNativeControllerModel, epoch: this.model.epoch };
+  }
+
   private stop(): void {
     this.generation += 1;
     this.unlisten?.();
     this.unlisten = null;
-    this.model = initialNativeControllerModel;
+    this.model = this.freshModel();
     this.status = disabledNativeControllerStatus;
     this.statusKnown = false;
     this.statusReadEpoch += 1;
@@ -168,14 +176,14 @@ export class NativeControllerStore {
     this.statusKnown = true;
     // Not Windows (or no native layer): stay quiet and let the Gamepad API path run.
     if (!status.supported) {
-      this.model = initialNativeControllerModel;
+      this.model = this.freshModel();
       this.emit();
       return;
     }
     if (!status.running) {
       if (status.lastError) this.apply({ kind: "unavailable", reason: status.lastError });
       else {
-        this.model = initialNativeControllerModel;
+        this.model = this.freshModel();
         this.emit();
       }
       return;
