@@ -1067,6 +1067,53 @@ pub(crate) fn restore_velora_after_session_end(
 
 static MONITOR_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static MONITOR_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static MONITOR_HANDLE: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
+/// Sleep slice so the stop flag is observed within ~100 ms on shutdown.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const MONITOR_STOP_SLICE: std::time::Duration = std::time::Duration::from_millis(100);
+/// Upper bound for the shutdown join — a monitor must never hang Exit.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const MONITOR_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Sleeps `total` in short slices, returning early once the stop flag is set.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn sleep_interruptibly(total: std::time::Duration) {
+    use std::sync::atomic::Ordering;
+    let deadline = std::time::Instant::now() + total;
+    loop {
+        if MONITOR_STOP.load(Ordering::Acquire) {
+            return;
+        }
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return;
+        }
+        std::thread::sleep(MONITOR_STOP_SLICE.min(deadline - now));
+    }
+}
+
+/// Joins the foreground-monitor thread with a bounded wait so the Exit handler
+/// can never hang on a monitor. Returns false only on timeout; the thread
+/// still exits on its own because it sleeps in slices.
+fn join_monitor_bounded() -> bool {
+    let handle = match MONITOR_HANDLE.lock() {
+        Ok(mut guard) => guard.take(),
+        Err(_) => None,
+    };
+    let Some(handle) = handle else {
+        return true;
+    };
+    let deadline = std::time::Instant::now() + MONITOR_JOIN_TIMEOUT;
+    while !handle.is_finished() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    if handle.is_finished() {
+        let _ = handle.join();
+        true
+    } else {
+        false
+    }
+}
 
 pub(crate) fn start_foreground_monitor(app: AppHandle) {
     #[cfg(not(target_os = "windows"))]
@@ -1108,18 +1155,28 @@ pub(crate) fn start_foreground_monitor(app: AppHandle) {
                         None => reported_error = None,
                         _ => {}
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(FOREGROUND_POLL_MS));
+                    sleep_interruptibly(std::time::Duration::from_millis(FOREGROUND_POLL_MS));
                 }
                 MONITOR_STARTED.store(false, Ordering::Release);
             });
-        if spawned.is_err() {
-            MONITOR_STARTED.store(false, Ordering::Release);
+        match spawned {
+            Ok(handle) => {
+                if let Ok(mut slot) = MONITOR_HANDLE.lock() {
+                    *slot = Some(handle);
+                }
+            }
+            Err(_) => {
+                MONITOR_STARTED.store(false, Ordering::Release);
+            }
         }
     }
 }
 
 pub(crate) fn stop_foreground_monitor() {
     MONITOR_STOP.store(true, std::sync::atomic::Ordering::Release);
+    // Bounded join: normally joined within ~100 ms; the timeout is a hard
+    // guard so shutdown can never hang on this monitor.
+    join_monitor_bounded();
 }
 
 /// Refreshes native state after sleep/wake and verifies that the stored own
@@ -2376,5 +2433,21 @@ mod ascension_b_restore_label_tests {
         .contains("nie uruchomiła"));
         assert!(restore_outcome_label(RestoreOutcome::WindowUnavailable, None).contains("niedostępne"));
         assert!(restore_outcome_label(RestoreOutcome::UnsupportedPlatform, None).contains("nie jest dostępne"));
+    }
+
+    #[test]
+    fn stop_foreground_monitor_is_idempotent_and_the_join_is_bounded() {
+        super::stop_foreground_monitor();
+        super::stop_foreground_monitor();
+        let handle = std::thread::spawn(|| {});
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        {
+            let mut slot = super::MONITOR_HANDLE.lock().unwrap();
+            *slot = Some(handle);
+        }
+        let started = std::time::Instant::now();
+        assert!(super::join_monitor_bounded());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        assert!(super::MONITOR_HANDLE.lock().unwrap().is_none());
     }
 }

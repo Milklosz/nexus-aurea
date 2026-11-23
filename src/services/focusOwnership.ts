@@ -105,3 +105,55 @@ export function focusOpenerFrom(active: Element | null): HTMLElement | null {
 export function canRestoreFocusTo(opener: HTMLElement | null): opener is HTMLElement {
   return Boolean(opener && opener.isConnected && !(opener as HTMLButtonElement).disabled);
 }
+
+// ---------------------------------------------------------------------------
+// S3.4 reliability: exactly-once focus-owner recovery gate
+// ---------------------------------------------------------------------------
+
+/**
+ * Preserves the Ascension exactly-once focus-owner recovery under repeated
+ * triggers (window focus events, display/HDMI topology changes, session-end
+ * restores): each trigger id may run its recovery callback AT MOST ONCE, and
+ * the total number of distinct triggers is bounded, so a flapping HDMI cable
+ * or a burst of focus events can never loop the recovery. `reset()` clears
+ * the record for a new session boundary; within one lifetime a trigger that
+ * already fired can never fire again.
+ */
+export class ExactlyOnceRecoveryGate {
+  private readonly used = new Set<string>();
+  private readonly maxTriggers: number;
+
+  constructor(maxTriggers: number = 8) {
+    this.maxTriggers = Number.isFinite(maxTriggers) && maxTriggers >= 1
+      ? Math.floor(maxTriggers)
+      : 8;
+  }
+
+  /**
+   * Returns true only the first time `triggerId` is presented while the
+   * trigger budget remains. Repeated presentations return false forever.
+   */
+  tryAcquire(triggerId: string): boolean {
+    if (typeof triggerId !== "string" || triggerId.length === 0 || triggerId.length > 128) return false;
+    if (this.used.has(triggerId)) return false;
+    if (this.used.size >= this.maxTriggers) return false;
+    this.used.add(triggerId);
+    return true;
+  }
+
+  has(triggerId: string): boolean {
+    return this.used.has(triggerId);
+  }
+
+  get acquiredCount(): number {
+    return this.used.size;
+  }
+
+  get budget(): number {
+    return this.maxTriggers;
+  }
+
+  reset(): void {
+    this.used.clear();
+  }
+}
