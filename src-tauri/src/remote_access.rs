@@ -3088,6 +3088,79 @@ mod tests {
         assert!(!is_valid_nonce("short"));
         assert!(!is_valid_nonce("zz112233445566778899aabbccddeeff"));
     }
+
+    // ---- Phase 3 (Ascension D): source-level guards for the fail-closed wiring ----
+    // These run on every platform (pure text assertions over this file) so the
+    // LAN surface and the replay-decision -> status mapping cannot drift.
+
+    /// This file's own text above the test module (the test module contains the
+    /// forbidden literals itself, so it must be excluded from the scan).
+    fn production_source() -> &'static str {
+        let full = include_str!("remote_access.rs");
+        match full.find("#[cfg(test)]") {
+            Some(index) => &full[..index],
+            None => full,
+        }
+    }
+
+    #[test]
+    fn phase3_lan_route_allowlist_is_exactly_the_existing_eleven_routes() {
+        let source = production_source();
+        let mut routes: Vec<&str> = source
+            .match_indices(".route(\"")
+            .map(|(index, marker)| {
+                let rest = &source[index + marker.len()..];
+                &rest[..rest.find('"').unwrap_or(0)]
+            })
+            .collect();
+        routes.sort_unstable();
+        let mut expected = vec![
+            "/", "/index.html", "/app.js", "/style.css", "/manifest.webmanifest",
+            "/sw.js", "/icon.svg", "/api/status", "/api/hello", "/api/pair", "/api/command",
+        ];
+        expected.sort_unstable();
+        assert_eq!(routes, expected, "the LAN route allowlist must not change");
+        for route in &routes {
+            assert!(
+                !route.contains("recovery") && !route.contains("revoke")
+                    && !route.contains("trust") && !route.contains("admin"),
+                "no recovery/revocation/admin route may appear on the LAN server: {route}"
+            );
+        }
+    }
+
+    #[test]
+    fn phase3_replay_decisions_map_to_the_unchanged_status_codes() {
+        let source = production_source();
+        // AcknowledgeReplay -> 204 without a second side effect, Ambiguous -> 409
+        // (the phone keeps its pairing), RejectReplay -> 401.
+        assert!(source.contains("ReplayDecision::AcknowledgeReplay => Ok(CommandReservation::Acknowledge)"));
+        assert!(source.contains("ReplayDecision::Ambiguous => Err(StatusCode::CONFLICT)"));
+        assert!(source.contains("ReplayDecision::RejectReplay => Err(StatusCode::UNAUTHORIZED)"));
+        assert!(source.contains("CommandReservation::Acknowledge => return StatusCode::NO_CONTENT"));
+        // The sequence is still reserved (persisted) BEFORE the side effect.
+        let reserve_at = source.find("vault.devices[index].last_sequence = sequence;").expect("reserve before emit");
+        let emit_at = source.find(".emit(\"nexus-remote-command\"").expect("emit");
+        assert!(reserve_at < emit_at, "last_sequence is persisted before emit");
+    }
+
+    #[test]
+    fn phase3_no_alternate_transport_or_weak_tls_literals_in_the_lan_server() {
+        let source = production_source();
+        for forbidden in [
+            "danger_accept_invalid_certs",
+            "danger_accept_invalid_hostnames",
+            "accept_invalid",
+            "no-cors",
+            "WebSocket",
+            "send_beacon",
+        ] {
+            assert!(!source.contains(forbidden), "remote_access.rs must not contain {forbidden}");
+        }
+        // TLS stays rustls from the vault CA; the trust gate is unchanged.
+        assert!(source.contains("RustlsConfig::from_pem"));
+        assert!(source.contains("trust_confirmed"));
+    }
 }
 
 #[cfg(all(test, windows))]

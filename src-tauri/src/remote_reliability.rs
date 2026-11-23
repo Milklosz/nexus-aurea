@@ -669,4 +669,77 @@ mod tests {
         }
         assert!(!ack.register("overflow", 0), "bounded: rejects extra id");
     }
+
+    // ---- Phase 3 (Ascension D): the fail-closed contract the PWA relies on ----
+    // The server persists `last_sequence` BEFORE the side effect and records a
+    // receipt after it. The PWA's policy (docs/velora-3-ascension-remote.md)
+    // depends on these exact guarantees: a re-sent request with the SAME
+    // sequence + signature can never execute twice, an ambiguous reservation
+    // answers 409 (never 401, so the phone keeps its pairing), and only a
+    // FRESH sequence executes — which is why the client never mints a new
+    // sequence to re-confirm an unknown command.
+
+    #[test]
+    fn phase3_resent_same_sequence_never_classifies_as_execute() {
+        // observed <= last can NEVER become Execute: a re-sent request is
+        // deduped from the receipt (204), ambiguous (409) or rejected (401).
+        for observed in 0..=8u64 {
+            let decision = classify_replay(8, None, observed, "home");
+            assert_ne!(
+                decision,
+                ReplayDecision::Execute,
+                "observed={observed} must never execute again"
+            );
+        }
+    }
+
+    #[test]
+    fn phase3_manual_reconfirmation_with_identical_bytes_is_idempotent() {
+        let mut log = CommandReceiptLog::default();
+        let receipt = log.record("device-a", 7, "home");
+        // Applied + persisted (last_sequence = 7). Re-sending the EXACT same
+        // signed request is answered from the receipt: acknowledged, never a
+        // second side effect.
+        assert_eq!(
+            classify_replay(7, Some(&receipt), 7, "home"),
+            ReplayDecision::AcknowledgeReplay
+        );
+        // A DIFFERENT command reusing the sequence is rejected, not acknowledged.
+        assert_eq!(
+            classify_replay(7, Some(&receipt), 7, "volume-up"),
+            ReplayDecision::RejectReplay
+        );
+        // Minting a NEW sequence for the same user intent WOULD execute —
+        // exactly why the PWA re-confirms only with the same signed bytes.
+        assert_eq!(
+            classify_replay(7, Some(&receipt), 8, "home"),
+            ReplayDecision::Execute
+        );
+    }
+
+    #[test]
+    fn phase3_ambiguous_timeout_is_never_acknowledged_and_never_unpairs() {
+        // Sequence reserved (persisted) before emit, response lost, no receipt:
+        // the answer is 409 Ambiguous — NOT 401 — so the client keeps its
+        // pairing and must not blindly auto-retry.
+        let decision = classify_replay(9, None, 9, "select");
+        assert_eq!(decision, ReplayDecision::Ambiguous);
+        assert_ne!(decision, ReplayDecision::RejectReplay);
+        assert_ne!(decision, ReplayDecision::AcknowledgeReplay);
+        // The client may continue with a FRESH sequence afterwards.
+        assert_eq!(
+            classify_replay(9, None, 10, "select"),
+            ReplayDecision::Execute
+        );
+    }
+
+    #[test]
+    fn phase3_receipt_command_id_matches_the_deterministic_correlation_id() {
+        let mut log = CommandReceiptLog::default();
+        let receipt = log.record("device-a", 3, "back");
+        assert_eq!(receipt.command_id, command_id("device-a", 3));
+        // The correlation id is stable across processes and restarts.
+        assert_eq!(command_id("device-a", 3), command_id("device-a", 3));
+        assert_ne!(command_id("device-a", 3), command_id("device-b", 3));
+    }
 }
