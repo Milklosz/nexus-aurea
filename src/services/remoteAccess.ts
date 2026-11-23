@@ -1,8 +1,10 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { isRemoteCommand } from "./remoteCommand";
 import type { RemoteCommand } from "./remoteCommand";
 
 export type { RemoteCommand } from "./remoteCommand";
+export { isRemoteCommand, REMOTE_COMMANDS } from "./remoteCommand";
 
 export type RemoteDeviceSummary = {
   id: string;
@@ -181,18 +183,12 @@ export async function listenForRemoteAccessStatus(
   return listen<RemoteAccessStatus>("remote-access-status", (event) => callback(event.payload));
 }
 
-const remoteCommands: ReadonlySet<string> = new Set([
-  "up", "down", "left", "right", "select", "back", "home", "menu", "switch-apps",
-  "volume-up", "volume-down", "mute",
-  "profile-cinema", "profile-gaming", "profile-desktop",
-]);
-
 export async function listenForRemoteCommand(
   callback: (command: RemoteCommand) => void,
 ): Promise<() => void> {
   if (!isTauri()) return () => {};
   return listen<string>("nexus-remote-command", (event) => {
-    if (remoteCommands.has(event.payload)) callback(event.payload as RemoteCommand);
+    if (isRemoteCommand(event.payload)) callback(event.payload);
   });
 }
 
@@ -207,3 +203,61 @@ export {
   parsePairingBootstrapUrl,
 } from "./remoteReliability";
 export type { PairingBootstrap } from "./remoteReliability";
+
+/* ------------------------------------------------------------------------- *
+ * Phase 3 (Ascension D) — pairing lifecycle helpers (PURE, ADDITIVE).
+ *
+ * Device identity, the revocation list and the QR onboarding phase are derived
+ * ONLY from the existing `get_remote_access_status` payload and the existing
+ * revoke commands (`revoke_remote_device`, `revoke_all_remote_devices`). No new
+ * Tauri command, no LAN surface, no secret ever leaves the vault.
+ * ------------------------------------------------------------------------- */
+
+/** Lifecycle phase of the LAN remote, derived from the status payload alone. */
+export type RemotePairingPhase =
+  | "disabled"
+  | "onboarding"
+  | "paired"
+  | "recovery-required";
+
+export function remotePairingPhase(status: RemoteAccessStatus): RemotePairingPhase {
+  if (status.recoveryRequired) return "recovery-required";
+  if (!status.enabled) return "disabled";
+  if (status.storeState === "unavailable" || status.storeState === "locked"
+    || status.storeState === "damaged" || status.storeState === "rolled-back"
+    || status.storeState === "recovery-pending") return "recovery-required";
+  if (status.pairedDeviceCount > 0) return "paired";
+  return "onboarding";
+}
+
+/**
+ * The revocation list: every paired device the local UI can revoke through the
+ * existing `revoke_remote_device` command. A device that disappears from this
+ * list (or answers 401 on the LAN) has been revoked.
+ */
+export function listPairedRemoteDevices(status: RemoteAccessStatus): RemoteDeviceSummary[] {
+  if (!Array.isArray(status.pairedDevices)) return [];
+  return status.pairedDevices.map((device) => ({ id: String(device.id), name: String(device.name) }));
+}
+
+/** Device identity lookup — shows which deviceId this UI/pairing belongs to. */
+export function findPairedRemoteDevice(
+  status: RemoteAccessStatus,
+  deviceId: string,
+): RemoteDeviceSummary | null {
+  if (!deviceId) return null;
+  return listPairedRemoteDevices(status).find((device) => device.id === deviceId) ?? null;
+}
+
+export function isRemoteDevicePaired(status: RemoteAccessStatus, deviceId: string): boolean {
+  return findPairedRemoteDevice(status, deviceId) !== null;
+}
+
+/** QR onboarding phase of the one-time code carried in the URL fragment. */
+export type QrOnboardingPhase = "idle" | "active" | "expired";
+
+export function qrOnboardingPhase(hasFragment: boolean, fragmentValid: boolean): QrOnboardingPhase {
+  if (fragmentValid) return "active";
+  if (hasFragment) return "expired";
+  return "idle";
+}
