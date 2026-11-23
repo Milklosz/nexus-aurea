@@ -72,4 +72,4 @@ No force push · no merge to `main` · no release/tag · no installer run or rep
 
 ## 8. Pull request
 
-Draft PR `feat/velora-3-ascension` → `feat/s2-9-hardware-recovery` (created with `gh pr create --draft`; URL recorded in git notes of the tip commit and in the PR list). CI on the PR is authoritative for Windows/MSVC/NSIS/portable.
+**Draft PR #73 — https://github.com/Milklosz/nexus-aurea/pull/73** (`feat/velora-3-ascension` → `feat/s2-9-hardware-recovery`, created with `gh pr create --draft`). CI on the PR is authoritative for Windows/MSVC/NSIS/portable; `Portable Windows validation build` produces the no-install MSI validation candidate whose manifest names this branch's exact pushed commit.
