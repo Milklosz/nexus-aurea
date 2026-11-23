@@ -9,8 +9,28 @@ export const emptyGamingCollections = (): GamingCollections => ({ version: 1, fa
 export function validSteamGameId(id: unknown): id is string {
   return typeof id === "string" && /^[1-9][0-9]{0,9}$/.test(id) && Number(id) <= 4294967295;
 }
+
+const STEAM_KEY_PATTERN = /^steam:([1-9][0-9]{0,9})$/;
+const PLAYNITE_KEY_PATTERN = /^playnite:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Klucz kolekcji gry (S3.2): numeryczny appid Steam (jak dotąd), kanoniczny
+ * `steam:<appid>` albo `playnite:<guid>`. To NADZBIór `validSteamGameId` —
+ * wszystkie dotychczasowe identyfikatory zachowują ważność.
+ */
+export function gameCollectionKey(id: unknown): string | null {
+  if (typeof id !== "string") return null;
+  // Same rule as validSteamGameId, inlined to avoid type-guard narrowing.
+  const text = id as string;
+  if (/^[1-9][0-9]{0,9}$/.test(text) && Number(text) <= 4294967295) return text;
+  const steam = STEAM_KEY_PATTERN.exec(text);
+  if (steam && Number(steam[1]) <= 4294967295) return text;
+  if (PLAYNITE_KEY_PATTERN.test(text)) return text.toLowerCase();
+  return null;
+}
+
 function ids(value: unknown): string[] {
-  return Array.isArray(value) ? [...new Set(value.filter(validSteamGameId))].slice(0, MAX_ITEMS) : [];
+  return Array.isArray(value) ? [...new Set(value.map(gameCollectionKey).filter((key): key is string => key !== null))].slice(0, MAX_ITEMS) : [];
 }
 export function parseGamingCollections(raw: string | null): GamingCollections {
   if (!raw || raw.length > 16_384) return emptyGamingCollections();
@@ -40,14 +60,16 @@ export function saveGamingCollections(value: GamingCollections): boolean {
   catch { return false; }
 }
 export function favoriteGame(value: GamingCollections, id: string): GamingCollections {
-  if (!validSteamGameId(id)) return value;
-  return { ...value, favorites: value.favorites.includes(id) ? value.favorites.filter(item => item !== id) : ids([...value.favorites, id]) };
+  const key = gameCollectionKey(id);
+  if (key === null) return value;
+  return { ...value, favorites: value.favorites.includes(key) ? value.favorites.filter(item => item !== key) : ids([...value.favorites, key]) };
 }
 export function recordGameLaunch(value: GamingCollections, id: string): GamingCollections {
-  if (!validSteamGameId(id)) return value;
-  return { ...value, recent: ids([id, ...value.recent.filter(item => item !== id)]) };
+  const key = gameCollectionKey(id);
+  if (key === null) return value;
+  return { ...value, recent: ids([key, ...value.recent.filter(item => item !== key)]) };
 }
 export function gameCollection(games: readonly ManagedGame[], order: readonly string[]): ManagedGame[] {
-  const installed = new Map(games.filter(game => validSteamGameId(game.id)).slice(0, 4096).map(game => [game.id, game]));
+  const installed = new Map(games.filter(game => gameCollectionKey(game.id) !== null).slice(0, 4096).map(game => [gameCollectionKey(game.id) as string, game]));
   return ids(order).flatMap(id => { const game = installed.get(id); return game ? [game] : []; });
 }

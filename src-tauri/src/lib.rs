@@ -34,6 +34,7 @@ mod session_orchestrator;
 mod session_store;
 mod single_instance;
 mod spatial_navigation;
+mod steam_library;
 mod streaming_control;
 mod tv_mode;
 mod tv_navigation;
@@ -156,6 +157,9 @@ pub fn run() {
             playnite_library::get_playnite_library,
             playnite_library::launch_playnite_game,
             playnite_manifest::get_playnite_manifest,
+            steam_library::get_steam_library,
+            steam_library::launch_steam_game,
+            steam_library::get_game_process_state,
         ])
         .setup(|app| {
             #[cfg(target_os = "windows")]

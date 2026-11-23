@@ -12,6 +12,11 @@ export type ManagedApp = {
   lastError: string | null;
 };
 
+/**
+ * Pojedyncza gra z `AppManagerSnapshot.games` (additive, S3.2): id może mieć
+ * postać `steam:<appid>` (launcher "steam"), `playnite:<guid>` (launcher
+ * "playnite") albo legacyczny numeryczny appid Steam (launcher "Steam").
+ */
 export type ManagedGame = { id: string; name: string; launcher: string };
 
 export type AppManagerSnapshot = {
