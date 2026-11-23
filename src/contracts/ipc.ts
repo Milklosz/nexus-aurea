@@ -246,6 +246,38 @@ export const IPC_COMMANDS = {
     sideEffect: "write",
     since: "v0.9.2",
   },
+
+  // --- VELORA 3.0 genesis (promoted from forward-looking at integration) ---
+  // S3.2 Gaming Hub (Agent B): read-only Steam library + canonical steam:// launch.
+  get_steam_library: {
+    name: "get_steam_library",
+    args: [],
+    returns: "Result<SteamLibrarySnapshot, String> (read-only appmanifest/libraryfolders VDF; no credential/save/DRM access)",
+    sideEffect: "read-only",
+    since: "velora-3-genesis",
+  },
+  launch_steam_game: {
+    name: "launch_steam_game",
+    args: ["appid"],
+    returns: "Result<SteamLaunchReceipt, String> — canonical steam://run/<appid> only; never kills a process",
+    sideEffect: "launch",
+    since: "velora-3-genesis",
+  },
+  get_game_process_state: {
+    name: "get_game_process_state",
+    args: ["id"],
+    returns: "Result<GameProcessState, String> (observation-only; never kills the process)",
+    sideEffect: "read-only",
+    since: "velora-3-genesis",
+  },
+  // S3.4 Reliability (Agent D): read-only WebView2 working-set watch.
+  get_memory_watch_status: {
+    name: "get_memory_watch_status",
+    args: [],
+    returns: "MemoryWatchStatus (read-only working-set sample; no GC API, no process action)",
+    sideEffect: "read-only",
+    since: "velora-3-genesis",
+  },
 } as const satisfies Record<string, IpcDescriptor>;
 
 export type IpcCommandName = keyof typeof IPC_COMMANDS;
@@ -260,46 +292,16 @@ export function ipcDescriptor(name: string): IpcDescriptor | null {
 
 /**
  * ---------------------------------------------------------------------------
- * FORWARD-LOOKING ENTRIES — VELORA 3.0 genesis workstreams S3.1–S3.4 (merged
- * BEFORE this S3.5 branch; Agent E integrates LAST).
+ * FORWARD-LOOKING ENTRIES — VELORA 3.0 genesis workstreams S3.1–S3.4.
  *
- * These commands are added to the Rust handler list by the owning agents and
- * are documented here as forward-looking entries ONLY. They are deliberately
- * NOT part of `IPC_COMMANDS` above: on this branch their handlers do not exist
- * yet in `src-tauri/src/lib.rs`, and the genesis integration guard
- * (src/__tests__/genesisEIntegration.test.ts) asserts that every documented
- * command is actually registered. At integration time, when the handlers
- * land in `generate_handler![...]`, these entries are moved into
- * `IPC_COMMANDS` (existing entries are never modified or removed).
+ * At integration the S3.2/S3.4 commands (get_steam_library, launch_steam_game,
+ * get_game_process_state, get_memory_watch_status) were PROMOTED into
+ * `IPC_COMMANDS` above because their handlers now exist in
+ * `src-tauri/src/lib.rs`. This export is kept as an empty reserved slot for any
+ * future additive command that an agent documents before its handler lands;
+ * existing `IPC_COMMANDS` entries are never modified or removed.
  * ---------------------------------------------------------------------------
  */
-export const FORWARD_LOOKING_IPC_COMMANDS = {
-  // --- Steam library / game process state (workstream S3.2, Agent B) ---
-  get_steam_library: {
-    name: "get_steam_library",
-    args: [],
-    returns: "SteamLibrarySnapshot (read-only; no credential or save access)",
-    sideEffect: "read-only",
-    since: "velora-3-genesis (S3.2, documented at integration)",
-  },
-  launch_steam_game: {
-    name: "launch_steam_game",
-    args: ["appId"],
-    returns: "Result<SteamLaunchReceipt, String> — canonical steam://run/<appId> only",
-    sideEffect: "launch",
-    since: "velora-3-genesis (S3.2, documented at integration)",
-  },
-  get_game_process_state: {
-    name: "get_game_process_state",
-    args: ["launchId"],
-    returns: "GameProcessState (observation-only; never kills the process)",
-    sideEffect: "read-only",
-    since: "velora-3-genesis (S3.2, documented at integration)",
-  },
-  // --- New control / reliability commands (S3.3/S3.4, Agents C/D) ---
-  // Any additional control-service or remote-reliability commands introduced
-  // by S3.3/S3.4 are documented here at integration with the same descriptor
-  // shape; none of them may weaken TLS/HMAC/replay/CSP or process handling.
-} as const satisfies Record<string, IpcDescriptor>;
+export const FORWARD_LOOKING_IPC_COMMANDS = {} as const satisfies Record<string, IpcDescriptor>;
 
 export type ForwardLookingIpcCommandName = keyof typeof FORWARD_LOOKING_IPC_COMMANDS;
