@@ -65,11 +65,23 @@ jobs:
       - name: Test build provenance manifest
         run: pnpm test:provenance
 
+      - name: Test portable manifest tooling
+        run: pnpm test:portable-manifest
+
+      - name: Test SHA-256 artifact manifest tooling
+        run: pnpm test:manifest
+
       - name: Run Rust unit tests
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
 
       - name: Build React and TypeScript
         run: pnpm build
+
+      - name: Write and verify SHA-256 manifest of the frontend dist
+        shell: bash
+        run: |
+          pnpm manifest:sha256
+          node scripts/sha256-manifest.mjs verify --manifest dist/sha256-manifest.json
 
       - name: Check patch whitespace
         shell: pwsh

@@ -7,10 +7,13 @@ name: Portable Windows validation build
 # isolated candidate and records its provenance.
 on:
   workflow_dispatch:
+  # Every PR — including PRs from feat/velora-3-ascension* branches — builds the
+  # portable candidate, so each Ascension PR proves its own no-install artifact.
   pull_request:
   push:
     branches:
       - feat/portable-validation-build
+      - 'feat/velora-3-ascension*'
 
 permissions:
   contents: read
@@ -73,6 +76,9 @@ jobs:
 
       - name: Test portable manifest tooling
         run: pnpm test:portable-manifest
+
+      - name: Test SHA-256 artifact manifest tooling
+        run: pnpm test:manifest
 
       - name: Build React and TypeScript
         run: pnpm build
@@ -240,6 +246,17 @@ jobs:
           node scripts/portable-manifest.mjs verify --manifest $manifestPath --base $output --stage $stage --package $zipPath
           if ($LASTEXITCODE -ne 0) { throw 'Portable manifest verification failed.' }
 
+          # Local SHA-256 manifest of everything shipped in dist/portable (the ZIP,
+          # the portable manifest, SHA256SUMS, the smoke result): written with the
+          # same tool the CI job tests, then verified against the files on disk.
+          # The packaged ZIP and EXE hashes are already recorded in
+          # velora-portable-manifest.json (artifacts.package / artifacts.executable);
+          # this adds a plain per-file SHA-256 record for the whole output folder.
+          node scripts/sha256-manifest.mjs write --root dist/portable --output dist/portable/sha256-manifest
+          if ($LASTEXITCODE -ne 0) { throw 'Could not write the dist/portable SHA-256 manifest.' }
+          node scripts/sha256-manifest.mjs verify --manifest dist/portable/sha256-manifest.json
+          if ($LASTEXITCODE -ne 0) { throw 'The dist/portable SHA-256 manifest does not match its output files.' }
+
           $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
           $smoke = Get-Content -LiteralPath (Join-Path $output 'smoke-result.json') -Raw | ConvertFrom-Json
           @(
@@ -265,5 +282,7 @@ jobs:
             dist/portable/velora-portable-manifest.json
             dist/portable/SHA256SUMS.txt
             dist/portable/smoke-result.json
+            dist/portable/sha256-manifest.json
+            dist/portable/sha256-manifest.md
           if-no-files-found: error
           retention-days: 30
