@@ -167,6 +167,46 @@ test("SHA256SUMS lines use the standard two-space format", () => {
   assert.equal(sums, `${"a".repeat(64)}  a.txt\n${"b".repeat(64)}  b.txt\n`);
 });
 
+test("the portable manifest JSON records the SHA-256 of the packaged ZIP and EXE", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "velora-portable-zipsha-"));
+  try {
+    const { mkdir } = await import("node:fs/promises");
+    const stage = path.join(directory, "stage");
+    await mkdir(stage);
+    // Known inputs: the ZIP and the EXE bytes are fixed, so their digests are known.
+    const zipBytes = "PK-zip-payload-for-hash-check";
+    const exeBytes = "MZ-fake-exe-payload-for-hash-check";
+    await writeFile(path.join(stage, EXECUTABLE_NAME), exeBytes);
+    const packagePath = path.join(directory, "VELORA-Portable-Windows-x64.zip");
+    await writeFile(packagePath, zipBytes);
+
+    const manifest = await createPortableManifest(baseOptions(stage, packagePath));
+    assert.equal(
+      manifest.artifacts.package.sha256,
+      createHash("sha256").update(zipBytes).digest("hex"),
+      "artifacts.package.sha256 must be the SHA-256 of the packaged ZIP",
+    );
+    assert.equal(manifest.artifacts.package.sizeBytes, Buffer.byteLength(zipBytes));
+    assert.equal(
+      manifest.artifacts.executable.sha256,
+      createHash("sha256").update(exeBytes).digest("hex"),
+      "artifacts.executable.sha256 must be the SHA-256 of the packaged EXE",
+    );
+    assert.equal(manifest.artifacts.executable.sizeBytes, Buffer.byteLength(exeBytes));
+    // The same ZIP digest is what ships in SHA256SUMS.txt next to the package.
+    assert.equal(
+      renderSha256Sums([manifest.artifacts.package]),
+      `${manifest.artifacts.package.sha256}  ${manifest.artifacts.package.name}\n`,
+    );
+    // And the no-install guarantees stay recorded in the same JSON.
+    assert.equal(manifest.runtime.requiresInstaller, false);
+    assert.equal(manifest.runtime.installerExecuted, false);
+    assert.equal(manifest.runtime.registryChanges, false);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("manifest isolation constants match the Rust source of truth", async () => {
   const source = await readFile(path.join(ROOT, "src-tauri", "src", "portable.rs"), "utf8");
   assert.ok(source.includes(`pub(crate) const DATA_DIR_ENV: &str = "${EXPECTED_ISOLATION.dataRootEnv}"`));
