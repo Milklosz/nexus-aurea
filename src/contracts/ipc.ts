@@ -257,3 +257,49 @@ export function isIpcCommandName(value: string): value is IpcCommandName {
 export function ipcDescriptor(name: string): IpcDescriptor | null {
   return isIpcCommandName(name) ? IPC_COMMANDS[name] : null;
 }
+
+/**
+ * ---------------------------------------------------------------------------
+ * FORWARD-LOOKING ENTRIES — VELORA 3.0 genesis workstreams S3.1–S3.4 (merged
+ * BEFORE this S3.5 branch; Agent E integrates LAST).
+ *
+ * These commands are added to the Rust handler list by the owning agents and
+ * are documented here as forward-looking entries ONLY. They are deliberately
+ * NOT part of `IPC_COMMANDS` above: on this branch their handlers do not exist
+ * yet in `src-tauri/src/lib.rs`, and the genesis integration guard
+ * (src/__tests__/genesisEIntegration.test.ts) asserts that every documented
+ * command is actually registered. At integration time, when the handlers
+ * land in `generate_handler![...]`, these entries are moved into
+ * `IPC_COMMANDS` (existing entries are never modified or removed).
+ * ---------------------------------------------------------------------------
+ */
+export const FORWARD_LOOKING_IPC_COMMANDS = {
+  // --- Steam library / game process state (workstream S3.2, Agent B) ---
+  get_steam_library: {
+    name: "get_steam_library",
+    args: [],
+    returns: "SteamLibrarySnapshot (read-only; no credential or save access)",
+    sideEffect: "read-only",
+    since: "velora-3-genesis (S3.2, documented at integration)",
+  },
+  launch_steam_game: {
+    name: "launch_steam_game",
+    args: ["appId"],
+    returns: "Result<SteamLaunchReceipt, String> — canonical steam://run/<appId> only",
+    sideEffect: "launch",
+    since: "velora-3-genesis (S3.2, documented at integration)",
+  },
+  get_game_process_state: {
+    name: "get_game_process_state",
+    args: ["launchId"],
+    returns: "GameProcessState (observation-only; never kills the process)",
+    sideEffect: "read-only",
+    since: "velora-3-genesis (S3.2, documented at integration)",
+  },
+  // --- New control / reliability commands (S3.3/S3.4, Agents C/D) ---
+  // Any additional control-service or remote-reliability commands introduced
+  // by S3.3/S3.4 are documented here at integration with the same descriptor
+  // shape; none of them may weaken TLS/HMAC/replay/CSP or process handling.
+} as const satisfies Record<string, IpcDescriptor>;
+
+export type ForwardLookingIpcCommandName = keyof typeof FORWARD_LOOKING_IPC_COMMANDS;

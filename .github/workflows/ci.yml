@@ -59,6 +59,12 @@ jobs:
       - name: Run long-running controller transition soak
         run: pnpm test:soak
 
+      - name: Run genesis S3.5 integration, LAN-security, controller-sim and UI suites
+        run: pnpm test:genesis
+
+      - name: Run genesis session lifecycle soak
+        run: pnpm test:genesis-soak
+
       - name: Test Claude status line adapter (fixtures only)
         run: pnpm test:claude-usage
 
@@ -67,6 +73,12 @@ jobs:
 
       - name: Test portable manifest tooling
         run: pnpm test:portable-manifest
+
+      - name: Test portable data-root isolation invariants
+        run: pnpm test:portable-isolation
+
+      - name: Test genesis CI wiring guards
+        run: pnpm test:genesis-ci
 
       - name: Test SHA-256 artifact manifest tooling
         run: pnpm test:manifest
