@@ -26,7 +26,10 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { VELORA_EVENTS } from "../contracts";
 
-const read = (path: string): string => readFileSync(resolve(process.cwd(), path), "utf8");
+// Normalize CRLF: CI checks out with Windows line endings, and several
+// assertions below match multi-line source literals containing "\n".
+const read = (path: string): string =>
+  readFileSync(resolve(process.cwd(), path), "utf8").replace(/\r\n/g, "\n");
 
 const pwaFiles = [
   "public/remote/app.js",
