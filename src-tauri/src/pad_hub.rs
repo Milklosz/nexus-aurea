@@ -282,6 +282,15 @@ impl HubCore {
         }
         let ingest = self.tracker.on_report(path, revision, report, at_ms);
         let mut out = CoreOutput::default();
+        for event in &ingest.events {
+            if let PadEvent::Connected { label, .. } = event {
+                // A (re)connected pad starts a new device epoch for the chord:
+                // one fully neutral sample is required before PS + Options can
+                // fire, so a button held across a Bluetooth drop/reconnect can
+                // never complete a chord on the new connection.
+                self.chord.require_device_rearm(label);
+            }
+        }
         out.events = ingest
             .events
             .into_iter()
@@ -2011,6 +2020,36 @@ mod tests {
             ),
             1
         );
+    }
+
+    #[test]
+    fn reconnect_rearms_the_chord_per_device_so_a_held_ps_cannot_complete_it() {
+        let mut core = HubCore::default();
+        core.set_chord_sources(Some(true), false);
+        // Connect + go neutral: the device syncs to the global chord generation.
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 0);
+        // A full chord fires once.
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0), 1_000);
+        assert!(core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 1_050).chord);
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 1_100);
+        // Bluetooth drop and reconnect: the first report after the reconnect
+        // still has PS + Options held. The per-device rearm must ignore it.
+        core.on_removed(USB_PATH);
+        let held = core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 2_000);
+        assert!(!held.chord);
+        assert_eq!(held.chord_outcome, Some(ChordOutcome::Ignored));
+        assert!(held.events.iter().any(|event| matches!(
+            event,
+            ControllerEvent::Connected { .. }
+        )));
+        // Also ignored while PS alone is held (no rising Options edge can help).
+        assert!(!core
+            .on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0x01), 2_050)
+            .chord);
+        // One neutral sample rearms, then a deliberate chord fires once more.
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0, 0), 3_000);
+        core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0), 4_000);
+        assert!(core.on_report(USB_PATH, Ds4Revision::V2, &usb(0, 0x20, 0x01), 4_050).chord);
     }
 
     #[test]
