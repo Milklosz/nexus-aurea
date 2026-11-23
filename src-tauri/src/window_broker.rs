@@ -194,6 +194,40 @@ pub(crate) fn classify_foreground_denial(
     })
 }
 
+/// Truthful, content-free label for a focus-restore outcome. Explicitly
+/// documents the Windows foreground lock: VELORA never guarantees automatic
+/// foreground focus, and an unexplained denial is reported as `unknown`, never
+/// guessed. Used for session-exit diagnostics (the UI surfaces these when a
+/// managed session ends and VELORA tries to come back).
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn restore_outcome_label(
+    outcome: RestoreOutcome,
+    denial: Option<ForegroundDenial>,
+) -> &'static str {
+    match (outcome, denial) {
+        (RestoreOutcome::Restored, _) => "VELORA odzyskała fokus okna.",
+        (RestoreOutcome::AlreadyFocused, _) => "VELORA ma już fokus; nic nie trzeba było przełączać.",
+        (RestoreOutcome::BlockedByWindows, Some(ForegroundDenial::ForegroundLock)) => {
+            "Windows zablokował automatyczny fokus (foreground lock) — VELORA go nie wymusza; użyj Alt+Tab."
+        }
+        (RestoreOutcome::BlockedByWindows, Some(ForegroundDenial::AccessDenied)) => {
+            "Windows odmówił dostępu do fokusu (access denied) — użyj Alt+Tab."
+        }
+        (RestoreOutcome::BlockedByWindows, _) => {
+            "Windows odmówił fokusu z nieznanej przyczyny — stan zgłoszony uczciwie jako nieznany; użyj Alt+Tab."
+        }
+        (RestoreOutcome::BlockedUnsafeForeground, _) => {
+            "Przywrócenie fokusu zostało zablokowane: na pierwszym planie jest aplikacja, której VELORA nie uruchomiła."
+        }
+        (RestoreOutcome::WindowUnavailable, _) => {
+            "Okno VELORA jest chwilowo niedostępne; fokus nie został przywrócony."
+        }
+        (RestoreOutcome::UnsupportedPlatform, _) => {
+            "Przywracanie fokusu nie jest dostępne na tej platformie."
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ForegroundChange {
@@ -2309,5 +2343,38 @@ mod handoff_and_session_end_tests {
                 "iteration {iteration}: another launch's process stays untouched"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod ascension_b_restore_label_tests {
+    use super::{restore_outcome_label, ForegroundDenial, RestoreOutcome};
+
+    #[test]
+    fn restore_outcome_labels_are_truthful_about_the_windows_foreground_lock() {
+        assert!(restore_outcome_label(RestoreOutcome::Restored, None).contains("odzyskała fokus"));
+        // The Windows foreground lock is the documented, honest limitation:
+        // no automatic foreground focus is ever guaranteed or forced.
+        let label = restore_outcome_label(
+            RestoreOutcome::BlockedByWindows,
+            Some(ForegroundDenial::ForegroundLock),
+        );
+        assert!(label.contains("foreground lock"));
+        assert!(label.contains("nie wymusza"));
+        // An unexplained denial is reported as unknown, never guessed.
+        let unknown = restore_outcome_label(RestoreOutcome::BlockedByWindows, None);
+        assert!(unknown.contains("nieznan"));
+        let unknown2 = restore_outcome_label(
+            RestoreOutcome::BlockedByWindows,
+            Some(ForegroundDenial::Unknown),
+        );
+        assert!(unknown2.contains("nieznan"));
+        assert!(restore_outcome_label(
+            RestoreOutcome::BlockedUnsafeForeground,
+            None
+        )
+        .contains("nie uruchomiła"));
+        assert!(restore_outcome_label(RestoreOutcome::WindowUnavailable, None).contains("niedostępne"));
+        assert!(restore_outcome_label(RestoreOutcome::UnsupportedPlatform, None).contains("nie jest dostępne"));
     }
 }
