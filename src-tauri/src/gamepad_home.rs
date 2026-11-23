@@ -250,6 +250,10 @@ struct DeviceChord {
     latched: bool,
     neutral_generation: u64,
     last_seen_ms: u64,
+    /// Set when the device (re)connects. Until one fully neutral sample arrives,
+    /// no chord is evaluated for this device: a button held across a Bluetooth
+    /// drop/reconnect must never complete a chord on the new connection.
+    awaiting_neutral: bool,
 }
 
 #[derive(Default)]
@@ -289,7 +293,10 @@ impl ComboTracker {
         }
         let state = self.devices.entry(device.to_string()).or_default();
         if at_ms.saturating_sub(state.last_seen_ms) > DEVICE_STALE_MS {
+            // The staleness reset must not wipe a pending reconnect rearm.
+            let awaiting_neutral = state.awaiting_neutral;
             *state = DeviceChord::default();
+            state.awaiting_neutral = awaiting_neutral;
         }
         state.last_seen_ms = at_ms;
 
@@ -311,6 +318,9 @@ impl ComboTracker {
         if !buttons.ps && !buttons.options {
             state.latched = false;
             state.neutral_generation = neutral_generation;
+            // A neutral sample is exactly what a reconnecting pad must produce
+            // before its chord logic is armed again.
+            state.awaiting_neutral = false;
             return (
                 false,
                 if was_pressed {
@@ -319,6 +329,11 @@ impl ComboTracker {
                     ChordOutcome::Ignored
                 },
             );
+        }
+        // A (re)connected device must first show a fully neutral sample; a held
+        // PS from before the disconnect can never complete a chord after it.
+        if state.awaiting_neutral {
+            return (false, ChordOutcome::Ignored);
         }
         // A source transition from disabled to enabled must observe a neutral
         // sample before a held/stale chord can be considered a fresh gesture.
@@ -363,6 +378,23 @@ impl ComboTracker {
     pub(crate) fn require_neutral_rearm(&mut self) {
         self.neutral_generation = self.neutral_generation.saturating_add(1);
         self.last_trigger_ms = None;
+    }
+
+    /// A device (re)connected: any chord state from the previous connection is
+    /// stale, and the new connection must observe one fully neutral sample before
+    /// a chord is evaluated. Deterministic resync: no stuck "armed" state across
+    /// a Bluetooth drop/reconnect, even if the global generation never changed.
+    pub(crate) fn require_device_rearm(&mut self, device: &str) {
+        self.devices
+            .entry(device.to_string())
+            .or_default()
+            .awaiting_neutral = true;
+    }
+
+    /// Arrival notification: drops stale per-device state and arms the rearm rule.
+    pub(crate) fn on_arrival(&mut self, device: &str) {
+        self.devices.remove(device);
+        self.require_device_rearm(device);
     }
 
     pub(crate) fn remove_device(&mut self, device: &str) {
@@ -783,10 +815,11 @@ impl GamepadHomeRuntime {
         if w_param == native::GIDC_ARRIVAL {
             self.report_epoch.remove_device(device);
             // The next report must resolve the path again. Any chord
-            // state from the previous connection is stale.
+            // state from the previous connection is stale, and the new
+            // connection must see one neutral sample before a chord fires.
             self.device_paths.remove(&device);
             if let Some(id) = self.bookkeeping.arrival(device, at_ms) {
-                self.tracker.remove_device(&id);
+                self.tracker.on_arrival(&id);
             }
         } else if w_param == native::GIDC_REMOVAL {
             self.report_epoch.remove_device(device);
@@ -2262,5 +2295,81 @@ mod tests {
         );
         assert!(source.contains("request_return_home"));
         assert!(source.contains("HomeRequestSource::Device"));
+    }
+
+    #[test]
+    fn reconnect_rearm_blocks_a_chord_held_across_the_boundary_without_any_global_generation_bump() {
+        // No require_neutral_rearm() call: the global generation stays 0, so only
+        // the per-device rearm can protect the new connection.
+        let mut tracker = ComboTracker::default();
+        tracker.require_device_rearm("pad");
+        // PS was held before the reconnect and Options rises now: must NOT fire.
+        assert_eq!(
+            tracker.observe_diagnostic("pad", buttons(true, true), 100),
+            (false, ChordOutcome::Ignored)
+        );
+        // One fully neutral sample arms the device again.
+        assert_eq!(
+            tracker.observe_diagnostic("pad", buttons(false, false), 110),
+            (false, ChordOutcome::Released)
+        );
+        // A fresh deliberate chord then fires exactly once.
+        assert_eq!(
+            tracker.observe_diagnostic("pad", buttons(true, false), 120),
+            (false, ChordOutcome::Armed)
+        );
+        assert_eq!(
+            tracker.observe_diagnostic("pad", buttons(true, true), 130),
+            (true, ChordOutcome::Triggered)
+        );
+        assert_eq!(
+            tracker.observe_diagnostic("pad", buttons(true, true), 140),
+            (false, ChordOutcome::Latched)
+        );
+    }
+
+    #[test]
+    fn on_arrival_rearms_after_a_triggered_chord_so_a_reconnect_cannot_replay_it() {
+        let mut tracker = ComboTracker::default();
+        let held = buttons(true, true);
+        assert!(tracker.observe("pad", held, 10));
+        tracker.on_arrival("pad"); // device re-appears (reconnect, same label)
+        // Held chord on the new connection: Ignored (the rearm check fires before
+        // the cooldown/latch checks, so Ignored here proves the rearm, not cooldown).
+        assert_eq!(
+            tracker.observe_diagnostic("pad", held, 1_000),
+            (false, ChordOutcome::Ignored)
+        );
+        assert_eq!(
+            tracker.observe_diagnostic("pad", buttons(false, false), 1_010),
+            (false, ChordOutcome::Released)
+        );
+        assert_eq!(
+            tracker.observe_diagnostic("pad", buttons(true, false), 1_020),
+            (false, ChordOutcome::Armed)
+        );
+        assert_eq!(
+            tracker.observe_diagnostic("pad", held, 1_030),
+            (true, ChordOutcome::Triggered)
+        );
+    }
+
+    #[test]
+    fn a_stale_reset_does_not_wipe_a_pending_reconnect_rearm() {
+        let mut tracker = ComboTracker::default();
+        tracker.require_device_rearm("pad");
+        // Jump far past DEVICE_STALE_MS: the internal stale reset must keep the rearm.
+        assert_eq!(
+            tracker.observe_diagnostic("pad", buttons(true, true), DEVICE_STALE_MS + 100),
+            (false, ChordOutcome::Ignored)
+        );
+        assert_eq!(
+            tracker.observe_diagnostic("pad", buttons(false, false), DEVICE_STALE_MS + 110),
+            (false, ChordOutcome::Released)
+        );
+        assert_eq!(
+            tracker.observe_diagnostic("pad", buttons(true, true), DEVICE_STALE_MS + 120),
+            (true, ChordOutcome::Triggered)
+        );
     }
 }

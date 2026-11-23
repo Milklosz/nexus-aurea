@@ -114,7 +114,8 @@ pub struct EdgeCinemaReceipt {
 }
 
 /// Read-only projection of a LaunchRegistry session. `state` is one of
-/// idle|launching|active|closing|exited|error and never drives session logic.
+/// idle|launching|active|closing|exited|error (the shared deterministic
+/// lifecycle machine) and never drives session logic.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct EdgeCinemaSession {
@@ -128,6 +129,14 @@ pub struct EdgeCinemaSession {
     pub launched_at: Option<String>,
     pub last_error: Option<String>,
     pub managed_by_velora: bool,
+    /// Owning launch id (equals `session_id` for registry sessions) and its
+    /// generation within the service group — the idempotent launch key is
+    /// `<appId>#<generation>`.
+    pub launch_id: Option<String>,
+    pub generation: u64,
+    /// Newest transition receipt; its `cause` drives the truthful exit/crash
+    /// diagnostic shown in the UI.
+    pub last_transition: Option<launch_registry::SessionTransitionReceipt>,
 }
 
 #[derive(Clone, Serialize)]
@@ -321,16 +330,11 @@ fn sanitize_error(message: &str) -> String {
     cleaned.trim().chars().take(240).collect()
 }
 
+/// The single shared lifecycle mapping. Every service (Edge Cinema, Steam
+/// Big Picture, Playnite) projects its watcher phase through the same machine,
+/// so `state` is always one of idle|launching|active|closing|exited|error.
 fn phase_state(phase: LaunchPhase) -> &'static str {
-    match phase {
-        LaunchPhase::Requested | LaunchPhase::ProcessStarted | LaunchPhase::WindowAppeared => {
-            "launching"
-        }
-        LaunchPhase::SessionActive => "active",
-        LaunchPhase::ExitPending => "closing",
-        LaunchPhase::Ended | LaunchPhase::Cancelled => "exited",
-        LaunchPhase::Failed => "error",
-    }
+    launch_registry::SessionLifecycleState::from_phase(phase).as_str()
 }
 
 fn session_from_launch(
@@ -354,7 +358,22 @@ fn session_from_launch(
         launched_at: Some(launch.started_at_ms.to_string()),
         last_error: launch.error.as_deref().map(sanitize_error),
         managed_by_velora: true,
+        launch_id: Some(launch.id.clone()),
+        generation: 0,
+        last_transition: None,
     }
+}
+
+/// Attaches the owning launch's generation and newest transition receipt from
+/// the shared lifecycle machine. Read-only; no polling, no window enumeration.
+fn with_session_diagnostics(app: &AppHandle, mut session: EdgeCinemaSession) -> EdgeCinemaSession {
+    if let Some(launch_id) = session.launch_id.clone() {
+        session.generation = launch_registry::generation_for_launch(app, &launch_id).unwrap_or(0);
+        session.last_transition = launch_registry::transition_receipts_for_launch(app, &launch_id, 1)
+            .into_iter()
+            .next();
+    }
+    session
 }
 
 fn idle_session() -> EdgeCinemaSession {
@@ -369,6 +388,9 @@ fn idle_session() -> EdgeCinemaSession {
         launched_at: None,
         last_error: None,
         managed_by_velora: true,
+        launch_id: None,
+        generation: 0,
+        last_transition: None,
     }
 }
 
@@ -773,7 +795,7 @@ fn current_session(app: &AppHandle) -> EdgeCinemaSession {
         let marker = current_marker(service.id);
         let marker = marker.filter(|marker| marker_matches_launch(marker, &launch, service));
         let url = marker.as_ref().map(|marker| marker.url.clone());
-        session_from_launch(&launch, url, Some(public_profile_label(service.id)))
+        with_session_diagnostics(app, session_from_launch(&launch, url, Some(public_profile_label(service.id))))
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -816,11 +838,10 @@ pub fn launch_edge_cinema(app: AppHandle, url: String) -> Result<EdgeCinemaRecei
                     created_at_100ns: target.process_created_at_100ns,
                 },
             );
-            let session = session_from_launch(
+            let session = with_session_diagnostics(&app, session_from_launch(
                 &active,
-                Some(service.url.to_string()),
-                Some(public_profile_label(service.id)),
-            );
+                    Some(service.url.to_string()),
+                    Some(public_profile_label(service.id)),            ));
             emit_session(&app, session);
             window_broker::grant_foreground_handoff(&[target.process_id]);
             require_edge_window_focus(window_broker::activate_owned_window(
@@ -872,11 +893,10 @@ pub fn launch_edge_cinema(app: AppHandle, url: String) -> Result<EdgeCinemaRecei
                 if !marker_identity.matches(target_identity) {
                     let _ = store_marker(service.id, &launch.id, target_identity);
                 }
-                let session = session_from_launch(
+                let session = with_session_diagnostics(&app, session_from_launch(
                     &launch,
-                    Some(service.url.to_string()),
-                    Some(public_profile_label(service.id)),
-                );
+                        Some(service.url.to_string()),
+                        Some(public_profile_label(service.id)),                ));
                 emit_session(&app, session);
                 window_broker::grant_foreground_handoff(&[target.process_id]);
                 require_edge_window_focus(window_broker::activate_owned_window(
@@ -927,11 +947,10 @@ pub fn launch_edge_cinema(app: AppHandle, url: String) -> Result<EdgeCinemaRecei
         if let Some(identity) = spawned_identity {
             let _ = store_marker(service.id, &launch.id, identity);
         }
-        let session = session_from_launch(
+        let session = with_session_diagnostics(&app, session_from_launch(
             &launch,
-            Some(service.url.to_string()),
-            Some(public_profile_label(service.id)),
-        );
+                Some(service.url.to_string()),
+                Some(public_profile_label(service.id)),        ));
         emit_session(&app, session);
 
         // First launch must be as deterministic as adoption. Once the owned
@@ -1041,6 +1060,14 @@ pub fn request_edge_cinema_close(
             target.process_id,
             target.process_created_at_100ns,
         )?;
+        // Record the confirmed close request on the shared lifecycle machine
+        // (active -> closing) so the session panel shows the truthful receipt.
+        let _ = launch_registry::record_lifecycle_event(
+            &app,
+            &session_id,
+            launch_registry::LifecycleEvent::CloseRequested,
+            launch_registry::now_ms(),
+        );
         let _ = app.emit(
             "velora://cinema-close-requested",
             CinemaCloseRequestedEvent {
@@ -1048,11 +1075,10 @@ pub fn request_edge_cinema_close(
                 confirmed: true,
             },
         );
-        let mut session = session_from_launch(
+        let mut session = with_session_diagnostics(&app, session_from_launch(
             &launch,
-            Some(service.url.to_string()),
-            Some(public_profile_label(service.id)),
-        );
+                Some(service.url.to_string()),
+                Some(public_profile_label(service.id)),        ));
         session.state = "closing".to_string();
         Ok(session)
     }
@@ -2014,5 +2040,82 @@ mod tests {
             assert_eq!(selected.id, ended.id);
             assert!(!selected.phase.is_active(), "iteration {iteration}");
         }
+    }
+}
+
+#[cfg(test)]
+mod ascension_b_session_diagnostics_tests {
+    use super::{idle_session, phase_state, session_from_launch, EdgeCinemaSession};
+    use crate::launch_registry::{LaunchKind, LaunchPhase, LaunchSession, SessionLifecycleState};
+
+    fn launch(phase: LaunchPhase) -> LaunchSession {
+        LaunchSession {
+            id: "cinema-9".into(),
+            kind: LaunchKind::Cinema,
+            display_name: "Edge Cinema".into(),
+            app_id: Some("edge-cinema:netflix".into()),
+            phase,
+            process_ids: vec![900],
+            foreground: false,
+            window_id: Some(55),
+            started_at_ms: 5,
+            updated_at_ms: 6,
+            last_activation_at_ms: None,
+            error: None,
+            restore: None,
+            session_revision: None,
+            pid_reuse_detected: false,
+            attention: None,
+        }
+    }
+
+    #[test]
+    fn phase_state_delegates_to_the_single_shared_lifecycle_machine() {
+        for phase in [
+            LaunchPhase::Requested,
+            LaunchPhase::ProcessStarted,
+            LaunchPhase::WindowAppeared,
+            LaunchPhase::SessionActive,
+            LaunchPhase::ExitPending,
+            LaunchPhase::Ended,
+            LaunchPhase::Cancelled,
+            LaunchPhase::Failed,
+        ] {
+            assert_eq!(
+                phase_state(phase),
+                SessionLifecycleState::from_phase(phase).as_str(),
+                "edge cinema must use the one shared lifecycle mapping for {phase:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn session_projection_exposes_owning_launch_id_and_diagnostic_fields() {
+        let session: EdgeCinemaSession = session_from_launch(
+            &launch(LaunchPhase::SessionActive),
+            Some("https://www.netflix.com/pl/".into()),
+            None,
+        );
+        assert_eq!(session.launch_id.as_deref(), session.session_id.as_deref());
+        assert!(session.managed_by_velora);
+        assert_eq!(session.state, "active");
+        assert_eq!(session.generation, 0, "pure projection defaults to generation 0");
+        assert!(session.last_transition.is_none());
+        let value = serde_json::to_value(&session).unwrap();
+        assert_eq!(value["managedByVelora"], true);
+        assert!(value.get("launchId").is_some());
+        assert!(value.get("generation").is_some());
+        assert!(value.get("lastTransition").is_some());
+        // The wire format never leaks window titles or profile paths.
+        assert_eq!(value["windowTitle"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn idle_session_has_explicit_idle_state_and_no_fabricated_diagnostics() {
+        let idle = idle_session();
+        assert_eq!(idle.state, "idle");
+        assert_eq!(idle.launch_id, None);
+        assert_eq!(idle.generation, 0);
+        assert!(idle.last_transition.is_none());
     }
 }

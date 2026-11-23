@@ -32,6 +32,8 @@
         <div><dt>HTTPS</dt><dd id="origin-state">Sprawdzam…</dd></div>
         <div><dt>Parowanie</dt><dd id="pairing-state">Sprawdzam…</dd></div>
         <div><dt>Sparowane urządzenia</dt><dd id="paired-count">0</dd></div>
+        <div><dt>ID urządzenia</dt><dd id="device-id">—</dd></div>
+        <div><dt>Onboarding QR</dt><dd id="qr-onboarding-state">—</dd></div>
       </dl>
 
       <form id="pairing-form" class="pairing-form" autocomplete="off" hidden>
@@ -59,6 +61,10 @@
       </div>
 
       <p class="remote-note" id="remote-message" role="status" aria-live="polite">Polecenia są wyłączone do czasu bezpiecznego połączenia i parowania.</p>
+      <div class="unknown-panel" id="unknown-panel" hidden>
+        <p class="remote-note" id="unknown-note" role="status" aria-live="polite"></p>
+        <button type="button" id="unknown-confirm">Potwierdź ponowne wysłanie</button>
+      </div>
       <p class="remote-note">Jeśli Safari pokazuje ostrzeżenie certyfikatu, zatrzymaj się. Nie omijaj weryfikacji TLS. Dodaj ten pilot do ekranu początkowego dopiero po sparowaniu.</p>
     </section>
     <nav class="remote-dock" aria-label="Szybka nawigacja">

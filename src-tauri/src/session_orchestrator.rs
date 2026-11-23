@@ -844,6 +844,18 @@ pub(crate) fn finish_launch_session_inner(app: &AppHandle, launch_id: &str) {
     revoke_streaming_if_transitioned(app, changed_event.as_ref());
 }
 
+/// Truthful, content-free label for a crash/restart recovery reason. Used in
+/// the orphan-recovery diagnostic so the UI can distinguish an unexpected exit
+/// from a clean restart without ever touching provider playback state.
+pub(crate) fn recovery_reason_label(reason: RecoveryReason) -> &'static str {
+    match reason {
+        RecoveryReason::UnexpectedExit => "nieoczekiwane zakończenie poprzedniego procesu VELORA",
+        RecoveryReason::CleanRestart => "czysty restart VELORA",
+        RecoveryReason::CorruptState => "uszkodzony zapisany stan sesji",
+        RecoveryReason::OrphanedLaunch => "osierocony kontekst uruchomienia",
+    }
+}
+
 /// Called after resume and at startup. A persisted launch context that is not
 /// present in LaunchRegistry is an orphan and must not keep VELORA in a game
 /// session forever.
@@ -883,8 +895,10 @@ pub(crate) fn reconcile_orphaned_launch(app: &AppHandle) -> bool {
             previous_session: previous.current,
             previous_revision: previous.revision,
             reason: RecoveryReason::OrphanedLaunch,
-            message: "Kontekst uruchomienia nie istnieje już w rejestrze; sesja wróciła do Home."
-                .into(),
+            message: format!(
+                "{} — kontekst uruchomienia nie istnieje już w rejestrze; sesja wróciła do Home.",
+                recovery_reason_label(RecoveryReason::OrphanedLaunch)
+            ),
         });
         machine.snapshot()
     };
@@ -2125,5 +2139,30 @@ mod stale_watcher_tests {
     #[test]
     fn a_session_without_context_has_no_owner_to_finish() {
         assert!(!context_owned_by_launch(None, "anything"));
+    }
+}
+
+#[cfg(test)]
+mod ascension_b_recovery_label_tests {
+    use super::{recovery_reason_label, RecoveryReason};
+
+    #[test]
+    fn recovery_reason_labels_are_truthful_and_content_free() {
+        assert!(recovery_reason_label(RecoveryReason::UnexpectedExit).contains("nieoczekiwane"));
+        assert!(recovery_reason_label(RecoveryReason::CleanRestart).contains("czysty restart"));
+        assert!(recovery_reason_label(RecoveryReason::CorruptState).contains("uszkodzony"));
+        assert!(recovery_reason_label(RecoveryReason::OrphanedLaunch).contains("osierocony"));
+        for reason in [
+            RecoveryReason::UnexpectedExit,
+            RecoveryReason::CleanRestart,
+            RecoveryReason::CorruptState,
+            RecoveryReason::OrphanedLaunch,
+        ] {
+            let label = recovery_reason_label(reason);
+            assert!(!label.is_empty());
+            // No playback-state or hardware-verification claims.
+            assert!(!label.contains("playback"));
+            assert!(!label.contains("zweryfikowano"));
+        }
     }
 }

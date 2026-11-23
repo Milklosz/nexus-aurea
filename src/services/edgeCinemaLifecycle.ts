@@ -12,6 +12,10 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { windowMode } from "./windowMode";
 import {
+  normalizeSessionReceipt,
+  type SessionTransitionReceipt,
+} from "./veloraSessionManager";
+import {
   IDLE_CINEMA_SESSION,
   VELORA_EVENTS,
   actionAck,
@@ -46,7 +50,37 @@ export type EdgeCinemaSessionWire = {
   launchedAt: string | null;
   lastError: string | null;
   managedByVelora: boolean;
+  /** Owning launch id (equals sessionId for registry sessions). */
+  launchId?: string | null;
+  /** Launch generation within the service group (idempotent launch key part). */
+  generation?: number;
+  /** Newest transition receipt (exit/crash diagnostics). */
+  lastTransition?: unknown;
 };
+
+/** Diagnostics extracted from the wire without touching the CinemaSession contract. */
+export type CinemaSessionDiagnostics = {
+  launchId: string | null;
+  generation: number | null;
+  lastTransition: SessionTransitionReceipt | null;
+};
+
+/** Strict, non-throwing parser of the optional diagnostics fields. */
+export function normalizeCinemaSessionDiagnostics(value: unknown): CinemaSessionDiagnostics {
+  const wire: Record<string, unknown> =
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  const launchId = typeof wire["launchId"] === "string" && wire["launchId"].length > 0 && wire["launchId"].length <= 128
+    ? wire["launchId"] as string
+    : null;
+  const generationValue = wire["generation"];
+  const generation =
+    typeof generationValue === "number" && Number.isFinite(generationValue) && generationValue >= 0
+      ? Math.trunc(generationValue)
+      : null;
+  return { launchId, generation, lastTransition: normalizeSessionReceipt(wire["lastTransition"]) };
+}
 
 const SESSION_STATES = [
   "idle",

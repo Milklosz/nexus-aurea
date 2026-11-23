@@ -206,6 +206,32 @@ mod tests {
     }
 
     #[test]
+    fn persisted_state_never_carries_receipts_or_playback_state() {
+        // Crash/restart recovery persists only the session snapshot. Transition
+        // receipts and provider playback state are deliberately NOT durable:
+        // receipts live in the in-memory LaunchRegistry sidecar, and playback
+        // state is never read at all (DRM boundary). This test pins that the
+        // serialized format has no room for either.
+        let file = path("no-receipts");
+        let _ = std::fs::remove_file(&file);
+        let mut state = snapshot();
+        state.recovery = None;
+        write_state_at(&file, &state, false).unwrap();
+        let contents = std::fs::read_to_string(&file).unwrap().to_ascii_lowercase();
+        for forbidden in [
+            "receipts",
+            "transitionReceipts",
+            "playback",
+            "paused",
+            "playing",
+            "drm",
+        ] {
+            assert!(!contents.contains(forbidden), "{forbidden} must not be persisted");
+        }
+        let _ = std::fs::remove_file(&file);
+    }
+
+    #[test]
     fn unsupported_versions_are_rejected() {
         let file = path("version");
         let mut state = PersistedSession {

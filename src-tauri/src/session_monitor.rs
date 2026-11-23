@@ -28,10 +28,22 @@ pub(crate) struct SystemResumeEvent {
     pub gap_ms: u64,
     pub active_launches: usize,
     pub session: crate::session_orchestrator::SessionSnapshot,
+    /// Truthful, content-free one-line diagnostic for the resume event.
+    pub diagnostic: String,
 }
 
 pub(crate) fn resume_detected(elapsed: Duration) -> bool {
     elapsed >= RESUME_GAP
+}
+
+/// One-line diagnostic for a detected sleep/resume. It reports only what the
+/// monotonic-clock gap and the launch registry actually prove; it never claims
+/// that a session's playback state survived (VELORA does not read provider
+/// playback state) and never claims hardware verification.
+pub(crate) fn resume_diagnostic(gap_ms: u64, active_launches: usize) -> String {
+    format!(
+        "Wykryto wybudzenie systemu po przerwie {gap_ms} ms; aktywne sesje zarządzane przez VELORA: {active_launches}. Stany sesji pochodzą wyłącznie z rejestru uruchomień."
+    )
 }
 
 fn now_ms() -> u64 {
@@ -61,11 +73,13 @@ pub(crate) fn start(app: AppHandle) {
                     crate::window_broker::handle_system_resume(&app);
                     crate::session_orchestrator::reconcile_orphaned_launch(&app);
                     crate::edge_cinema::reconcile_edge_marker(&app);
+                    let gap_ms = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
                     let event = SystemResumeEvent {
                         at_ms,
-                        gap_ms: elapsed.as_millis().min(u128::from(u64::MAX)) as u64,
+                        gap_ms,
                         active_launches,
                         session: crate::session_orchestrator::current_snapshot(&app),
+                        diagnostic: resume_diagnostic(gap_ms, active_launches),
                     };
                     let _ = app.emit(SYSTEM_RESUME_EVENT, event);
                     last_orphan_check = Instant::now();
@@ -87,7 +101,7 @@ pub(crate) fn stop() {
 
 #[cfg(test)]
 mod tests {
-    use super::{resume_detected, RESUME_GAP};
+    use super::{resume_diagnostic, resume_detected, RESUME_GAP};
     use std::time::Duration;
 
     #[test]
@@ -100,5 +114,17 @@ mod tests {
     fn a_multi_second_gap_reports_a_resume() {
         assert!(resume_detected(RESUME_GAP));
         assert!(resume_detected(Duration::from_secs(90)));
+    }
+
+    #[test]
+    fn resume_diagnostic_reports_only_what_the_registry_proves() {
+        let text = resume_diagnostic(6_500, 2);
+        assert!(text.contains("6500 ms"));
+        assert!(text.contains("aktywne sesje zarządzane przez VELORA: 2"));
+        // Honest limitation: the diagnostic must not claim playback-state
+        // survival or hardware verification.
+        assert!(text.contains("rejestru uruchomień"));
+        assert!(!text.contains("playback"));
+        assert!(!text.contains("zweryfikowano"));
     }
 }
