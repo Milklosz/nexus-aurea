@@ -24,6 +24,7 @@ import type {
   RemoteState,
   RemoteCommandEnvelope,
   RemoteCommandAckPayload,
+  RemoteCommandOutcome,
   RemoteTransportAdapter,
   ActionAck,
   TypedEvent,
@@ -743,4 +744,273 @@ export function encodeQrMatrix(text: string): boolean[][] {
   const capacity = QR_RAW_CODEWORDS[version] - QR_ECC_PER_BLOCK[version] * QR_NUM_BLOCKS[version];
   if (bytes.length + 2 > capacity) throw new Error("QR payload too large for the supported versions.");
   return qrMatrix(version, qrCodewords(version, bytes));
+}
+
+/* ------------------------------------------------------------------------- *
+ * Phase 3 (Ascension D) — FAIL-CLOSED outbound command policy.
+ *
+ * Why this shape: the server persists `last_sequence` BEFORE emitting the side
+ * effect and keeps a bounded receipt log, so re-sending the EXACT same signed
+ * request (same `sequence` + same `signature`) can never cause a second side
+ * effect — the server answers 2xx (receipt dedup), 409 (ambiguous) or 401
+ * (reject), never a second execution. Minting a NEW sequence for the same user
+ * intent WOULD be a new command (double action). Therefore:
+ *
+ *   - an automatic retry MUST reuse the identical signed bytes (never re-sign,
+ *     never increment the sequence) and is allowed ONLY when the failure proves
+ *     the request never reached the server;
+ *   - an ambiguous timeout AFTER the send (our own AbortController deadline)
+ *     must NOT be auto-retried — the command is marked "unknown" and requires
+ *     explicit user re-confirmation (which re-sends the same signed bytes).
+ *
+ * The HMAC payload format (`NEXUS-AUREA-REMOTE-V1` prefix, HMAC-SHA256,
+ * monotonic sequence) is NEVER touched here: `signature` is carried unchanged.
+ * ------------------------------------------------------------------------- */
+
+/** Bounded number of AUTOMATIC retries — only for provably never-sent requests. */
+export const REMOTE_MAX_AUTO_RETRIES = 3;
+
+/**
+ * Why one outbound attempt failed.
+ *  - `never-reached`: the request provably never reached the server (browser
+ *    offline at attempt time, or a DNS / connect-refused network error before
+ *    any byte was accepted by a server). Safe to auto-retry the SAME bytes.
+ *  - `ambiguous`: the request was handed to the network and the outcome is
+ *    unknown (our deadline fired after send, or any other post-send loss).
+ *    NEVER auto-retried — marked "unknown" instead.
+ */
+export type OutboundFailureKind = "never-reached" | "ambiguous";
+
+/**
+ * Classify a thrown transport failure. Fail-closed: while online, only a
+ * network-level error (DNS / connect refused — "Failed to fetch"-class) counts
+ * as never-reached; our own abort/timeout after send is ambiguous. Anything
+ * else online is treated as ambiguous too.
+ */
+export function classifyOutboundFailure(cause: unknown, online: boolean): OutboundFailureKind {
+  // The browser's own offline flag is the strongest proof: no packet can leave.
+  if (!online) return "never-reached";
+  const label = errorLabel(cause);
+  if (/abort|timeout|timed.?out/i.test(label)) return "ambiguous"; // deadline fired after send
+  if (/network|failed to fetch|fetch failed|econnreset|econnrefused|enotfound|dns/i.test(label)) {
+    return "never-reached"; // DNS / connect refused before send
+  }
+  return "ambiguous"; // post-send uncertain — fail closed
+}
+
+/** Map the server's EXISTING bare HTTP status to a client-side outcome. */
+export function outcomeForStatus(status: number): RemoteCommandOutcome {
+  if (status === 401) return "replay-rejected";
+  if (status === 409) return "ambiguous";
+  if (status === 429) return "rate-limited";
+  if (status >= 200 && status < 300) return "executed";
+  return "unavailable";
+}
+
+/**
+ * The ONLY policy that permits an automatic retry: the failure proved the
+ * request never reached the server AND the bounded attempt budget remains.
+ * Ambiguous-after-send is never auto-retried.
+ */
+export function shouldAutoRetry(
+  failure: OutboundFailureKind,
+  attempt: number,
+  maxAttempts: number = REMOTE_MAX_AUTO_RETRIES,
+): boolean {
+  return failure === "never-reached" && Number.isFinite(attempt) && attempt >= 0 && attempt < maxAttempts;
+}
+
+/** Bounded exponential backoff for automatic never-reached retries (same bytes). */
+export function autoRetryDelayMs(attempt: number, base = 200, max = 1_600): number {
+  return reconnectDelayMs(Math.max(0, Math.floor(attempt)), base, max);
+}
+
+/** A prepared outbound command: sequence reserved + payload signed ONCE. */
+export interface PreparedOutboundCommand {
+  command: string;
+  deviceId: string;
+  sequence: number;
+  /** base64url HMAC-SHA256 — carried unchanged, NEVER re-signed on retry. */
+  signature: string;
+}
+
+export type OutboundEntryState = "queued" | "sending" | "unknown" | "settled";
+
+export interface OutboundCommandEntry extends PreparedOutboundCommand {
+  readonly commandId: string;
+  attempts: number;
+  state: OutboundEntryState;
+}
+
+export interface OutboundPipelineDeps {
+  /** Reserves the next sequence and signs the payload exactly once. */
+  prepare(command: string): Promise<PreparedOutboundCommand | null>;
+  /** One HTTP attempt. Resolves with the HTTP status; throws on transport failure. */
+  dispatch(prepared: PreparedOutboundCommand): Promise<number>;
+  /** Browser connectivity — the proof used by classifyOutboundFailure. */
+  online(): boolean;
+  /** Injectable wait (backoff between never-reached retries). */
+  wait?(ms: number): Promise<void>;
+  nowMs?(): number;
+  maxAutoRetries?: number;
+  onSettle?(entry: OutboundCommandEntry, outcome: RemoteCommandOutcome | "unknown", attempts: number): void;
+}
+
+/**
+ * Wires the existing primitives (RemoteCommandQueue dedup by commandId,
+ * AckTracker correlation, reconnectDelayMs backoff) into the fail-closed
+ * outbound policy. Single in-flight: `pump()` never dispatches two entries at
+ * once. Wi-Fi loss keeps entries QUEUED (never auto-replayed as a retry of a
+ * sent request); ambiguous-after-send entries move to "unknown" and are only
+ * re-sent through explicit `reconfirm()` with the SAME signed bytes.
+ */
+export class RemoteOutboundPipeline {
+  private readonly queue = new RemoteCommandQueue(32);
+  private readonly entries = new Map<string, OutboundCommandEntry>();
+  private readonly acks = new AckTracker();
+  private readonly deps: OutboundPipelineDeps;
+  private readonly maxAutoRetries: number;
+  private readonly now: () => number;
+  private inFlight = false;
+
+  constructor(deps: OutboundPipelineDeps) {
+    this.deps = deps;
+    this.maxAutoRetries = Math.max(0, Math.floor(deps.maxAutoRetries ?? REMOTE_MAX_AUTO_RETRIES));
+    this.now = deps.nowMs ?? (() => 0);
+  }
+
+  get pendingCount(): number {
+    return this.queue.size();
+  }
+
+  get inFlightNow(): boolean {
+    return this.inFlight;
+  }
+
+  unknownCommands(): readonly OutboundCommandEntry[] {
+    return [...this.entries.values()].filter((entry) => entry.state === "unknown");
+  }
+
+  entryFor(commandId: string): OutboundCommandEntry | undefined {
+    return this.entries.get(commandId);
+  }
+
+  /** Prepare + enqueue. Dedup is by commandId (deviceId, sequence). */
+  async enqueue(command: string): Promise<{ accepted: boolean; duplicate: boolean }> {
+    const prepared = await this.deps.prepare(command);
+    if (!prepared) return { accepted: false, duplicate: false };
+    const commandId = commandIdFor(prepared.deviceId, prepared.sequence);
+    if (this.entries.has(commandId)) return { accepted: false, duplicate: true };
+    const entry: OutboundCommandEntry = { ...prepared, commandId, attempts: 0, state: "queued" };
+    const request: RemoteCommandRequest = {
+      command: prepared.command,
+      deviceId: prepared.deviceId,
+      sequence: prepared.sequence,
+      signature: prepared.signature,
+    };
+    const result = this.queue.enqueue(request);
+    if (!result.accepted) return { accepted: false, duplicate: result.duplicate };
+    this.entries.set(commandId, entry);
+    this.acks.register(commandId, this.now());
+    return { accepted: true, duplicate: false };
+  }
+
+  /** Drain the queue, one in-flight request at a time, while online. */
+  async pump(): Promise<void> {
+    if (this.inFlight) return;
+    this.inFlight = true;
+    try {
+      while (this.queue.size() > 0 && this.deps.online()) {
+        const request = this.queue.peek();
+        if (!request) break;
+        const commandId = commandIdFor(request.deviceId, request.sequence);
+        const entry = this.entries.get(commandId);
+        if (!entry || entry.state !== "queued") {
+          this.queue.dequeue();
+          continue;
+        }
+        entry.state = "sending";
+        await this.dispatchEntry(entry, request);
+        // Only remove the entry when it left the queue (settled / unknown).
+        // A Wi-Fi loss re-queues it: it stays in front for the next pump.
+        if (entry.state !== "queued") this.queue.dequeue();
+      }
+    } finally {
+      this.inFlight = false;
+    }
+  }
+
+  /**
+   * Explicit user re-confirmation of an "unknown" command: re-sends the SAME
+   * signed request (same sequence + signature) exactly once through the same
+   * policy. The server can only answer dedup-2xx / 409 / 401 — never a second
+   * side effect.
+   */
+  async reconfirm(commandId: string): Promise<boolean> {
+    const entry = this.entries.get(commandId);
+    if (!entry || entry.state !== "unknown") return false;
+    if (this.inFlight || !this.deps.online()) return false;
+    this.inFlight = true;
+    try {
+      entry.state = "sending";
+      await this.dispatchEntry(entry, {
+        command: entry.command,
+        deviceId: entry.deviceId,
+        sequence: entry.sequence,
+        signature: entry.signature,
+      });
+      return true;
+    } finally {
+      this.inFlight = false;
+    }
+  }
+
+  private async dispatchEntry(entry: OutboundCommandEntry, request: RemoteCommandRequest): Promise<void> {
+    const commandId = entry.commandId;
+    const wait = this.deps.wait ?? (async () => {});
+    while (true) {
+      if (!this.deps.online()) {
+        // Wi-Fi loss: the entry stays QUEUED (it may never have been sent); it is
+        // sent only after a verified reconnect — never treated as ambiguous.
+        entry.state = "queued";
+        return;
+      }
+      try {
+        const status = await this.deps.dispatch(request);
+        const outcome = outcomeForStatus(status);
+        const settledAsUnknown = outcome === "ambiguous";
+        entry.state = settledAsUnknown ? "unknown" : "settled";
+        this.acks.resolve(commandId, {
+          commandId,
+          executed: outcome === "executed",
+          error: outcome === "executed" ? null : veloraError("remote-ack-missing", "Polecenie niepotwierdzone.", false, null),
+        });
+        this.deps.onSettle?.(entry, settledAsUnknown ? "unknown" : outcome, entry.attempts);
+        return;
+      } catch (cause) {
+        if (!this.deps.online()) {
+          // Wi-Fi loss mid-flight: the request may never have been sent. The
+          // entry stays QUEUED for a verified reconnect — NOT marked unknown.
+          entry.state = "queued";
+          return;
+        }
+        const failure = classifyOutboundFailure(cause, true);
+        if (shouldAutoRetry(failure, entry.attempts, this.maxAutoRetries)) {
+          entry.attempts += 1;
+          // SAME request — identical sequence + signature, never re-signed.
+          await wait(autoRetryDelayMs(entry.attempts));
+          continue;
+        }
+        // Ambiguous after send: NEVER auto-retried; requires explicit re-confirmation.
+        entry.state = "unknown";
+        this.acks.resolve(commandId, {
+          commandId,
+          executed: false,
+          error: classifyRemoteError(cause),
+        });
+        this.deps.onSettle?.(entry, "unknown", entry.attempts);
+        return;
+      }
+    }
+  }
 }

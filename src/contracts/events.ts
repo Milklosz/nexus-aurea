@@ -87,6 +87,27 @@ export interface RemoteCommandAckPayload {
   readonly error: VeloraError | null;
 }
 
+/**
+ * Phase 3 (Ascension D) — fail-closed outbound outcome of one command attempt.
+ * ADDITIVE TYPE ONLY: no event name, wire format, HMAC payload or security
+ * control is changed. The server keeps answering with the existing bare status
+ * codes (2xx / 401 / 409 / 429 / 5xx); this type only classifies them client-side.
+ */
+export type RemoteCommandOutcome =
+  | "executed" // 2xx — executed, or an exact duplicate acknowledged without a second side effect
+  | "ambiguous" // 409 — the sequence was reserved before the side effect; the outcome is unknown
+  | "replay-rejected" // 401 — replay or revoked device; surface a clear state, never auto-retry
+  | "rate-limited" // 429
+  | "unavailable"; // any other non-2xx
+
+/** Correlation-only status of one queued outbound command (never a secret). */
+export interface RemoteOutboundStatusPayload {
+  readonly commandId: string;
+  readonly command: string;
+  readonly outcome: RemoteCommandOutcome | "unknown" | "never-reached";
+  readonly attempts: number;
+}
+
 export function typedEvent<TPayload>(
   name: VeloraEventName,
   payload: TPayload,

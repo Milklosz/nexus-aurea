@@ -8,6 +8,23 @@ export type RemoteCommand =
   | "volume-up" | "volume-down" | "mute"
   | "profile-cinema" | "profile-gaming" | "profile-desktop";
 
+/**
+ * The exact allowlist the LAN server accepts from a paired iPhone.
+ * Phase 3 (Ascension D): exported as a pure guard so the event listener and
+ * tests share one source of truth. ADDITIVE only — the set of commands is
+ * unchanged and the server-side `RemoteCommand` enum stays the authority.
+ */
+export const REMOTE_COMMANDS: readonly RemoteCommand[] = [
+  "up", "down", "left", "right", "select", "back", "home", "menu", "switch-apps",
+  "volume-up", "volume-down", "mute",
+  "profile-cinema", "profile-gaming", "profile-desktop",
+];
+
+/** Type guard for untrusted event payloads (e.g. the `nexus-remote-command` event). */
+export function isRemoteCommand(value: unknown): value is RemoteCommand {
+  return typeof value === "string" && (REMOTE_COMMANDS as readonly string[]).includes(value);
+}
+
 export type RemoteCommandHandlers = {
   navigate: (direction: -1 | 1) => void;
   select: () => void;
