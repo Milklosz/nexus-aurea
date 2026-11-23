@@ -19,7 +19,7 @@ main 433a24a (2026-11-11, PR #5)
 
 Parallel v1 line (superseded by the 2.0 line, kept for reference): `feat/velora-night-build-2` (PR #13) → `feat/velora-v1-experience` (PR #15, `efa45d8`) → `feat/velora-v1-ecosystem` (PR #18, `28267a1`). DeepSeek-owned areas (`fix/velora-deepseek-p1` PR #14, `feat/velora-v1-core` PR #16) were integrated into the 2.0 line as `session_orchestrator.rs`, `window_broker.rs`, `ds4.rs`, `pad_hub.rs`.
 
-Open Draft PRs: #51–#72 (all `isDraft: true`, stacked 2.0 line). No open issues. PR #71 = portable Windows validation build (workflow `portable-windows.yml`, no-install, provenance manifest naming the exact pushed commit). PR #72 CI (`gh pr checks 72`): macOS + Windows + Playnite net462 + portable candidate all **pass**; release jobs skipping (no tag).
+Open Draft PRs: #51–#72 (all `isDraft: true`, stacked 2.0 line). No open issues. PR #71 = portable Windows validation build (workflow `portable-windows.yml`, no-install, provenance manifest naming the exact pushed commit). PR #72 CI (`gh pr checks 72`, historical evidence for the **base** branch only, not for ascension): macOS + Windows + Playnite net462 + portable candidate all **pass**; release jobs skipping (no tag).
 
 Mission-text cross-check: "PR #71 portable build and isolation" and "S2.5–S2.8" confirmed as real (#71, #65–#70). Hardware validation evidence lives in `docs/evidence/*` and `docs/velora-2-s2-4-hardware-cim.json` etc.; the S2.9 "Luna handoff" (`docs/velora-2-s2-9-luna-test-procedure.md`) lists physical gates still **NOT TESTED**.
 
