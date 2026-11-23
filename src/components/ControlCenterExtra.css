@@ -1,0 +1,113 @@
+/* Control Center 4.0 — additive styles for the new Control Center cards.
+   Kept out of src/theme/living-room/** on purpose; imported by ControlCenter.tsx. */
+
+.cc-system-overview { margin-bottom: clamp(.75rem, 1.3vw, 1.15rem); }
+
+.cc-overview-list {
+  list-style: none;
+  margin: 0 0 .6rem;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: .5rem .9rem;
+}
+
+.cc-overview-list li {
+  display: flex;
+  flex-direction: column;
+  gap: .12rem;
+  padding: .55rem .7rem;
+  border: 1px solid rgba(226, 207, 173, .14);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .03);
+}
+
+.cc-overview-label {
+  color: #a9a296;
+  font-size: .74rem;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.cc-overview-value { color: #eee3d0; font-size: .9rem; line-height: 1.35; overflow-wrap: anywhere; }
+
+.cc-overview-list li[data-overview-state="loading"] .cc-overview-value { color: #938d82; font-weight: 500; }
+.cc-overview-list li[data-overview-state="unknown"] .cc-overview-value { color: #d8a48f; }
+
+.cc-overview-displays { margin: 0 0 .6rem; color: #b5aea2; font-size: .85rem; }
+.cc-overview-displays summary { cursor: pointer; }
+.cc-overview-displays ul { margin: .4rem 0 0; padding-left: 1.1rem; }
+.cc-overview-displays li { margin: .2rem 0; overflow-wrap: anywhere; }
+
+/* Reusable confirm gate (risky actions) */
+.velora-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgba(2, 3, 5, .72);
+  backdrop-filter: blur(3px);
+}
+
+.velora-confirm-dialog {
+  width: min(92vw, 560px);
+  padding: 1.2rem 1.35rem;
+  border: 1px solid rgba(216, 164, 143, .45);
+  border-radius: 18px;
+  background: linear-gradient(150deg, #1b1512, #0c0d10 70%);
+  box-shadow: 0 24px 60px #000c;
+}
+
+.velora-confirm-dialog h3 {
+  margin: 0 0 .5rem;
+  color: #f0d9c8;
+  font: 500 1.25rem/1.2 Georgia, "Times New Roman", serif;
+}
+
+.velora-confirm-warning { color: #e8c3b4; line-height: 1.5; margin: 0 0 .4rem; }
+.velora-confirm-action { color: #a9a296; font-size: .85rem; margin: 0 0 .8rem; }
+
+.velora-confirm-actions { justify-content: flex-end; }
+
+.velora-confirm-ok {
+  border-color: rgba(216, 120, 100, .55) !important;
+  background: linear-gradient(145deg, rgba(96, 42, 34, .95), rgba(48, 20, 18, .95)) !important;
+}
+
+/* Recovery actions card */
+.cc-recovery-actions .cc-actions { margin-bottom: .4rem; }
+.cc-recovery-actions button[data-velora-confirm] { border-style: dashed; }
+
+/* Diagnostics summary list (SystemDiagnosticsPanel) */
+.system-diagnostics-summary {
+  list-style: none;
+  margin: .6rem 0 .9rem;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: .45rem .8rem;
+}
+
+.system-diagnostics-summary li {
+  display: flex;
+  flex-direction: column;
+  gap: .1rem;
+  padding: .5rem .65rem;
+  border: 1px solid rgba(226, 207, 173, .14);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .03);
+  font-size: .85rem;
+}
+
+.system-diagnostics-summary li span {
+  color: #a9a296;
+  font-size: .72rem;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.system-diagnostics-summary li strong { color: #eee3d0; font-weight: 600; overflow-wrap: anywhere; }
+.system-diagnostics-summary li[data-state="error"] strong { color: #e2a08b; }
+.system-diagnostics-summary li[data-state="warning"] strong { color: #e0cf9a; }
+.system-diagnostics-summary li[data-state="unknown"] strong { color: #938d82; font-weight: 500; }

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   exportDiagnosticsReport,
   getDiagnosticsSnapshot,
+  summarizeDiagnostics,
   type DiagnosticsSnapshot,
 } from "../services/diagnostics";
 import { displayGeometryFlags } from "../services/displayAudio";
@@ -66,6 +67,8 @@ export function SystemDiagnosticsPanel() {
     }
   };
 
+  const summary = useMemo(() => (snapshot ? summarizeDiagnostics(snapshot) : null), [snapshot]);
+
   return <section className="system-diagnostics" aria-label="VELORA System Intelligence">
     <div className="cc-card-heading">
       <span className="cc-card-index">07</span>
@@ -79,6 +82,12 @@ export function SystemDiagnosticsPanel() {
       <p role="status">
         Wersja {snapshot.build.version} · build {snapshot.build.buildSha} · {snapshot.build.target} · {snapshot.build.profile}
       </p>
+      {summary && <ul className="system-diagnostics-summary" aria-label="Podsumowanie diagnostyki">
+        {summary.items.map((item) => <li key={item.id} data-state={item.state}>
+          <span>{item.label}</span>
+          <strong>{item.detail}</strong>
+        </li>)}
+      </ul>}
       <ul className="system-diagnostics-list">
         {snapshot.remote && <li>Pilot: {snapshot.remote.enabled ? "włączony" : "wyłączony"} · sparowane urządzenia: {snapshot.remote.pairedDeviceCount} · HTTPS: {snapshot.remote.secureOriginAvailable ? "gotowe" : "niedostępne"}{snapshot.remote.recoveryRequired ? " · wymagane odzyskiwanie" : ""}</li>}
         <li>Sesja: <strong>{sessionLabel(snapshot.session.current)}</strong> · rewizja {snapshot.session.revision}</li>
