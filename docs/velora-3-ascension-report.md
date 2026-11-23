@@ -73,3 +73,17 @@ No force push · no merge to `main` · no release/tag · no installer run or rep
 ## 8. Pull request
 
 **Draft PR #73 — https://github.com/Milklosz/nexus-aurea/pull/73** (`feat/velora-3-ascension` → `feat/s2-9-hardware-recovery`, created with `gh pr create --draft`). CI on the PR is authoritative for Windows/MSVC/NSIS/portable; `Portable Windows validation build` produces the no-install MSI validation candidate whose manifest names this branch's exact pushed commit.
+
+### CI results on PR #73 (tip `b46990c6d869b7f1401d5a829f5462877117d3a2`, runs 45259624864 + 45259634993)
+
+| Job | Result |
+| --- | --- |
+| macos-latest / React, Tauri, Rust (push + PR) | **pass** (3m09s / 3m48s) |
+| windows-latest / React, Tauri, Rust (push + PR, incl. `cargo test --lib`, MSVC target check, NSIS build) | **pass** (6m53s / 14m23s) |
+| Windows / Playnite extension (net462) (push + PR) | **pass** (45s / 52s) |
+| Windows x64 / portable validation candidate (push + PR) | **pass** (4m00s / 4m12s) |
+| Publish GitHub Release | skipping (no tag — correct) |
+
+- Windows installer SHA-256 (commit `b46990c…`): `472311bfba06ab14edb16551bfe95abe0712e644d79680379a02d3803c5fcb19`
+- Portable manifest verified against source commit `b46990c6d869b7f1401d5a829f5462877117d3a2`; `sha256-manifest` verified 4 files / 6 514 111 bytes; uploaded portable artifact ZIP SHA-256: `2c5492883c5e0732db5dac11fd92b3b0df8b6cb910ee6ab75a5b4891b0a00ea5`
+- One regression was found and fixed during this cycle: `ascensionDSecurity.test.ts` matched multi-line source literals with `\n` and failed on Windows CRLF checkouts → fixed in `b46990c` by normalizing line endings in the test's `read` helper; both OSes now pass.
