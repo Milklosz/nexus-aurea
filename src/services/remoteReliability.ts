@@ -11,6 +11,7 @@
  * (public/remote/app.js, src-tauri/src/remote_access.rs) is unchanged.
  */
 
+import { planRetry } from "./retryPolicy";
 import {
   idempotencyKey,
   actionAck,
@@ -810,14 +811,18 @@ export function outcomeForStatus(status: number): RemoteCommandOutcome {
 /**
  * The ONLY policy that permits an automatic retry: the failure proved the
  * request never reached the server AND the bounded attempt budget remains.
- * Ambiguous-after-send is never auto-retried.
+ * Ambiguous-after-send is never auto-retried. The decision itself is delegated
+ * to the shared bounded retry policy (`retryPolicy.planRetry`) with
+ * `idempotent: true` (the server dedups the identical signed bytes), so the
+ * semantics here stay exactly: never-reached + within budget, nothing else.
  */
 export function shouldAutoRetry(
   failure: OutboundFailureKind,
   attempt: number,
   maxAttempts: number = REMOTE_MAX_AUTO_RETRIES,
 ): boolean {
-  return failure === "never-reached" && Number.isFinite(attempt) && attempt >= 0 && attempt < maxAttempts;
+  if (failure !== "never-reached" || !Number.isFinite(attempt) || attempt < 0) return false;
+  return planRetry({ failureKind: failure, attempt, maxAttempts, idempotent: true }).retry;
 }
 
 /** Bounded exponential backoff for automatic never-reached retries (same bytes). */
@@ -995,7 +1000,16 @@ export class RemoteOutboundPipeline {
           return;
         }
         const failure = classifyOutboundFailure(cause, true);
-        if (shouldAutoRetry(failure, entry.attempts, this.maxAutoRetries)) {
+        // Bounded policy via retryPolicy: only a provably never-reached failure
+        // of this server-deduped (idempotent) request within the attempt budget
+        // retries; ambiguous stays "unknown" and is NEVER auto-retried.
+        const plan = planRetry({
+          failureKind: failure,
+          attempt: entry.attempts,
+          maxAttempts: this.maxAutoRetries,
+          idempotent: true,
+        });
+        if (plan.retry) {
           entry.attempts += 1;
           // SAME request — identical sequence + signature, never re-signed.
           await wait(autoRetryDelayMs(entry.attempts));

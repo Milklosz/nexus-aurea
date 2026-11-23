@@ -8,6 +8,8 @@
 //! and bounded.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
@@ -17,9 +19,14 @@ pub(crate) const MONITOR_TICK: Duration = Duration::from_millis(1_000);
 /// false positives from a busy build while still catching every real sleep.
 pub(crate) const RESUME_GAP: Duration = Duration::from_millis(6_000);
 const ORPHAN_CHECK_INTERVAL: Duration = Duration::from_millis(5_000);
+/// Sleep slice so the stop flag is observed within ~100 ms on shutdown.
+const STOP_SLICE: Duration = Duration::from_millis(100);
+/// Upper bound for the shutdown join — a monitor must never hang Exit.
+const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 static MONITOR_STARTED: AtomicBool = AtomicBool::new(false);
 static MONITOR_STOP: AtomicBool = AtomicBool::new(false);
+static MONITOR_HANDLE: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,6 +60,45 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// Sleeps `total` in short slices, returning early once the stop flag is set,
+/// so `stop()` can join the thread promptly instead of waiting a full tick.
+fn sleep_interruptible(total: Duration) {
+    let deadline = Instant::now() + total;
+    loop {
+        if MONITOR_STOP.load(Ordering::Acquire) {
+            return;
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return;
+        }
+        std::thread::sleep(STOP_SLICE.min(deadline - now));
+    }
+}
+
+/// Joins the monitor thread with a bounded wait (shutdown can never hang).
+/// Returns false only when the timeout expired; the thread still exits on its
+/// own because it sleeps in slices and observes the stop flag.
+fn join_bounded(handle_slot: &Mutex<Option<JoinHandle<()>>>, timeout: Duration) -> bool {
+    let handle = match handle_slot.lock() {
+        Ok(mut guard) => guard.take(),
+        Err(_) => None,
+    };
+    let Some(handle) = handle else {
+        return true;
+    };
+    let deadline = Instant::now() + timeout;
+    while !handle.is_finished() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if handle.is_finished() {
+        let _ = handle.join();
+        true
+    } else {
+        false
+    }
+}
+
 pub(crate) fn start(app: AppHandle) {
     if MONITOR_STARTED.swap(true, Ordering::AcqRel) {
         return;
@@ -64,7 +110,10 @@ pub(crate) fn start(app: AppHandle) {
             let mut last_tick = Instant::now();
             let mut last_orphan_check = Instant::now();
             while !MONITOR_STOP.load(Ordering::Acquire) {
-                std::thread::sleep(MONITOR_TICK);
+                sleep_interruptible(MONITOR_TICK);
+                if MONITOR_STOP.load(Ordering::Acquire) {
+                    break;
+                }
                 let elapsed = last_tick.elapsed();
                 last_tick = Instant::now();
                 if resume_detected(elapsed) {
@@ -90,18 +139,33 @@ pub(crate) fn start(app: AppHandle) {
                 }
             }
         });
-    if spawned.is_err() {
-        MONITOR_STARTED.store(false, Ordering::Release);
+    match spawned {
+        Ok(handle) => {
+            if let Ok(mut slot) = MONITOR_HANDLE.lock() {
+                *slot = Some(handle);
+            }
+        }
+        Err(_) => {
+            MONITOR_STARTED.store(false, Ordering::Release);
+        }
     }
 }
 
 pub(crate) fn stop() {
     MONITOR_STOP.store(true, Ordering::Release);
+    // Bounded join: the thread sleeps in slices, so it is normally joined
+    // within ~100 ms; the timeout is a hard guard so Exit can never hang.
+    join_bounded(&MONITOR_HANDLE, SHUTDOWN_JOIN_TIMEOUT);
+    MONITOR_STARTED.store(false, Ordering::Release);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{resume_diagnostic, resume_detected, RESUME_GAP};
+    use super::{
+        MONITOR_STOP, join_bounded, resume_diagnostic, resume_detected, stop, RESUME_GAP,
+    };
+    use std::sync::Mutex;
+    use std::thread::JoinHandle;
     use std::time::Duration;
 
     #[test]
@@ -126,5 +190,22 @@ mod tests {
         assert!(text.contains("rejestru uruchomień"));
         assert!(!text.contains("playback"));
         assert!(!text.contains("zweryfikowano"));
+    }
+
+    #[test]
+    fn stop_is_idempotent_and_the_shutdown_join_is_bounded() {
+        stop();
+        stop();
+        let handle = std::thread::spawn(|| {});
+        std::thread::sleep(Duration::from_millis(10));
+        let slot: Mutex<Option<JoinHandle<()>>> = Mutex::new(Some(handle));
+        assert!(join_bounded(&slot, Duration::from_secs(2)));
+        assert!(slot.lock().unwrap().is_none());
+        // A stopped monitor returns promptly from an interruptible sleep.
+        MONITOR_STOP.store(true, std::sync::atomic::Ordering::Release);
+        let start = std::time::Instant::now();
+        super::sleep_interruptible(Duration::from_secs(30));
+        assert!(start.elapsed() < Duration::from_secs(2));
+        MONITOR_STOP.store(false, std::sync::atomic::Ordering::Release);
     }
 }
