@@ -135,8 +135,7 @@ describe("ascension A: Home return target keeps the dock selection", () => {
   it("the return-home listener fires once per event and unsubscribes on unmount", () => {
     const events: ReturnHomeEvent[] = [];
     let unlisten: (() => void) | null = null;
-    const listen = vi.fn(async (callback: (event: ReturnHomeEvent) => void) => {
-      const cb = callback;
+    const listen = vi.fn(async (_callback: (event: ReturnHomeEvent) => void) => {
       unlisten = () => { events.push({ kind: "unlistened" } as unknown as ReturnHomeEvent); };
       return () => { if (unlisten) unlisten(); };
     });

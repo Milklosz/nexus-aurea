@@ -105,19 +105,20 @@ describe("ascension A: useFocusOwner hook on window focus recovery", () => {
   it("regaining foreground resolves exactly one owner and gates confirm once", () => {
     const view = renderHook((props: { state: FocusOwnerState }) => useFocusOwner(props.state), { initialProps: { state: baseState } });
     expect(view.result.current.owner()).toBe("home-dock");
-    expect(view.result.current.allows({ type: "confirm" }, now)).toBe(true);
+    expect(view.result.current.allows({ type: "confirm" })).toBe(true); // hook reads the mocked clock
 
     blurWindow();
     advance(50);
     expect(view.result.current.owner()).toBe("external");
-    expect(view.result.current.allows({ type: "confirm" }, now)).toBe(false);
+    expect(view.result.current.allows({ type: "confirm" })).toBe(false);
 
-    focusWindow(); // t = 10_050
+    focusWindow(); // t = 10_050: hand-over settle window starts now
     expect(view.result.current.owner()).toBe("home-dock");
-    expect(view.result.current.allows({ type: "move", delta: -1 }, now)).toBe(true);
-    expect(view.result.current.allows({ type: "confirm" }, now + CONFIRM_SETTLE_MS - 1)).toBe(false);
-    advance(CONFIRM_SETTLE_MS);
-    expect(view.result.current.allows({ type: "confirm" }, now)).toBe(true);
+    expect(view.result.current.allows({ type: "move", delta: -1 })).toBe(true);
+    advance(CONFIRM_SETTLE_MS - 1);
+    expect(view.result.current.allows({ type: "confirm" })).toBe(false); // swallowed once
+    advance(1);
+    expect(view.result.current.allows({ type: "confirm" })).toBe(true); // then allowed
     view.unmount();
   });
 
@@ -133,9 +134,10 @@ describe("ascension A: useFocusOwner hook on window focus recovery", () => {
     // Panel closes: owner returns to the dock, one settle window applies.
     view.rerender({ state: baseState } as { state: FocusOwnerState });
     expect(view.result.current.owner()).toBe("home-dock");
-    expect(view.result.current.allows({ type: "confirm" }, now)).toBe(false);
-    advance(CONFIRM_SETTLE_MS);
-    expect(view.result.current.allows({ type: "confirm" }, now)).toBe(true);
+    advance(CONFIRM_SETTLE_MS - 1);
+    expect(view.result.current.allows({ type: "confirm" })).toBe(false);
+    advance(1);
+    expect(view.result.current.allows({ type: "confirm" })).toBe(true);
     view.unmount();
   });
 });
