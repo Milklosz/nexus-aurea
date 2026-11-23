@@ -69,4 +69,4 @@ Execute `docs/velora-2-s2-9-luna-test-procedure.md` plus the Ascension extension
 Record results as evidence JSON under `docs/evidence/`; only then may any hardware gate be marked PASS. Installer upgrade/rollback per `docs/velora-3-genesis-installer-upgrade-rollback.md`.
 
 ## 8. Pull request
-Draft PR opened from `feat/velora-3-genesis` (base `feat/velora-3-ascension`) via `gh pr create --draft`. CI on the PR is authoritative for Windows/MSVC/NSIS/portable/Playnite.
+**Draft PR #74 — https://github.com/Milklosz/nexus-aurea/pull/74** (`feat/velora-3-genesis` → `feat/velora-3-ascension`, created with `gh pr create --draft`). CI on the PR is authoritative for Windows/MSVC/NSIS/portable/Playnite.
