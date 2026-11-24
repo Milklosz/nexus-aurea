@@ -742,4 +742,68 @@ mod tests {
         assert_eq!(command_id("device-a", 3), command_id("device-a", 3));
         assert_ne!(command_id("device-a", 3), command_id("device-b", 3));
     }
+
+    // ---- S3.11 (Agent E): replay cannot be resurrected by receipt eviction ----
+
+    #[test]
+    fn s311_stale_sequence_stays_rejected_after_the_receipt_is_evicted() {
+        let mut log = CommandReceiptLog::new(1);
+        // seq 8 executes and is the only receipt; seq 9 executes and evicts it.
+        log.record("device-a", 8, "home");
+        log.record("device-a", 9, "home");
+        assert_eq!(log.len(), 1, "bounded eviction keeps only the newest receipt");
+        assert!(log.lookup("device-a", 8).is_none());
+        // With the evicted receipts gone, an old request must STILL be rejected
+        // from `last_sequence` alone — eviction can never resurrect a replay.
+        // (Sequence 9 still carries its own receipt: acknowledging THAT exact
+        // signed request once is legitimate dedup, not a replay.)
+        for stale in 0..=8u64 {
+            assert!(log.lookup("device-a", stale).is_none(), "stale sequence {stale} must have no receipt");
+            let decision = classify_replay(9, log.lookup("device-a", stale), stale, "home");
+            assert_eq!(
+                decision,
+                ReplayDecision::RejectReplay,
+                "unreceipted stale sequence {stale} must be rejected"
+            );
+        }
+        assert_eq!(
+            classify_replay(9, log.lookup("device-a", 9), 9, "home"),
+            ReplayDecision::AcknowledgeReplay,
+            "the newest receipt still dedups exactly its own signed request"
+        );
+        assert_eq!(classify_replay(9, None, 9, "home"), ReplayDecision::Ambiguous,
+            "exactly the reserved-but-unreceipted sequence stays ambiguous (409), never 401");
+        assert_eq!(classify_replay(9, None, 10, "home"), ReplayDecision::Execute);
+    }
+
+    #[test]
+    fn s311_gap_execute_then_duplicate_acknowledges_exactly_once() {
+        let mut log = CommandReceiptLog::default();
+        let mut last_sequence = 3u64;
+        // A gap (5 > 3+1) is fresh: execute once, persist the reservation and
+        // the receipt.
+        assert_eq!(
+            classify_replay(last_sequence, log.lookup("device-a", 5), 5, "select"),
+            ReplayDecision::Execute
+        );
+        last_sequence = 5;
+        let receipt = log.record("device-a", 5, "select");
+        // The lost-response retry of the SAME signed command dedups by the
+        // receipt: acknowledged, never a second side effect.
+        assert_eq!(
+            classify_replay(last_sequence, Some(&receipt), 5, "select"),
+            ReplayDecision::AcknowledgeReplay
+        );
+        // An OLD sequence under the new watermark is always rejected.
+        assert_eq!(
+            classify_replay(last_sequence, log.lookup("device-a", 4), 4, "select"),
+            ReplayDecision::RejectReplay
+        );
+        // The same sequence re-used for a different command is never a success.
+        assert_eq!(
+            classify_replay(last_sequence, Some(&receipt), 5, "home"),
+            ReplayDecision::RejectReplay
+        );
+        assert_eq!(log.len(), 1, "the duplicate never mints a second receipt");
+    }
 }
