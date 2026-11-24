@@ -29,8 +29,23 @@ export function gameCollectionKey(id: unknown): string | null {
   return null;
 }
 
+/** Use one catalog identity for both Steam key formats while accepting existing collections. */
+export function gameCatalogIdentity(id: unknown): string | null {
+  const key = gameCollectionKey(id);
+  return key !== null && validSteamGameId(key) ? `steam:${key}` : key;
+}
+
 function ids(value: unknown): string[] {
-  return Array.isArray(value) ? [...new Set(value.map(gameCollectionKey).filter((key): key is string => key !== null))].slice(0, MAX_ITEMS) : [];
+  if (!Array.isArray(value)) return [];
+  const unique = new Map<string, string>();
+  for (const id of value) {
+    const key = gameCollectionKey(id);
+    const identity = gameCatalogIdentity(key);
+    if (key === null || identity === null || unique.has(identity)) continue;
+    unique.set(identity, key);
+    if (unique.size === MAX_ITEMS) break;
+  }
+  return [...unique.values()];
 }
 export function parseGamingCollections(raw: string | null): GamingCollections {
   if (!raw || raw.length > 16_384) return emptyGamingCollections();
@@ -62,14 +77,25 @@ export function saveGamingCollections(value: GamingCollections): boolean {
 export function favoriteGame(value: GamingCollections, id: string): GamingCollections {
   const key = gameCollectionKey(id);
   if (key === null) return value;
-  return { ...value, favorites: value.favorites.includes(key) ? value.favorites.filter(item => item !== key) : ids([...value.favorites, key]) };
+  const identity = gameCatalogIdentity(key);
+  const otherFavorites = value.favorites.filter(item => gameCatalogIdentity(item) !== identity);
+  return { ...value, favorites: otherFavorites.length < value.favorites.length ? otherFavorites : ids([...value.favorites, key]) };
 }
 export function recordGameLaunch(value: GamingCollections, id: string): GamingCollections {
   const key = gameCollectionKey(id);
   if (key === null) return value;
-  return { ...value, recent: ids([key, ...value.recent.filter(item => item !== key)]) };
+  return { ...value, recent: ids([key, ...value.recent]) };
 }
 export function gameCollection(games: readonly ManagedGame[], order: readonly string[]): ManagedGame[] {
-  const installed = new Map(games.filter(game => gameCollectionKey(game.id) !== null).slice(0, 4096).map(game => [gameCollectionKey(game.id) as string, game]));
-  return ids(order).flatMap(id => { const game = installed.get(id); return game ? [game] : []; });
+  const installed = new Map<string, ManagedGame>();
+  for (const game of games) {
+    const identity = gameCatalogIdentity(game.id);
+    if (identity === null || installed.has(identity)) continue;
+    installed.set(identity, game);
+    if (installed.size === 4096) break;
+  }
+  return ids(order).flatMap(id => {
+    const game = installed.get(gameCatalogIdentity(id) ?? "");
+    return game ? [game] : [];
+  });
 }

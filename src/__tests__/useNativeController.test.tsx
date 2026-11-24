@@ -201,6 +201,23 @@ describe("useNativeController", () => {
     expect(moves).toBeLessThanOrEqual(3);
   });
 
+  it("a lost Options heartbeat never opens Control Center on an inferred release", async () => {
+    const { actions } = await mount();
+    emit(connected());
+    advance(50);
+    emit(state(["options"]));
+    advance(NATIVE_STALE_MS + 100);
+    expect(actions.options).not.toHaveBeenCalled();
+
+    emit(state());
+    advance(100);
+    emit(state(["options"]));
+    advance(100);
+    emit(state());
+    advance(100);
+    expect(actions.options).toHaveBeenCalledTimes(1);
+  });
+
   it("disconnecting mid-hold stops navigation at once; reconnecting works", async () => {
     const { actions } = await mount();
     await emit(connected());

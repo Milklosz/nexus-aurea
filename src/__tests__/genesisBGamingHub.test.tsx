@@ -96,6 +96,25 @@ const availableSteamLibrary = {
 };
 
 describe("Gaming Hub 3.0 — merged Steam/Playnite library", () => {
+  it("merges old Steam IDs with the current adapter and filters the alphabetized library", async () => {
+    mocks.snapshot = windowsSnapshot([
+      { id: "730", name: "Zulu", launcher: "steam" },
+      { id: "440", name: "Team Fortress 2", launcher: "steam" },
+    ]);
+    mocks.steamLibrary = availableSteamLibrary;
+    render(<GamingHub onActivateGaming={vi.fn(async () => true)} />);
+
+    const search = await screen.findByRole("searchbox", { name: "Szukaj w grach" });
+    expect(search.hasAttribute("data-velora-text-entry")).toBe(true);
+    expect(screen.getByRole("button", { name: "Zainstalowane (2)" })).toBeTruthy();
+    expect(Array.from(document.querySelectorAll(".gaming-game-row strong"), (entry) => entry.textContent)).toEqual(["Team Fortress 2", "Zulu"]);
+    fireEvent.change(search, { target: { value: " FORTRESS " } });
+    expect(screen.getByText("Team Fortress 2")).toBeTruthy();
+    expect(screen.queryByText("Zulu")).toBeNull();
+    fireEvent.change(search, { target: { value: "unknown game" } });
+    expect(screen.getByText("Nie znaleziono gier pasujących do wyszukiwania.")).toBeTruthy();
+  });
+
   it("renders Steam games from the adapter with a Steam launcher badge and dedups against the snapshot", async () => {
     mocks.snapshot = windowsSnapshot([{ id: "steam:730", name: "Counter-Strike 2", launcher: "steam" }]);
     mocks.steamLibrary = availableSteamLibrary;
@@ -168,6 +187,7 @@ describe("Gaming Hub 3.0 — merged Steam/Playnite library", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Uruchom" }));
     await screen.findByText("Wysłano żądanie uruchomienia Team Fortress 2 przez Steam.");
+    expect(await screen.findByText("Gra działa")).toBeTruthy();
     await waitFor(() => expect(mocks.listenForLaunchEvent).toHaveBeenCalledOnce());
 
     act(() => {

@@ -79,6 +79,7 @@ function renderCenter(overrides: Partial<{
   ambientSettings: AmbientSettings;
   onAmbientSettingsChange: (settings: AmbientSettings) => void;
   onReturnToNexus: () => void;
+  onSwitchApplications: () => void;
   onOpenDiagnostics: () => void;
   onClose: () => void;
   livingRoom: boolean;
@@ -93,6 +94,7 @@ function renderCenter(overrides: Partial<{
     mediaPlaying={false}
     onOpenDiagnostics={overrides.onOpenDiagnostics ?? vi.fn()}
     onReturnToNexus={overrides.onReturnToNexus ?? vi.fn()}
+    onSwitchApplications={overrides.onSwitchApplications}
     onClose={overrides.onClose ?? vi.fn()}
     livingRoom={overrides.livingRoom}
   />);
@@ -420,6 +422,25 @@ describe("Control Center", () => {
     expect(document.activeElement).toBe(screen.getByRole("tab", { name: "iPhone Remote" }));
     expect(screen.queryByRole("heading", { name: "Gaming Hub" })).toBeNull();
     await waitFor(() => expect(screen.getByLabelText("Stan iPhone Remote").textContent).toContain("wyłączony"));
+  });
+
+  it("opens and focuses Sessions every time the footer switch is used in the same dialog", async () => {
+    setupDialog();
+    const onSwitchApplications = vi.fn();
+    renderCenter({ onSwitchApplications });
+
+    const switchApplications = screen.getByRole("button", { name: "Przełącz aplikację" });
+    const sessions = screen.getByRole("tab", { name: "Sesje" });
+    const remote = screen.getByRole("tab", { name: "iPhone Remote" });
+    for (let count = 0; count < 2; count += 1) {
+      fireEvent.click(remote);
+      expect(remote.getAttribute("aria-selected")).toBe("true");
+      await act(async () => { fireEvent.click(switchApplications); });
+      expect(sessions.getAttribute("aria-selected")).toBe("true");
+      expect(document.activeElement).toBe(sessions);
+      expect(screen.getByRole("tabpanel", { name: "Sesje" })).toBeTruthy();
+    }
+    expect(onSwitchApplications).toHaveBeenCalledTimes(2);
   });
 
   it("cycles the Ambient idle interval through supported values", async () => {

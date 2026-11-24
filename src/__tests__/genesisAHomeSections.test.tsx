@@ -302,9 +302,12 @@ describe("HomeSections component states", () => {
     await flush();
     const alert = screen.getByRole("alert");
     expect(alert.textContent).toContain("Nie udało się odczytać stanu sesji.");
-    expect(document.querySelector(".lr-sections")).toBeNull();
+    expect(homeZoneAvailability(document).sections).toBe(true);
+    expect(focusHomeZone(document, "sections")).toBe(true);
+    const retry = screen.getByRole("button", { name: "Spróbuj ponownie" });
+    expect(document.activeElement).toBe(retry);
     sessionMocks.getSessionState.mockResolvedValueOnce(snapshot("veloraHome"));
-    fireEvent.click(screen.getByRole("button", { name: "Spróbuj ponownie" }));
+    expect(activateHomeAction(retry)).toBe(true);
     await flush();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByText("Tutaj pojawią się ostatnio otwierane aplikacje.")).toBeTruthy();

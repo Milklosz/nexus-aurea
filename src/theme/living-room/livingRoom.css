@@ -92,9 +92,13 @@
 .claude-usage-version { display: block; margin-top: 12px; font-size: calc(var(--lr-px) * 13); }
 
 /* ---------- selected app: the hero ---------- */
-.lr-info {
+.lr-home-content {
   position: absolute; z-index: 1;
-  left: var(--lr-safe-x); bottom: calc(var(--lr-px) * 224); max-width: calc(var(--lr-px) * 1100);
+  inset-inline: var(--lr-safe-x); bottom: var(--lr-safe-bottom);
+  display: flex; flex-direction: column; gap: var(--lr-s24);
+}
+.lr-info {
+  max-width: min(100%, calc(var(--lr-px) * 1100)); overflow-wrap: anywhere;
   transition: opacity var(--lr-t-title-in) var(--lr-ease-out), transform var(--lr-t-title-in) var(--lr-ease-out);
 }
 .lr-info.is-out-l, .lr-info.is-out-r { opacity: 0; transition-duration: var(--lr-t-title-out); }
@@ -109,8 +113,6 @@
 
 /* ---------- dock ---------- */
 .lr-dock {
-  position: absolute; z-index: 1;
-  left: var(--lr-safe-x); bottom: var(--lr-safe-bottom);
   display: flex; gap: var(--lr-dock-gap);
 }
 /* One tile, three unambiguous states:
@@ -177,9 +179,6 @@
 
 /* ---------- context sections row (above the dock) ---------- */
 .lr-sections {
-  position: absolute; z-index: 1;
-  left: var(--lr-safe-x); right: var(--lr-safe-x);
-  bottom: calc(var(--lr-safe-bottom) + var(--lr-tile-h) + var(--lr-s24));
   display: flex; flex-direction: column; gap: var(--lr-s-section-row-gap);
 }
 .lr-section { display: flex; align-items: center; gap: var(--lr-s-section-gap); min-height: var(--lr-section-tile-h); }
@@ -188,7 +187,7 @@
   font-size: var(--lr-fs-section-title); font-weight: 600; letter-spacing: .04em;
   text-transform: uppercase; color: var(--lr-ink-3);
 }
-.lr-section-tiles { display: flex; gap: var(--lr-s-section-gap); overflow: hidden; }
+.lr-section-tiles { display: flex; flex-wrap: wrap; min-width: 0; gap: var(--lr-s-section-gap); }
 .lr-section-tile {
   position: relative; flex: 0 0 auto;
   width: var(--lr-section-tile-w); height: var(--lr-section-tile-h); padding: 0 calc(var(--lr-px) * 14);
@@ -199,7 +198,7 @@
   white-space: nowrap; overflow: hidden; cursor: pointer;
   transition: transform var(--lr-t-focus) var(--lr-ease-out);
 }
-.lr-section-tile:focus { outline: none; background: var(--lr-focus-bg); color: var(--lr-focus-ink); transform: scale(1.05); }
+.lr-section-tile:focus { z-index: 1; outline: none; background: var(--lr-focus-bg); color: var(--lr-focus-ink); transform: scale(1.05); }
 .lr-section-tile:active { transform: scale(1.02); transition-duration: var(--lr-t-press); }
 .lr-section-name { overflow: hidden; text-overflow: ellipsis; }
 .lr-section-badge {
@@ -216,10 +215,7 @@
 
 /* states: shimmer while loading, inline message + retry on error, subtle placeholder when empty */
 .lr-sections-state {
-  position: absolute; z-index: 1;
-  left: var(--lr-safe-x); right: var(--lr-safe-x);
-  bottom: calc(var(--lr-safe-bottom) + var(--lr-tile-h) + var(--lr-s24));
-  display: flex; align-items: center; gap: var(--lr-s-section-gap);
+  display: flex; flex-flow: row wrap; align-items: center; gap: var(--lr-s-section-gap);
   min-height: var(--lr-section-tile-h);
   font-size: var(--lr-fs-section-title); color: var(--lr-ink-3);
 }

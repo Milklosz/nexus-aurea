@@ -36,32 +36,27 @@ pub(crate) fn classify_mutex_error(last_error: u32) -> Claim {
     }
 }
 
-/// Returns `true` when this process should continue starting up. Returns `false`
-/// when another instance is already running; that instance has been brought to
-/// the front and this process should exit without starting Tauri.
+/// Claims the instance or asks the existing window to come to the foreground.
+/// The caller decides how to handle failure to create the guard.
 #[cfg(target_os = "windows")]
-pub(crate) fn claim_or_activate_existing() -> bool {
+pub(crate) fn claim_or_activate_existing(portable: bool) -> std::io::Result<Claim> {
     fn wide(text: &str) -> Vec<u16> {
         text.encode_utf16().chain(std::iter::once(0)).collect()
     }
-    let Some((handle, claim)) = native::create(crate::portable::mutex_name()) else {
-        // Fail open: if the mutex cannot be created, start normally.
-        return true;
-    };
+    let (handle, claim) = native::create(crate::portable::mutex_name_for(portable))?;
     match claim {
         Claim::Primary => {
             INSTANCE_HANDLE.store(handle, std::sync::atomic::Ordering::Release);
-            true
         }
         Claim::AlreadyRunning => {
             native::close(handle);
             activate_existing_window(
                 &wide(WINDOW_CLASS),
-                &wide(crate::portable::window_title()),
+                &wide(crate::portable::window_title_for(portable)),
             );
-            false
         }
     }
+    Ok(claim)
 }
 
 /// Called only after Tauri enters its orderly Exit event and worker shutdown
@@ -93,18 +88,22 @@ mod native {
             name: *const u16,
         ) -> *mut c_void;
         fn GetLastError() -> u32;
+        fn SetLastError(error: u32);
         fn CloseHandle(handle: *mut c_void) -> i32;
     }
-    pub(super) fn create(name: &str) -> Option<(usize, Claim)> {
+    pub(super) fn create(name: &str) -> std::io::Result<(usize, Claim)> {
         let name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
         // SAFETY: the NUL-terminated name lives throughout the call. No ownership
         // is acquired: handle lifetime is the existing single-instance protocol.
-        let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+        let handle = unsafe {
+            SetLastError(0);
+            CreateMutexW(std::ptr::null(), 0, name.as_ptr())
+        };
         if handle.is_null() {
-            return None;
+            return Err(std::io::Error::last_os_error());
         }
         let last_error = unsafe { GetLastError() };
-        Some((handle as usize, classify_mutex_error(last_error)))
+        Ok((handle as usize, classify_mutex_error(last_error)))
     }
     pub(super) fn close(handle: usize) {
         // SAFETY: handles originate in CreateMutexW and each caller releases
@@ -140,8 +139,8 @@ fn activate_existing_window(class_name: &[u16], window_name: &[u16]) {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub(crate) fn claim_or_activate_existing() -> bool {
-    true
+pub(crate) fn claim_or_activate_existing(_portable: bool) -> std::io::Result<Claim> {
+    Ok(Claim::Primary)
 }
 
 #[cfg(test)]
@@ -176,6 +175,33 @@ mod tests {
     #[test]
     fn window_class_is_the_tauri_default() {
         assert_eq!(WINDOW_CLASS, "Tauri Window");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn guard_creation_failure_preserves_the_windows_error() {
+        use windows::Win32::{
+            Foundation::{CloseHandle, ERROR_INVALID_HANDLE},
+            System::Threading::CreateEventW,
+        };
+        use windows_core::PCWSTR;
+
+        // CreateMutexW fails if a private test name is already used by a
+        // different kernel object type, without touching either real guard.
+        let name = format!(
+            "Local\\pl.nexus.aurea.tests.collision.{}",
+            std::process::id()
+        );
+        let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+        // SAFETY: the fixture name is NUL-terminated and remains live through the call.
+        let event = unsafe { CreateEventW(None, false, false, PCWSTR(wide.as_ptr())) }.unwrap();
+        let result = super::native::create(&name);
+        // SAFETY: this fixture owns the successful CreateEventW handle.
+        unsafe { CloseHandle(event) }.unwrap();
+        assert_eq!(
+            result.unwrap_err().raw_os_error(),
+            Some(ERROR_INVALID_HANDLE.0 as i32)
+        );
     }
 
     #[cfg(windows)]

@@ -53,6 +53,10 @@ export function useGamepad(
     let frame = 0;
     let selectedPad = "";
     const engine = new ControllerEngine();
+    const resetInput = () => {
+      engine.reset();
+      selectedPad = "";
+    };
     const dispatch = (action: ControllerAction) => {
       if (!crossSourceGate.accept("gamepad-api", action, performance.now())) return;
       if (action.type === "move") actionsRef.current.move(action.delta);
@@ -62,8 +66,7 @@ export function useGamepad(
     const poll = () => {
       const focused = document.hasFocus() && document.visibilityState === "visible";
       if (!focused || suspendRef.current?.()) {
-        engine.reset();
-        selectedPad = "";
+        resetInput();
         frame = window.requestAnimationFrame(poll);
         return;
       }
@@ -88,10 +91,14 @@ export function useGamepad(
       frame = window.requestAnimationFrame(poll);
     };
 
+    window.addEventListener("blur", resetInput);
+    document.addEventListener("visibilitychange", resetInput);
     frame = window.requestAnimationFrame(poll);
     return () => {
       window.cancelAnimationFrame(frame);
-      engine.reset();
+      window.removeEventListener("blur", resetInput);
+      document.removeEventListener("visibilitychange", resetInput);
+      resetInput();
     };
   }, [enabled, profile]);
 }

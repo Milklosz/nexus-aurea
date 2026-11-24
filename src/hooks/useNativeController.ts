@@ -4,7 +4,6 @@ import { crossSourceGate } from "../services/crossSourceGate";
 import {
   BumperEdges,
   DEFAULT_DS4_BINDINGS,
-  NEUTRAL_SNAPSHOT,
   isNeutral,
   sampleFromNative,
   type ControllerBindings,
@@ -55,19 +54,27 @@ export function useNativeController(
   useEffect(() => {
     if (!enabled) return;
     const release = nativeControllerStore.acquire();
+    const heartbeatExpired = (model: NativeControllerModel, now: number) =>
+      model.snapshotAt !== null && now - model.snapshotAt > NATIVE_STALE_MS;
     // Claim activity when the event arrives, before the browser's next RAF can
     // dispatch the virtual Options press. Waiting for our 16 ms tick is too late.
     const noteActivity = () => {
       const model = nativeControllerStore.getModel();
+      const now = performance.now();
       if (document.hasFocus() && document.visibilityState === "visible"
-        && !suspendRef.current?.() && !model.unavailableReason && !isNeutral(model.snapshot)) {
-        crossSourceGate.noteNativeActivity(performance.now(), sampleFromNative(model.snapshot));
+        && !suspendRef.current?.() && !model.unavailableReason
+        && !heartbeatExpired(model, now) && !isNeutral(model.snapshot)) {
+        crossSourceGate.noteNativeActivity(now, sampleFromNative(model.snapshot, bindingsRef.current));
       }
     };
     const unsubscribe = nativeControllerStore.subscribe(noteActivity);
     // Options fires on release and never together with PS, so the Home chord cannot also open a panel.
     const engine = new ControllerEngine({ optionsOnRelease: true });
     const bumpers = new BumperEdges();
+    const resetInput = () => {
+      engine.reset();
+      bumpers.reset();
+    };
     let selectedDevice: string | null = null;
     // The connection epoch of the model we last synced to. Any change (pad
     // disconnect/reconnect, native layer unavailable) opens a new cross-source
@@ -77,6 +84,7 @@ export function useNativeController(
       if (model.epoch === modelEpoch) return;
       modelEpoch = model.epoch;
       crossSourceGate.advanceEpoch();
+      resetInput();
     };
     const dispatch = (action: ControllerAction, epochTag: number) => {
       if (!crossSourceGate.accept("native", action, performance.now(), epochTag)) return;
@@ -89,30 +97,27 @@ export function useNativeController(
       const model = nativeControllerStore.getModel();
       syncEpoch(model);
       const epochTag = crossSourceGate.currentEpoch;
+      const now = performance.now();
       const focused = document.hasFocus() && document.visibilityState === "visible";
-      // Not focused, suspended, or no native pad: release everything. Held inputs are
-      // re-primed on return, so a button held across a focus change never fires late.
-      if (!focused || suspendRef.current?.() || model.unavailableReason || !model.activeDevice) {
-        engine.reset();
-        bumpers.reset();
+      const hasHeldInput = !isNeutral(model.snapshot);
+      // Silence while held means input was lost. Reset instead of manufacturing a
+      // release, which would open Control Center for a held Options button.
+      if (!focused || suspendRef.current?.() || model.unavailableReason || !model.activeDevice
+        || (hasHeldInput && heartbeatExpired(model, now))) {
+        resetInput();
         selectedDevice = model.activeDevice;
         return;
       }
       if (model.activeDevice !== selectedDevice) {
         // A source/device handoff primes its current held state before dispatch.
-        engine.reset();
-        bumpers.reset();
+        resetInput();
         selectedDevice = model.activeDevice;
       }
-      // Native state is change-only plus a heartbeat while held. Silence while something is
-      // pressed means a release was lost, so the snapshot is treated as released, never held forever.
-      const stale = model.snapshotAt !== null && performance.now() - model.snapshotAt > NATIVE_STALE_MS;
-      const live = stale ? NEUTRAL_SNAPSHOT : model.snapshot;
+      const sample = sampleFromNative(model.snapshot, bindingsRef.current);
       // While the native pad is in use the browser path is secondary (virtual pads, same press).
-      if (!isNeutral(live)) crossSourceGate.noteNativeActivity(performance.now(), sampleFromNative(live));
-      const sample = sampleFromNative(live, bindingsRef.current);
-      for (const action of engine.update(sample, performance.now(), true)) dispatch(action, epochTag);
-      const held = new Set((stale ? NEUTRAL_SNAPSHOT : model.snapshot)?.buttons ?? []);
+      if (hasHeldInput) crossSourceGate.noteNativeActivity(now, sample);
+      for (const action of engine.update(sample, now, true)) dispatch(action, epochTag);
+      const held = new Set(model.snapshot?.buttons ?? []);
       for (const delta of bumpers.update(held.has("l1"), held.has("r1"))) actionsRef.current.section?.(delta);
     };
     const timer = window.setInterval(tick, NATIVE_TICK_MS);
@@ -120,16 +125,20 @@ export function useNativeController(
       // Regaining foreground is a resync boundary: anything tagged before it is
       // stale (double-activation suppression for the recovery path), and the model
       // epoch is re-synced so the next tick does not advance again.
+      resetInput();
       crossSourceGate.advanceEpoch();
       modelEpoch = nativeControllerStore.getModel().epoch;
       void nativeControllerStore.reconcile();
     };
+    window.addEventListener("blur", resetInput);
     window.addEventListener("focus", reconcile);
+    document.addEventListener("visibilitychange", resetInput);
     return () => {
       window.clearInterval(timer);
+      window.removeEventListener("blur", resetInput);
       window.removeEventListener("focus", reconcile);
-      engine.reset();
-      bumpers.reset();
+      document.removeEventListener("visibilitychange", resetInput);
+      resetInput();
       unsubscribe();
       release();
     };

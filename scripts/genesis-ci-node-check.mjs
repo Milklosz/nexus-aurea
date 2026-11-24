@@ -98,3 +98,10 @@ test("portable-windows.yml still builds the no-install candidate with its manife
   assert.ok(portable.includes("--no-bundle"), "the portable workflow must never produce an installer");
   assert.ok(portable.includes("VELORA-Portable-Windows-x64"));
 });
+
+test("portable smoke gates on early exit for duplicate and blocked profiles", () => {
+  assert.ok(portable.includes("^exit-duplicate-instance"));
+  assert.ok(portable.includes("exit-profile-error stage=local"));
+  assert.match(portable, /\$result\.duplicateRejected -and \$result\.blockedProfileRejected\) \{/);
+  assert.match(portable, /Duplicate startup ---', \$duplicateTrace, '--- Blocked profile startup ---', \$blockedTrace/);
+});

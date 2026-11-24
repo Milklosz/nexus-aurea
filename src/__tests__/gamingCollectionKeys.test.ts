@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   gameCollectionKey,
   gameCollection,
+  favoriteGame,
   recordGameLaunch,
   emptyGamingCollections,
 } from "../services/gamingCollections";
@@ -52,5 +53,13 @@ describe("gaming collection keys (S3.8)", () => {
     expect(gameCollection(installed, ["steam:440", `playnite:${UPPER_GUID}`])).toEqual([steam, playnite]);
     expect(gameCollection(installed, ["steam:220"])).toEqual([]);
     expect(gameCollection([], [`playnite:${GUID}`])).toEqual([]);
+  });
+
+  it("resolves legacy Steam favorites against canonical entries and toggles either alias once", () => {
+    const steam: ManagedGame = { id: "steam:440", name: "Team Fortress 2", launcher: "steam" };
+    const legacy = favoriteGame(emptyGamingCollections(), "440");
+    expect(gameCollection([steam], ["440", "steam:440"])).toEqual([steam]);
+    expect(favoriteGame(legacy, steam.id).favorites).toEqual([]);
+    expect(recordGameLaunch(recordGameLaunch(legacy, "440"), steam.id).recent).toEqual([steam.id]);
   });
 });

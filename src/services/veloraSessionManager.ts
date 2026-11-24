@@ -277,6 +277,7 @@ export type LaunchDecision =
 export class SessionLaunchCoordinator {
   private machines = new Map<string, SessionLifecycleMachine>();
   private lastKey = new Map<string, string>();
+  private readonly pending = new Set<string>();
 
   machineFor(service: string): SessionLifecycleMachine {
     let machine = this.machines.get(service);
@@ -289,11 +290,11 @@ export class SessionLaunchCoordinator {
 
   requestLaunch(service: string, generation?: number, atMs: number = Date.now()): LaunchDecision {
     const machine = this.machineFor(service);
-    if (machine.state === "launching" || machine.state === "closing") {
+    if (this.pending.has(service) || machine.state === "launching" || machine.state === "closing") {
       // A launch is in flight (or a close is pending): a repeated launch event
       // is a duplicate — no second IPC, no second spawn.
       const key = this.lastKey.get(service) ?? launchKey(service, machine.generation);
-      const reason = machine.state === "launching" ? "launch-in-flight" : "closing";
+      const reason = machine.state === "closing" ? "closing" : "launch-in-flight";
       return { kind: "duplicate", key, generation: machine.generation, sessionId: machine.sessionId, reason };
     }
     if (machine.state === "active") {
@@ -309,9 +310,28 @@ export class SessionLaunchCoordinator {
     }
     machine.generation = next;
     const key = launchKey(service, next);
-    machine.transition("launchRequested", atMs);
+    machine.transition("launchRequested", atMs, null);
     this.lastKey.set(service, key);
     return { kind: "launch", key, generation: next, sessionId: machine.sessionId };
+  }
+
+  /** Holds the same-service reservation until either launch or adoption IPC settles. */
+  async runLaunch(service: string, launch: () => Promise<string | null>): Promise<LaunchDecision> {
+    const decision = this.requestLaunch(service);
+    if (decision.kind === "duplicate" || decision.kind === "stale") return decision;
+
+    this.pending.add(service);
+    try {
+      this.noteLaunched(service, await launch());
+    } catch (cause) {
+      // An adoption can fail to foreground an existing native window. Keep the
+      // known session eligible for another focus attempt.
+      if (decision.kind === "launch") this.failLaunch(service);
+      throw cause;
+    } finally {
+      this.pending.delete(service);
+    }
+    return decision;
   }
 
   /**
@@ -325,6 +345,10 @@ export class SessionLaunchCoordinator {
       machine.sessionId = sessionId;
       machine.transition("launchProgress", atMs, sessionId);
       machine.transition("processReady", atMs);
+    } else if (machine.state === "launching") {
+      // Older receipts can confirm dispatch without identifying a tracked window.
+      // Leave the next attempt to the native duplicate guard.
+      machine.transition("reset", atMs);
     }
   }
 
