@@ -187,7 +187,7 @@
   font-size: var(--lr-fs-section-title); font-weight: 600; letter-spacing: .04em;
   text-transform: uppercase; color: var(--lr-ink-3);
 }
-.lr-section-tiles { display: flex; gap: var(--lr-s-section-gap); overflow: hidden; }
+.lr-section-tiles { display: flex; flex-wrap: wrap; min-width: 0; gap: var(--lr-s-section-gap); }
 .lr-section-tile {
   position: relative; flex: 0 0 auto;
   width: var(--lr-section-tile-w); height: var(--lr-section-tile-h); padding: 0 calc(var(--lr-px) * 14);
@@ -198,7 +198,7 @@
   white-space: nowrap; overflow: hidden; cursor: pointer;
   transition: transform var(--lr-t-focus) var(--lr-ease-out);
 }
-.lr-section-tile:focus { outline: none; background: var(--lr-focus-bg); color: var(--lr-focus-ink); transform: scale(1.05); }
+.lr-section-tile:focus { z-index: 1; outline: none; background: var(--lr-focus-bg); color: var(--lr-focus-ink); transform: scale(1.05); }
 .lr-section-tile:active { transform: scale(1.02); transition-duration: var(--lr-t-press); }
 .lr-section-name { overflow: hidden; text-overflow: ellipsis; }
 .lr-section-badge {
