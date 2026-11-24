@@ -40,26 +40,15 @@ export async function openStreamingService(
   }
 
   if (isTauri()) {
-    // Produkcja: dedykowane, bezpieczne okno Microsoft Edge (app-mode/pełny ekran)
-    // ze stałym profilem, zamiast domyślnej przeglądarki systemowej.
-    //
-    // The client-side coordinator keys the launch by `service#generation`:
-    // while a launch for this service is in flight (or closing), a repeated
-    // call is a duplicate and throws WITHOUT a second IPC launch event.
-    // "launch" starts a new generation; "adopt" re-selects the active session
-    // through the native adoption path (still no duplicate spawn). The native
-    // LaunchRegistry remains the authoritative duplicate guard.
+    // Native Edge Cinema owns the dedicated profile and remains authoritative
+    // for selection or spawning. Keep second selections out of the pending IPC.
     const serviceKey = `edge-cinema:${service.id}`;
-    const decision = coordinator.requestLaunch(serviceKey);
+    const decision = await coordinator.runLaunch(serviceKey, async () => {
+      const receipt = await launchEdgeCinema(service.href);
+      return receipt.launchId ?? null;
+    });
     if (decision.kind === "duplicate" || decision.kind === "stale") {
       throw new Error(DUPLICATE_LAUNCH_IN_FLIGHT_ERROR);
-    }
-    try {
-      const receipt = await launchEdgeCinema(service.href);
-      coordinator.noteLaunched(serviceKey, receipt.launchId ?? null);
-    } catch (cause) {
-      coordinator.failLaunch(serviceKey);
-      throw cause;
     }
     return;
   }

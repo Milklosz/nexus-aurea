@@ -70,6 +70,57 @@ it("marks the machine as error when the native launch fails, and allows a fresh 
   expect(coordinator.machineFor("edge-cinema:netflix").generation).toBe(2);
 });
 
+it("allows another service while an adoption is pending and sends only one adoption IPC", async () => {
+  const coordinator = new SessionLaunchCoordinator();
+  const receipt = { launched: true, mode: "app-fullscreen", profileDir: "p", launchId: "cinema-1", adopted: false };
+  mocks.launchEdgeCinema.mockResolvedValueOnce(receipt);
+  await openStreamingService(netflix, coordinator);
+
+  let resolveAdoption: (value: unknown) => void = () => {};
+  mocks.launchEdgeCinema.mockReturnValueOnce(new Promise((resolve) => { resolveAdoption = resolve; }));
+  const adoption = openStreamingService(netflix, coordinator);
+  await expect(openStreamingService(netflix, coordinator)).rejects.toThrow(/już uruchamiana/);
+  const youtube: WebStreamingService = {
+    ...netflix, id: "youtube", href: "https://www.youtube.com/", allowedHost: "www.youtube.com",
+  };
+  mocks.launchEdgeCinema.mockResolvedValueOnce({ ...receipt, launchId: "cinema-2" });
+  await openStreamingService(youtube, coordinator);
+  resolveAdoption({ ...receipt, adopted: true });
+  await adoption;
+
+  expect(mocks.launchEdgeCinema.mock.calls.map(([url]) => url)).toEqual([netflix.href, netflix.href, youtube.href]);
+  expect(coordinator.machineFor("edge-cinema:netflix").sessionId).toBe("cinema-1");
+  expect(coordinator.machineFor("edge-cinema:youtube").sessionId).toBe("cinema-2");
+});
+
+it("releases the reservation when a compatible native receipt has no launch ID", async () => {
+  const coordinator = new SessionLaunchCoordinator();
+  const receipt = { launched: true, mode: "app-fullscreen", profileDir: "p" };
+  mocks.launchEdgeCinema.mockResolvedValueOnce(receipt);
+  await openStreamingService(netflix, coordinator);
+  expect(coordinator.machineFor("edge-cinema:netflix").state).toBe("idle");
+
+  mocks.launchEdgeCinema.mockResolvedValueOnce({ ...receipt, launchId: "cinema-2" });
+  await openStreamingService(netflix, coordinator);
+  expect(coordinator.machineFor("edge-cinema:netflix").sessionId).toBe("cinema-2");
+  expect(coordinator.machineFor("edge-cinema:netflix").generation).toBe(2);
+});
+
+it("keeps the live session after a failed foreground adoption and permits retry", async () => {
+  const coordinator = new SessionLaunchCoordinator();
+  const receipt = { launched: true, mode: "app-fullscreen", profileDir: "p", launchId: "cinema-1" };
+  mocks.launchEdgeCinema.mockResolvedValueOnce(receipt);
+  await openStreamingService(netflix, coordinator);
+
+  mocks.launchEdgeCinema.mockRejectedValueOnce(new Error("focus denied"));
+  await expect(openStreamingService(netflix, coordinator)).rejects.toThrow("focus denied");
+  expect(coordinator.machineFor("edge-cinema:netflix").state).toBe("active");
+
+  mocks.launchEdgeCinema.mockResolvedValueOnce({ ...receipt, adopted: true });
+  await openStreamingService(netflix, coordinator);
+  expect(coordinator.machineFor("edge-cinema:netflix").generation).toBe(1);
+});
+
 it("rejects untrusted URLs before touching the coordinator or IPC", async () => {
   const coordinator = new SessionLaunchCoordinator();
   await expect(openStreamingService({ ...netflix, href: "https://netflix.evil.example/pl/" }, coordinator))

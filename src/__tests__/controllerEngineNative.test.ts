@@ -68,6 +68,24 @@ describe("Options on release (native source)", () => {
     expect(run(engine, neutral, [150, 200])).toEqual([]);
   });
 
+  it("clears a short PS+Options pulse after a debounced neutral release", () => {
+    const engine = new ControllerEngine({ optionsOnRelease: true });
+    engine.update(neutral, 0, true);
+    expect(run(engine, { ...options, guide: true }, [10, 20])).toEqual([]);
+    expect(run(engine, neutral, [30, 70])).toEqual([]);
+    expect(run(engine, options, [100, 150])).toEqual([]);
+    expect(run(engine, neutral, [170, 220])).toEqual([{ type: "options" }]);
+  });
+
+  it("does not clear chord suppression during a bouncing Options release", () => {
+    const engine = new ControllerEngine({ optionsOnRelease: true });
+    engine.update(neutral, 0, true);
+    run(engine, { ...options, guide: true }, [10, 20]);
+    run(engine, neutral, [30, 40]);
+    run(engine, options, [55, 100]);
+    expect(run(engine, neutral, [120, 170])).toEqual([]);
+  });
+
   it("the default engine keeps firing Options on press (Gamepad API behaviour unchanged)", () => {
     const engine = new ControllerEngine();
     engine.update(neutral, 0, true);

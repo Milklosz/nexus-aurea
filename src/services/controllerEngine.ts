@@ -250,10 +250,13 @@ export class ControllerEngine {
     }
     // PS held at any moment of the Options press turns it into the Home chord.
     if (raw && sample.guide) this.optionsGuideInvolved = true;
-    if (state.raw === state.pressed || now - state.since < DEBOUNCE_MS) return;
+    if (now - state.since < DEBOUNCE_MS) return;
+    const wasPressed = state.pressed;
     state.pressed = state.raw;
     if (state.pressed) return;
-    if (!this.optionsGuideInvolved) actions.push({ type: "options" });
+    if (wasPressed && !this.optionsGuideInvolved) actions.push({ type: "options" });
+    // A pulse can involve PS without lasting long enough to latch Options.
+    // Stable neutral still ends that chord and re-arms an independent press.
     this.optionsGuideInvolved = false;
   }
 

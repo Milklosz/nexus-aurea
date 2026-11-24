@@ -236,4 +236,43 @@ describe("ascension A: useNativeController reconnect resync", () => {
     advance(100);
     expect(actions.confirm).toHaveBeenCalledTimes(1);
   });
+
+  it("re-primes the same device when disconnect and reconnect arrive between ticks", async () => {
+    const { actions } = await mount();
+    emit(connected());
+    advance(50);
+    emit(state(["options"]));
+    advance(100);
+    emit(disconnected());
+    emit(connected());
+    emit(state());
+    advance(100);
+    expect(actions.options).not.toHaveBeenCalled();
+
+    emit(state(["options"]));
+    advance(100);
+    emit(state());
+    advance(100);
+    expect(actions.options).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a pending confirm when blur and focus occur between ticks", async () => {
+    const { actions } = await mount();
+    emit(connected());
+    advance(50);
+    emit(state(["cross"]));
+    advance(20);
+    mocks.status.mockResolvedValue(statusWithPads(["pad-a"]));
+    blurWindow();
+    focusWindow();
+    await flush();
+    advance(100);
+    expect(actions.confirm).not.toHaveBeenCalled();
+
+    emit(state());
+    advance(100);
+    emit(state(["cross"]));
+    advance(100);
+    expect(actions.confirm).toHaveBeenCalledTimes(1);
+  });
 });

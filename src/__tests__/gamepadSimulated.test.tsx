@@ -138,6 +138,29 @@ describe("useGamepad with a simulated controller", () => {
     expect(actions.confirm).not.toHaveBeenCalled();
   });
 
+  it("drops a pending confirm when focus returns before the next poll", () => {
+    const actions = makeActions();
+    renderHook(() => useGamepad(actions, true, "standard"));
+    frame();
+    setPad(makePad([0]));
+    frame();
+
+    vi.mocked(document.hasFocus).mockReturnValue(false);
+    act(() => { window.dispatchEvent(new Event("blur")); });
+    vi.mocked(document.hasFocus).mockReturnValue(true);
+    act(() => { window.dispatchEvent(new Event("focus")); });
+    frame(100);
+    expect(actions.confirm).not.toHaveBeenCalled();
+
+    setPad(makePad());
+    frame(100);
+    frame(100);
+    setPad(makePad([0]));
+    frame(100);
+    frame(100);
+    expect(actions.confirm).toHaveBeenCalledTimes(1);
+  });
+
   it("ignores input while the suspend predicate is true, for example a foreground app owns the controller", () => {
     const actions = makeActions();
     let suspended = true;
