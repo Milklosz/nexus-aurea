@@ -37,6 +37,7 @@ test("ci.yml runs every frontend/proof suite as its own step (both OSes via the 
     "pnpm test:portable-isolation",
     "pnpm test:genesis-ci",
     "pnpm test:manifest",
+    "pnpm test:ipc-contract",
     "pnpm build",
     "pnpm manifest:sha256",
     "node scripts/sha256-manifest.mjs verify --manifest dist/sha256-manifest.json",
@@ -68,6 +69,7 @@ test("package.json declares the genesis + isolation scripts the CI runs", () => 
   assert.equal(pkg.scripts["test:portable-manifest"], "node --test scripts/portable-manifest-node-check.mjs");
   assert.equal(pkg.scripts["test:manifest"], "node --test scripts/sha256-manifest-node-check.mjs");
   assert.equal(pkg.scripts["test:claude-usage"], "node --test scripts/claude-usage-node-check.mjs");
+  assert.equal(pkg.scripts["test:ipc-contract"], "node --test scripts/ipc-contract-node-check.mjs");
 });
 
 test("the genesis vitest files named in CI exist", () => {
@@ -91,6 +93,8 @@ test("portable-windows.yml still builds the no-install candidate with its manife
   assert.ok(portable.includes("pnpm test:manifest"));
   assert.ok(portable.includes("pnpm test:portable-isolation"));
   assert.ok(portable.includes("pnpm test:genesis-ci"));
+  assert.ok(portable.includes("pnpm test:ipc-contract"), "portable workflow must run the IPC contract drift check");
+  assert.ok(portable.includes("'feat/velora-3-singularity*'"), "portable workflow must build push candidates for singularity branches");
   assert.ok(portable.includes("--no-bundle"), "the portable workflow must never produce an installer");
   assert.ok(portable.includes("VELORA-Portable-Windows-x64"));
 });
