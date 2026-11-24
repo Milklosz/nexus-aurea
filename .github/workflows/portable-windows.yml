@@ -131,6 +131,8 @@ jobs:
           $output = Join-Path $env:GITHUB_WORKSPACE 'dist/portable'
           $dataRoot = Join-Path $smokeDir 'VELORA-Portable-Data'
           $trace = ''
+          $duplicateTrace = ''
+          $blockedTrace = ''
           $tracePath = Join-Path $output 'startup-smoke.log'
           $result = [ordered]@{
             status = 'STARTUP-BLOCKED'
@@ -144,13 +146,22 @@ jobs:
             windowVisible = $false
             frontendReady = $false
             runningAtReadiness = $false
+            windowObservedMs = $null
+            frontendReadyObservedMs = $null
+            duplicateRejected = $false
+            duplicateExitCode = $null
+            blockedProfileRejected = $false
+            blockedProfileExitCode = $null
             installedProfileCreated = $false
             portableWebViewProfile = $false
             shutdownRequested = $false
             cleanShutdown = $false
+            shutdownObservedMs = $null
             exitCode = $null
           }
           $process = $null
+          $duplicate = $null
+          $blocked = $null
           try {
             New-Item -ItemType Directory -Path $smokeDir -ErrorAction Stop | Out-Null
             $exe = Join-Path $smokeDir 'nexus-aurea.exe'
@@ -165,6 +176,7 @@ jobs:
             $installedDataBefore = @($installedProfiles | Where-Object { Test-Path -LiteralPath $_ })
 
             # Direct EXE launch proves isolation without launcher environment.
+            $startupWatch = [System.Diagnostics.Stopwatch]::StartNew()
             $process = Start-Process -FilePath $exe -ArgumentList '--windowed' -WorkingDirectory $env:RUNNER_TEMP -PassThru
             $result.processStarted = $true
             $result.pid = $process.Id
@@ -178,6 +190,8 @@ jobs:
               $result.windowCreated = $trace -match '(?m)^window-created\r?$'
               $result.windowVisible = $trace -match '(?m)^window-visible\r?$' -and $process.MainWindowHandle -ne 0 -and $process.MainWindowTitle -eq 'VELORA (Portable Validation)'
               $result.frontendReady = $trace -match '(?m)^frontend-ready\r?$'
+              if ($result.windowVisible -and $null -eq $result.windowObservedMs) { $result.windowObservedMs = $startupWatch.ElapsedMilliseconds }
+              if ($result.frontendReady -and $null -eq $result.frontendReadyObservedMs) { $result.frontendReadyObservedMs = $startupWatch.ElapsedMilliseconds }
               if ($process.HasExited) { break }
               if ($result.windowVisible -and $result.frontendReady) {
                 $result.runningAtReadiness = $true
@@ -186,14 +200,49 @@ jobs:
               Start-Sleep -Milliseconds 250
             } while ((Get-Date) -lt $deadline)
 
+            if ($result.runningAtReadiness) {
+              $duplicate = Start-Process -FilePath $exe -ArgumentList '--windowed' -WorkingDirectory $env:RUNNER_TEMP -WindowStyle Hidden -PassThru
+              if ($duplicate.WaitForExit(10000)) {
+                $result.duplicateExitCode = $duplicate.ExitCode
+                $duplicateLog = Get-ChildItem -LiteralPath $dataRoot -Filter "startup-$($duplicate.Id)-*.log" -File | Select-Object -First 1
+                $duplicateTrace = if ($duplicateLog) { Get-Content -LiteralPath $duplicateLog.FullName -Raw } else { '' }
+                $result.duplicateRejected = $result.duplicateExitCode -eq 0 -and -not $process.HasExited -and
+                  $duplicateTrace -match '(?m)^exit-duplicate-instance\r?$' -and
+                  $duplicateTrace -notmatch '(?m)^(profile-ready|tauri-build-start)\r?$'
+              }
+            }
+
             if (-not $process.HasExited -and $result.windowVisible) {
+              $shutdownWatch = [System.Diagnostics.Stopwatch]::StartNew()
               $result.shutdownRequested = $process.CloseMainWindow()
-              if ($result.shutdownRequested) { $null = $process.WaitForExit(20000) }
+              if ($result.shutdownRequested -and $process.WaitForExit(20000)) {
+                $result.shutdownObservedMs = $shutdownWatch.ElapsedMilliseconds
+              }
             }
             if ($process.HasExited) { $result.exitCode = $process.ExitCode }
             if ($startup) { $trace = Get-Content -LiteralPath $startup.FullName -Raw }
             $result.cleanShutdown = $result.shutdownRequested -and $process.HasExited -and
               $result.exitCode -eq 0 -and $trace -match '(?m)^exit-orderly\r?$'
+
+            if ($result.cleanShutdown -and $result.duplicateRejected) {
+              # Exercise a blocked profile child in a fresh sibling root, after the primary closes.
+              $blockedDir = Join-Path $smokeDir 'blocked-profile'
+              $blockedRoot = Join-Path $blockedDir 'VELORA-Portable-Data'
+              New-Item -ItemType Directory -Path $blockedRoot -ErrorAction Stop | Out-Null
+              $blockedExe = Join-Path $blockedDir 'nexus-aurea.exe'
+              Copy-Item -LiteralPath $exe -Destination $blockedExe
+              New-Item -ItemType File -Path (Join-Path $blockedRoot 'Local') -ErrorAction Stop | Out-Null
+              $blocked = Start-Process -FilePath $blockedExe -ArgumentList '--windowed' -WorkingDirectory $env:RUNNER_TEMP -WindowStyle Hidden -PassThru
+              if ($blocked.WaitForExit(10000)) {
+                $result.blockedProfileExitCode = $blocked.ExitCode
+                $blockedLog = Get-ChildItem -LiteralPath $blockedRoot -Filter "startup-$($blocked.Id)-*.log" -File | Select-Object -First 1
+                $blockedTrace = if ($blockedLog) { Get-Content -LiteralPath $blockedLog.FullName -Raw } else { '' }
+                $result.blockedProfileRejected = $result.blockedProfileExitCode -eq 20 -and
+                  $blockedTrace -match '(?m)^exit-profile-error stage=local kind=InvalidInput os_code=None\r?$' -and
+                  $blockedTrace -notmatch '(?m)^tauri-build-start\r?$'
+              }
+            }
+
             $result.portableWebViewProfile = Test-Path -LiteralPath (Join-Path $dataRoot 'EBWebView/Local State') -PathType Leaf
             $result.installedProfileCreated = @($installedProfiles | Where-Object {
               $_ -notin $installedDataBefore -and (Test-Path -LiteralPath $_)
@@ -204,24 +253,29 @@ jobs:
               $result.status = 'ISOLATION-BLOCKED'
             } elseif ($result.runtimeInitialized -and $result.eventLoopStarted -and $result.windowCreated -and
                 $result.windowVisible -and $result.frontendReady -and $result.runningAtReadiness -and
-                $result.portableWebViewProfile -and $result.cleanShutdown -and $exactCommit -and $windowed) {
+                $result.portableWebViewProfile -and $result.cleanShutdown -and $exactCommit -and $windowed -and
+                $result.duplicateRejected -and $result.blockedProfileRejected) {
               $result.status = 'PASS'
             } elseif ($result.runningAtReadiness -and -not $result.cleanShutdown) {
               $result.status = 'SHUTDOWN-BLOCKED'
+            } elseif ($result.cleanShutdown -and (-not $result.duplicateRejected -or -not $result.blockedProfileRejected)) {
+              $result.status = 'FAILURE-PATH-BLOCKED'
             }
           } catch {
             $result.status = 'SMOKE-ERROR'
             $result.errorType = $_.Exception.GetType().Name
           } finally {
-            if ($process -and -not $process.HasExited) {
+            foreach ($smokeProcess in @($process, $duplicate, $blocked)) {
+              if (-not $smokeProcess -or $smokeProcess.HasExited) { continue }
               try {
-                $process.Kill()
+                $smokeProcess.Kill()
                 $result.runnerTerminatedSmokeProcess = $true
               } catch {
                 $result.runnerTerminationError = $_.Exception.GetType().Name
               }
             }
-            $trace | Set-Content -LiteralPath $tracePath -Encoding utf8
+            @('--- Primary startup ---', $trace, '--- Duplicate startup ---', $duplicateTrace, '--- Blocked profile startup ---', $blockedTrace) |
+              Set-Content -LiteralPath $tracePath -Encoding utf8
             $result | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'smoke-result.json') -Encoding utf8
             Get-Content -LiteralPath $tracePath
             $result | ConvertTo-Json
@@ -290,7 +344,7 @@ jobs:
           $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
           $smoke = Get-Content -LiteralPath (Join-Path $output 'smoke-result.json') -Raw | ConvertFrom-Json
           @(
-            '## VELORA 3.0 first-frame recovery candidate'
+            '## VELORA portable Windows candidate'
             ''
             "- Source commit: $($manifest.source.sourceSha)"
             "- Event SHA: $($manifest.source.eventSha)"
@@ -298,6 +352,8 @@ jobs:
             "- ZIP SHA-256: $($manifest.artifacts.package.sha256)"
             "- EXE SHA-256: $($manifest.artifacts.executable.sha256)"
             "- Startup/shutdown smoke: $($smoke.status)"
+            "- Duplicate rejected: $($smoke.duplicateRejected)"
+            "- Blocked profile rejected: $($smoke.blockedProfileRejected)"
             ''
             'No installer was run. No registry or system setting was changed. No physical hardware validation is claimed.'
             'The manifest is a hash consistency record, not a digital signature.'
