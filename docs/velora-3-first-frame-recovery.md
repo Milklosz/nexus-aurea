@@ -50,6 +50,7 @@ flowchart TD
 - **High, corrected.** The native launcher runs without forcing a PowerShell policy override.
 - **Medium, corrected.** Initial window flags are set before creation. Failure phases and structured error categories are written to bounded per-process traces. The smoke directory is separate from the package stage and only sanitized startup evidence is published by the smoke job.
 - **Medium, corrected.** The portable app rejects conflicting WebView2 data-directory overrides and redirected profile directories. WebView2 policy values are queried read-only. The startup trace omits environment values, paths, URLs, authentication data and panic text.
+- **Medium, corrected.** The first recovery build created Claude CLI state in the isolated profile during Home startup. When the status-line file was absent, Home's usage panel ran the host CLI's authentication-status command. The portable build now accepts only the isolated status-line file for this widget. The installed app retains its CLI fallback.
 - **Reviewed.** Existing Home, controller worker lifecycle, LAN authentication, credential service and installer flows retain their original call paths. No certificates, drivers, startup settings, or production credentials are involved in startup validation.
 
 ## Luna validation on the MSI
