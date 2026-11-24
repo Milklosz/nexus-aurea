@@ -15,7 +15,10 @@ use std::{
     time::{Duration, Instant},
 };
 #[cfg(windows)]
-use std::path::{Path, PathBuf};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
 use tauri::State;
 
 use crate::remote_reliability::{classify_replay, CommandReceiptLog, ReplayDecision};
@@ -359,11 +362,71 @@ struct RateBucket {
     count: u32,
 }
 
+#[cfg(windows)]
+#[derive(Default)]
+struct RemoteServer {
+    generation: u64,
+    phase: RemoteServerPhase,
+}
+
+#[cfg(windows)]
+#[derive(Default)]
+enum RemoteServerPhase {
+    #[default]
+    Stopped,
+    Starting(u64),
+    Running {
+        generation: u64,
+        handle: axum_server::Handle,
+    },
+}
+
+#[cfg(windows)]
+struct RemoteStartAttempt<'a> {
+    server: &'a Mutex<RemoteServer>,
+    generation: u64,
+}
+
+#[cfg(windows)]
+impl<'a> RemoteStartAttempt<'a> {
+    fn reserve(server: &'a Mutex<RemoteServer>) -> Result<Option<Self>, String> {
+        let mut state = lock(server);
+        match state.phase {
+            RemoteServerPhase::Running { .. } => return Ok(None),
+            RemoteServerPhase::Starting(_) => {
+                return Err("Serwer iPhone Remote jest już uruchamiany.".into());
+            }
+            RemoteServerPhase::Stopped => {}
+        }
+        let generation = state
+            .generation
+            .checked_add(1)
+            .ok_or("Licznik uruchomień serwera został wyczerpany.")?;
+        state.generation = generation;
+        state.phase = RemoteServerPhase::Starting(generation);
+        Ok(Some(Self { server, generation }))
+    }
+
+    fn is_pending(&self, state: &RemoteServer) -> bool {
+        matches!(state.phase, RemoteServerPhase::Starting(id) if id == self.generation)
+    }
+}
+
+#[cfg(windows)]
+impl Drop for RemoteStartAttempt<'_> {
+    fn drop(&mut self) {
+        let mut state = lock(self.server);
+        if self.is_pending(&state) {
+            state.phase = RemoteServerPhase::Stopped;
+        }
+    }
+}
+
 struct RemoteInner {
     status: Mutex<RemoteAccessStatus>,
     pairing: Mutex<Option<PairingCode>>,
     #[cfg(windows)]
-    server: Mutex<Option<axum_server::Handle>>,
+    server: Mutex<RemoteServer>,
     #[cfg(windows)]
     vault: Mutex<Vault>,
     #[cfg(windows)]
@@ -388,8 +451,8 @@ struct RemoteInner {
     trust_approval: Mutex<Option<(String, Instant)>>,
     pair_attempts: Mutex<HashMap<IpAddr, RateBucket>>,
     command_attempts: Mutex<HashMap<String, RateBucket>>,
-    /// Bounds unauthenticated-looking hello probes before any credential-store
-    /// read. Keyed by device id, so a flood of unknown ids cannot exhaust it.
+    /// Bounds authenticated hello probes before any credential-store read.
+    /// Only a valid cached device signature can consume a bucket.
     hello_attempts: Mutex<HashMap<String, RateBucket>>,
     /// Successful command receipts for exact duplicate acknowledgement. Bounded
     /// and in-memory; never contains a token or signature.
@@ -410,7 +473,7 @@ impl RemoteInner {
         Self {
             status: Mutex::new(RemoteAccessStatus::default()),
             pairing: Mutex::new(None),
-            server: Mutex::new(None),
+            server: Mutex::new(RemoteServer::default()),
             vault: Mutex::new(Vault::default()),
             vault_loaded: Mutex::new(false),
             credential_store,
@@ -514,13 +577,21 @@ fn verify_command_signature(
     command: &RemoteCommand,
     signature: &[u8],
 ) -> bool {
+    verify_hmac(
+        token,
+        &remote_command_payload(device_id, sequence, command),
+        signature,
+    )
+}
+
+fn verify_hmac(token: &[u8], payload: &str, signature: &[u8]) -> bool {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
 
     let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(token) else {
         return false;
     };
-    mac.update(remote_command_payload(device_id, sequence, command).as_bytes());
+    mac.update(payload.as_bytes());
     mac.verify_slice(signature).is_ok()
 }
 
@@ -608,6 +679,115 @@ fn resolve_trust_profile_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> 
             .map_err(|_| "Nie można otworzyć folderu Pobrane.".to_string())?;
         trust_profile_dir(Some(&download), None)
     }
+}
+
+#[cfg(windows)]
+fn pin_trust_directory(path: &Path) -> io::Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+
+    // Allow the same-directory rename to open its destination parent for
+    // writing, while denying delete sharing so the parent cannot be moved.
+    let directory = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
+        .open(path)?;
+    validate_trust_directory(&directory)?;
+    Ok(directory)
+}
+
+#[cfg(windows)]
+fn validate_trust_directory(directory: &fs::File) -> io::Result<()> {
+    use std::os::windows::fs::MetadataExt;
+    use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    let metadata = directory.metadata()?;
+    if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn pin_portable_trust_dir(
+    root: &Path,
+    dir: &Path,
+    create: bool,
+) -> io::Result<(fs::File, fs::File)> {
+    if !root.is_absolute() || dir != root.join("trust") {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    let root_handle = pin_trust_directory(root)?;
+    if create {
+        match fs::create_dir(dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    let dir_handle = pin_trust_directory(dir)?;
+    Ok((root_handle, dir_handle))
+}
+
+#[cfg(windows)]
+fn existing_regular_trust_profile(path: &Path) -> io::Result<bool> {
+    use std::os::windows::fs::MetadataExt;
+    use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    match fs::symlink_metadata(path) {
+        Ok(metadata)
+            if metadata.is_file()
+                && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 == 0 =>
+        {
+            Ok(true)
+        }
+        Ok(_) => Err(io::ErrorKind::InvalidInput.into()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(windows)]
+fn write_portable_trust_profile(root: &Path, dir: &Path, profile: &str) -> io::Result<PathBuf> {
+    use std::io::Write;
+
+    let (_root, directory) = pin_portable_trust_dir(root, dir, true)?;
+    let path = dir.join(TRUST_PROFILE_FILE_NAME);
+    existing_regular_trust_profile(&path)?;
+
+    // Replace the directory entry with a complete file. Never write in place
+    // through a previously existing link, or expose a partially written profile.
+    let temporary = dir.join(format!(".velora-trust-{:016x}.tmp", rand::random::<u64>()));
+    let mut staged = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    // Recheck the held directory before writing. Once the temporary file is
+    // present, the nonempty directory also cannot become a new reparse point.
+    validate_trust_directory(&directory)?;
+    let written = staged
+        .write_all(profile.as_bytes())
+        .and_then(|_| staged.sync_all());
+    drop(staged);
+    let published = written.and_then(|_| fs::rename(&temporary, &path));
+    if published.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    published.map(|()| path)
+}
+
+#[cfg(windows)]
+fn remove_portable_trust_profile(root: &Path, dir: &Path) -> io::Result<()> {
+    let (_root, directory) = pin_portable_trust_dir(root, dir, false)?;
+    let path = dir.join(TRUST_PROFILE_FILE_NAME);
+    if !existing_regular_trust_profile(&path)? {
+        return Err(io::ErrorKind::NotFound.into());
+    }
+    validate_trust_directory(&directory)?;
+    fs::remove_file(path)
 }
 
 #[cfg(windows)]
@@ -714,13 +894,34 @@ impl RemoteAccess {
     }
 
     pub fn stop(&self) -> RemoteAccessStatus {
-        *lock(&self.inner.pairing) = None;
         #[cfg(windows)]
-        if let Some(handle) = lock(&self.inner.server).take() {
+        self.close_server(None);
+        #[cfg(not(windows))]
+        self.clear_server_status();
+        self.status()
+    }
+
+    #[cfg(windows)]
+    fn close_server(&self, generation: Option<u64>) -> bool {
+        let mut server = lock(&self.inner.server);
+        if generation.is_some_and(|expected| {
+            !matches!(
+                server.phase,
+                RemoteServerPhase::Running { generation, .. } if generation == expected
+            )
+        }) {
+            return false;
+        }
+        if let RemoteServerPhase::Running { handle, .. } = std::mem::take(&mut server.phase) {
             handle.graceful_shutdown(Some(Duration::from_secs(2)));
         }
+        self.clear_server_status();
+        true
+    }
+
+    fn clear_server_status(&self) {
+        *lock(&self.inner.pairing) = None;
         *lock(&self.inner.status) = RemoteAccessStatus::default();
-        self.status()
     }
 
     #[cfg(windows)]
@@ -823,18 +1024,20 @@ impl RemoteAccess {
         dir: &Path,
     ) -> Result<RemoteAccessStatus, String> {
         use base64::{engine::general_purpose::STANDARD, Engine};
-        use std::fs;
 
         // Authoritative guard, independent of the caller: even if a future
         // caller passed a wrong directory, a portable process may only write
         // underneath the portable data root. Never falls back to Downloads.
-        if crate::portable::is_portable() {
+        let portable_root = if crate::portable::is_portable() {
             let root = crate::portable::data_dir()
                 .ok_or("Brak katalogu danych wersji przenośnej.")?;
             if !dir.starts_with(&root) {
                 return Err("Profil zaufania można zapisać wyłącznie w katalogu danych wersji przenośnej.".into());
             }
-        }
+            Some(root)
+        } else {
+            None
+        };
 
         let (cert_pem, _) = self.ensure_trust_material()?;
         let cert_der = der_from_pem(&cert_pem)?;
@@ -865,12 +1068,19 @@ impl RemoteAccess {
             ca_uuid,
             profile_uuid
         );
-        let mut profile_path = dir.to_path_buf();
-        fs::create_dir_all(&profile_path)
-            .map_err(|_| "Nie można przygotować folderu profilu zaufania.".to_string())?;
-        profile_path.push(TRUST_PROFILE_FILE_NAME);
-        fs::write(&profile_path, profile)
-            .map_err(|_| "Nie udało się zapisać profilu zaufania.".to_string())?;
+        let profile_path = if let Some(root) = portable_root {
+            write_portable_trust_profile(&root, dir, &profile).map_err(|_| {
+                "Nie udało się bezpiecznie zapisać profilu zaufania w katalogu wersji przenośnej."
+                    .to_string()
+            })?
+        } else {
+            fs::create_dir_all(dir)
+                .map_err(|_| "Nie można przygotować folderu profilu zaufania.".to_string())?;
+            let path = dir.join(TRUST_PROFILE_FILE_NAME);
+            fs::write(&path, profile)
+                .map_err(|_| "Nie udało się zapisać profilu zaufania.".to_string())?;
+            path
+        };
         let mut status = lock(&self.inner.status);
         status.ca_fingerprint = Some(fingerprint);
         status.trust_profile_path = Some(profile_path.to_string_lossy().into_owned());
@@ -960,13 +1170,10 @@ impl RemoteAccess {
         let root = crate::portable::data_dir()
             .ok_or("Brak katalogu danych wersji przenośnej.")?;
         let dir = resolve_trust_profile_dir(app)?;
-        if !dir.starts_with(&root) {
-            return Err("Profil można usunąć wyłącznie z katalogu danych wersji przenośnej.".into());
-        }
 
         self.stop();
         let path = dir.join(TRUST_PROFILE_FILE_NAME);
-        let (profile_removed, removal_note) = match std::fs::remove_file(&path) {
+        let (profile_removed, removal_note) = match remove_portable_trust_profile(&root, &dir) {
             Ok(()) => (true, None),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound =>
                 (false, Some("Plik profilu już nie istniał.".to_string())),
@@ -1018,9 +1225,9 @@ impl RemoteAccess {
         if !trust_confirmed {
             return Err("Zainstaluj profil zaufania na iPhonie i włącz jego pełne zaufanie przed startem serwera.".into());
         }
-        if lock(&self.inner.status).enabled {
+        let Some(attempt) = RemoteStartAttempt::reserve(&self.inner.server)? else {
             return Ok(self.status());
-        }
+        };
         let prepared = self.prepare_trust_profile(&app)?;
         let fingerprint = prepared
             .ca_fingerprint
@@ -1057,13 +1264,6 @@ impl RemoteAccess {
         let tls = RustlsConfig::from_pem(cert_pem.into_bytes(), key_pem.into_bytes())
             .await
             .map_err(|_| "Nie udało się skonfigurować HTTPS.".to_string())?;
-        let address = SocketAddr::new(IpAddr::V4(ip), REMOTE_PORT);
-        let listener = TcpListener::bind(address)
-            .map_err(|_| "Nie udało się otworzyć portu HTTPS w sieci prywatnej.".to_string())?;
-        listener
-            .set_nonblocking(true)
-            .map_err(|_| "Nie udało się skonfigurować listenera HTTPS.".to_string())?;
-
         let context = ServerContext {
             remote: self.clone(),
             app: app.clone(),
@@ -1085,11 +1285,24 @@ impl RemoteAccess {
             .layer(axum::extract::DefaultBodyLimit::max(MAX_REQUEST_BYTES))
             .with_state(context.clone())
             .layer(middleware::from_fn_with_state(context, validate_request));
-        let handle = axum_server::Handle::new();
-        let server = axum_server::from_tcp_rustls(listener, tls)
-            .handle(handle.clone())
-            .serve(router.into_make_service_with_connect_info::<SocketAddr>());
-        {
+        let generation = attempt.generation;
+        let server = {
+            // Stop may cancel the reservation while TLS is being configured.
+            // Check and bind under the same lock that publishes the listener.
+            let mut lifecycle = lock(&self.inner.server);
+            if !attempt.is_pending(&lifecycle) {
+                return Err("Uruchamianie serwera iPhone Remote zostało anulowane.".into());
+            }
+            let address = SocketAddr::new(IpAddr::V4(ip), REMOTE_PORT);
+            let listener = TcpListener::bind(address)
+                .map_err(|_| "Nie udało się otworzyć portu HTTPS w sieci prywatnej.".to_string())?;
+            listener
+                .set_nonblocking(true)
+                .map_err(|_| "Nie udało się skonfigurować listenera HTTPS.".to_string())?;
+            let handle = axum_server::Handle::new();
+            let server = axum_server::from_tcp_rustls(listener, tls)
+                .handle(handle.clone())
+                .serve(router.into_make_service_with_connect_info::<SocketAddr>());
             let mut status = lock(&self.inner.status);
             status.enabled = true;
             status.secure_origin_available = true;
@@ -1097,13 +1310,15 @@ impl RemoteAccess {
             status.origin = Some(origin);
             status.ca_fingerprint = Some(fingerprint);
             status.trust_profile_path = prepared.trust_profile_path;
-        }
-        *lock(&self.inner.server) = Some(handle);
+            lifecycle.phase = RemoteServerPhase::Running { generation, handle };
+            server
+        };
+        drop(attempt);
         let remote = self.clone();
         let app_for_task = app.clone();
         tauri::async_runtime::spawn(async move {
-            if server.await.is_err() {
-                let _ = remote.stop();
+            let _ = server.await;
+            if remote.close_server(Some(generation)) {
                 let _ = app_for_task.emit("remote-access-status", remote.status());
             }
         });
@@ -1409,14 +1624,33 @@ impl RemoteAccess {
         if !lock(&self.inner.status).enabled || !is_valid_device_id(device_id) || !is_valid_nonce(nonce) {
             return Err(StatusCode::UNAUTHORIZED);
         }
-        if !allow_rate(
-            &mut lock(&self.inner.hello_attempts),
-            device_id.to_string(),
-            HELLO_WINDOW,
-            HELLO_PER_WINDOW,
-            MAX_PAIRED_DEVICES,
-        ) {
-            return Err(StatusCode::TOO_MANY_REQUESTS);
+        let payload = remote_hello_payload(device_id, nonce);
+        {
+            // The active server publishes this cache before accepting requests.
+            // Preserve the bounded budget for callers that prove possession of a key.
+            let cache = lock(&self.inner.vault);
+            let cached_device = cache
+                .devices
+                .iter()
+                .find(|device| device.id == device_id)
+                .ok_or(StatusCode::UNAUTHORIZED)?;
+            let token = URL_SAFE_NO_PAD
+                .decode(&cached_device.token)
+                .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+            if !verify_hmac(&token, &payload, signature) {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+            let mut attempts = lock(&self.inner.hello_attempts);
+            attempts.retain(|id, _| cache.devices.iter().any(|device| &device.id == id));
+            if !allow_rate(
+                &mut attempts,
+                device_id.to_string(),
+                HELLO_WINDOW,
+                HELLO_PER_WINDOW,
+                MAX_PAIRED_DEVICES,
+            ) {
+                return Err(StatusCode::TOO_MANY_REQUESTS);
+            }
         }
         // Re-read under the cross-process lock. A revoked device or a stale
         // cache can never produce a "paired & trusted" acknowledgment.
@@ -1431,13 +1665,7 @@ impl RemoteAccess {
         let token = URL_SAFE_NO_PAD
             .decode(&device.token)
             .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-        // Constant-time comparison via the HMAC crate's verifier.
-        use hmac::{Hmac, Mac};
-        use sha2::Sha256;
-        let mut verifier = Hmac::<Sha256>::new_from_slice(&token)
-            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-        verifier.update(remote_hello_payload(device_id, nonce).as_bytes());
-        if verifier.verify_slice(signature).is_err() {
+        if !verify_hmac(&token, &payload, signature) {
             return Err(StatusCode::UNAUTHORIZED);
         }
         let epoch = unix_now_ms() / 1000;
@@ -2859,6 +3087,57 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn portable_trust_profile_rejects_blocked_paths_and_replaces_links_safely() {
+        let fixture = std::env::temp_dir().join(format!(
+            "velora-trust-test-{:016x}",
+            rand::random::<u64>()
+        ));
+        let root = fixture.join("profile");
+        let dir = root.join("trust");
+        let path = dir.join(TRUST_PROFILE_FILE_NAME);
+        let unrelated = fixture.join("unrelated.mobileconfig");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(&unrelated, "outside profile").unwrap();
+
+        fs::write(&dir, "blocked trust directory").unwrap();
+        assert!(write_portable_trust_profile(&root, &dir, "contents").is_err());
+        assert!(remove_portable_trust_profile(&root, &dir).is_err());
+        assert_eq!(fs::read_to_string(&dir).unwrap(), "blocked trust directory");
+        fs::remove_file(&dir).unwrap();
+
+        {
+            let _pinned = pin_portable_trust_dir(&root, &dir, true).unwrap();
+            assert!(fs::rename(&dir, root.join("moved-trust")).is_err());
+        }
+        assert_eq!(
+            write_portable_trust_profile(&root, &dir, "first profile").unwrap(),
+            path
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "first profile");
+        remove_portable_trust_profile(&root, &dir).unwrap();
+        assert_eq!(
+            remove_portable_trust_profile(&root, &dir).unwrap_err().kind(),
+            io::ErrorKind::NotFound,
+        );
+
+        fs::create_dir(&path).unwrap();
+        assert!(write_portable_trust_profile(&root, &dir, "contents").is_err());
+        assert!(remove_portable_trust_profile(&root, &dir).is_err());
+        fs::remove_dir(&path).unwrap();
+
+        fs::hard_link(&unrelated, &path).unwrap();
+        write_portable_trust_profile(&root, &dir, "new profile").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new profile");
+        assert_eq!(fs::read_to_string(&unrelated).unwrap(), "outside profile");
+        remove_portable_trust_profile(&root, &dir).unwrap();
+        fs::remove_file(&unrelated).unwrap();
+        for directory in [&dir, &root, &fixture] {
+            fs::remove_dir(directory).unwrap();
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn trust_approval_is_single_use_and_expires() {
         let remote = RemoteAccess::default();
         assert!(remote.take_trust_approval("ABCD2345").is_err());
@@ -2880,6 +3159,44 @@ mod tests {
             Some(("EXPIRED1".into(), Instant::now() - Duration::from_secs(1)));
         assert!(remote.take_trust_approval("EXPIRED1").is_err());
         assert!(lock(&remote.inner.trust_approval).is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn remote_server_stop_cancels_pending_start_and_ignores_an_older_worker() {
+        let remote = RemoteAccess::default();
+        let server = &remote.inner.server;
+        let first = RemoteStartAttempt::reserve(server).unwrap().unwrap();
+        let first_generation = first.generation;
+        assert!(RemoteStartAttempt::reserve(server).is_err());
+
+        assert!(remote.close_server(None));
+        assert!(!first.is_pending(&lock(server)));
+        let replacement = RemoteStartAttempt::reserve(server).unwrap().unwrap();
+        assert!(!first.is_pending(&lock(server)));
+        drop(first);
+        assert!(replacement.is_pending(&lock(server)));
+
+        // Cancellation of the replacement releases only its own reservation,
+        // so another explicit start is available after the error or abort.
+        drop(replacement);
+        let current = RemoteStartAttempt::reserve(server).unwrap().unwrap();
+        let current_generation = current.generation;
+        {
+            let mut state = lock(server);
+            assert!(current.is_pending(&state));
+            state.phase = RemoteServerPhase::Running {
+                generation: current_generation,
+                handle: axum_server::Handle::new(),
+            };
+            lock(&remote.inner.status).enabled = true;
+        }
+        drop(current);
+        assert!(RemoteStartAttempt::reserve(server).unwrap().is_none());
+        assert!(!remote.close_server(Some(first_generation)));
+        assert!(lock(&remote.inner.status).enabled);
+        assert!(remote.close_server(Some(current_generation)));
+        assert!(!lock(&remote.inner.status).enabled);
     }
 
     #[cfg(windows)]
@@ -4825,6 +5142,13 @@ mod windows_tests {
         assert_eq!(stored(env.store.as_ref()).devices.len(), 1);
     }
 
+    fn sign_hello(index: u64, nonce: &str) -> Vec<u8> {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+
+        let token = URL_SAFE_NO_PAD.decode(device_token(index)).expect("token");
+        compute_hmac(&token, &remote_hello_payload(&device_id(index), nonce)).expect("sign")
+    }
+
     #[test]
     fn signed_hello_reuses_the_device_hmac_and_fails_closed_for_unpaired_or_tampered_requests() {
         use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -4834,7 +5158,7 @@ mod windows_tests {
         let device = device_id(1);
         let nonce = "00112233445566778899aabbccddeeff";
         let token = URL_SAFE_NO_PAD.decode(device_token(1)).expect("token");
-        let signature = compute_hmac(&token, &remote_hello_payload(&device, nonce)).expect("sign");
+        let signature = sign_hello(1, nonce);
         let (epoch, count, ack) = remote.verify_hello(&device, nonce, &signature).expect("hello");
         assert!(epoch > 0);
         assert_eq!(count, 1);
@@ -4858,6 +5182,9 @@ mod windows_tests {
         // The device cap and revocation protection are unchanged by hello.
         for index in 2..=MAX_PAIRED_DEVICES as u64 {
             pair_test_device(&remote, index, "Synthetic Remote").expect("pair within cap");
+            remote
+                .verify_hello(&device_id(index), nonce, &sign_hello(index, nonce))
+                .expect("hello");
         }
         assert_eq!(
             pair_test_device(&remote, 9, "Ninth Device"),
@@ -4871,5 +5198,41 @@ mod windows_tests {
             remote.verify_hello(&device, nonce, &signature),
             Err(StatusCode::UNAUTHORIZED)
         );
+        pair_test_device(&remote, 9, "Replacement Device").expect("pair after revocation");
+        remote
+            .verify_hello(&device_id(9), nonce, &sign_hello(9, nonce))
+            .expect("no stale rate bucket");
+    }
+
+    #[test]
+    fn unsigned_hellos_do_not_read_credentials_or_consume_a_paired_device_budget() {
+        let env = TestEnv::new("hello-rate-admission");
+        let remote = seeded(&env, 1);
+        let device = device_id(1);
+        let nonce = "00112233445566778899aabbccddeeff";
+
+        env.store.fail_all_reads.store(true, Ordering::SeqCst);
+        for index in 2..=(MAX_PAIRED_DEVICES as u64 + 1) {
+            assert_eq!(
+                remote.verify_hello(&device_id(index), nonce, &[0; 32]),
+                Err(StatusCode::UNAUTHORIZED),
+            );
+        }
+        for _ in 0..=HELLO_PER_WINDOW {
+            assert_eq!(
+                remote.verify_hello(&device, nonce, &[0; 32]),
+                Err(StatusCode::UNAUTHORIZED),
+            );
+        }
+        assert!(lock(&remote.inner.hello_attempts).is_empty());
+
+        let signature = sign_hello(1, nonce);
+        assert_eq!(
+            remote.verify_hello(&device, nonce, &signature),
+            Err(StatusCode::SERVICE_UNAVAILABLE),
+            "a valid cached signature still requires a fresh store read",
+        );
+        env.store.fail_all_reads.store(false, Ordering::SeqCst);
+        remote.verify_hello(&device, nonce, &signature).expect("signed hello");
     }
 }
