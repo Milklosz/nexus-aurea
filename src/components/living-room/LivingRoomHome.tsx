@@ -78,24 +78,26 @@ export function LivingRoomHome(props: LivingRoomHomeProps) {
         onSettings={props.onSettings}
       />
       {props.aside}
-      <FocusInfo serviceId={selected.id} title={selected.name} parts={context.parts} direction={direction.current} />
-      <HomeSections
-        services={props.services}
-        launchingIds={props.launchingIds}
-        appManager={appManager}
-        onActivate={props.onActivate}
-        onUnavailable={props.onUnavailable}
-      />
-      <LivingDock
-        services={props.services}
-        activeIndex={props.activeIndex}
-        launchingIds={props.launchingIds}
-        appManager={appManager}
-        buttonRefs={props.buttonRefs}
-        onFocus={handleDockFocus}
-        onActivate={props.onActivate}
-        onUnavailable={props.onUnavailable}
-      />
+      <div className="lr-home-content">
+        <FocusInfo serviceId={selected.id} title={selected.name} parts={context.parts} direction={direction.current} />
+        <HomeSections
+          services={props.services}
+          launchingIds={props.launchingIds}
+          appManager={appManager}
+          onActivate={props.onActivate}
+          onUnavailable={props.onUnavailable}
+        />
+        <LivingDock
+          services={props.services}
+          activeIndex={props.activeIndex}
+          launchingIds={props.launchingIds}
+          appManager={appManager}
+          buttonRefs={props.buttonRefs}
+          onFocus={handleDockFocus}
+          onActivate={props.onActivate}
+          onUnavailable={props.onUnavailable}
+        />
+      </div>
     </>
   );
 }

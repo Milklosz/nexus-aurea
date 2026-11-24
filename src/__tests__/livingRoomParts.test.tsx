@@ -179,6 +179,16 @@ describe("FocusInfo", () => {
     expect(container.querySelector(".lr-info")?.className).toBe("lr-info");
   });
 
+  it("keeps the title visible when focus returns before the exit animation completes", () => {
+    const { container, rerender } = render(<FocusInfo serviceId="netflix" title="Netflix" parts={["Filmy i seriale"]} direction={1} />);
+    rerender(<FocusInfo serviceId="disney" title="Disney+" parts={["Filmy"]} direction={1} />);
+    act(() => { vi.advanceTimersByTime(40); });
+    rerender(<FocusInfo serviceId="netflix" title="Netflix" parts={["Filmy i seriale"]} direction={-1} />);
+    act(() => { vi.advanceTimersByTime(150); });
+    expect(text(container)).toBe("Netflix");
+    expect(container.querySelector(".lr-info")?.className).toBe("lr-info");
+  });
+
   it("is a polite live region", () => {
     const { container } = render(<FocusInfo serviceId="netflix" title="Netflix" parts={["x"]} direction={1} />);
     expect(container.querySelector(".lr-info")?.getAttribute("aria-live")).toBe("polite");

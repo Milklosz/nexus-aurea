@@ -361,10 +361,16 @@ export function ControlCenter(props: ControlCenterProps) {
   useEffect(() => {
     const element = dialog.current;
     if (element && !element.open && typeof element.showModal === "function") element.showModal();
-    // showModal focuses the first control (the close button). In the Living Room the open section tab is the natural start.
-    const focusFrame = props.livingRoom
-      ? window.requestAnimationFrame(() => element?.querySelector<HTMLElement>('.cc-tabs [aria-selected="true"]')?.focus({ preventScroll: true }))
-      : window.requestAnimationFrame(() => element?.querySelector<HTMLElement>(".cc-close")?.focus({ preventScroll: true }));
+    // The initial focus must not replace focus already set by a panel action.
+    const focusFrame = window.requestAnimationFrame(() => {
+      const close = element?.querySelector<HTMLElement>(".cc-close");
+      const focused = document.activeElement;
+      if (element?.contains(focused) && focused !== element && focused !== close) return;
+      const target = props.livingRoom
+        ? element?.querySelector<HTMLElement>('.cc-tabs [aria-selected="true"]')
+        : close;
+      target?.focus({ preventScroll: true });
+    });
     let active = true;
     void readControlStatus(() => active);
     // Event-driven recovery only: the backend already publishes every 750 ms. No polling is added.
@@ -871,7 +877,10 @@ export function ControlCenter(props: ControlCenterProps) {
         : "F3 otwiera panel · Esc wraca · ← → przełączają sekcję"}</span>
       <div className="cc-footer-actions">
         {props.onSwitchApplications && <div className="cc-footer-group" role="group" aria-label="Aplikacje">
-          <button type="button" data-remote-allow="" onClick={props.onSwitchApplications}>Przełącz aplikację</button>
+          <button type="button" data-remote-allow="" onClick={() => {
+            selectPanel("sessions", true);
+            props.onSwitchApplications?.();
+          }}>Przełącz aplikację</button>
         </div>}
         <div className="cc-footer-group" role="group" aria-label="Wyjście">
           <button type="button" data-remote-allow="" onClick={props.onShowDesktop}>{props.livingRoom ? "Pulpit Windows" : "Pokaż pulpit"}</button>

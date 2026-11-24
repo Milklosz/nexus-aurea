@@ -29,7 +29,7 @@ const SHIMMER_SLOTS = 4;
  * zone model (homeZones.ts) and row handling (homeActions.ts).
  *
  * States: loading -> shimmer, error -> inline message + retry, empty -> subtle
- * placeholder. The row (and therefore its zone) exists only when it has tiles.
+ * placeholder. The zone exists when it contains tiles or a retry action.
  */
 export function HomeSections(props: HomeSectionsProps) {
   const { status, sections, empty, retry } = useHomeSections({
@@ -52,7 +52,7 @@ export function HomeSections(props: HomeSectionsProps) {
 
   if (empty && status === "error") {
     return (
-      <div className="lr-sections-state lr-sections-error" role="alert">
+      <div className="lr-sections lr-sections-state lr-sections-error" role="alert">
         <p className="lr-sections-error-text">Nie udało się odczytać stanu sesji.</p>
         <button type="button" className="lr-sections-retry" onClick={retry}>Spróbuj ponownie</button>
       </div>

@@ -29,6 +29,8 @@ export function FocusInfo({ serviceId, title, parts, direction }: FocusInfoProps
     const current = shownRef.current;
     if (current.serviceId === serviceId) {
       if (current.title !== title || current.parts.join("|") !== parts.join("|")) setShown({ serviceId, title, parts });
+      // Returning before the exit timer fires cancels the transition in cleanup.
+      setPhase("idle");
       return;
     }
     setPhase("out");
