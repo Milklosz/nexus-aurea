@@ -2166,3 +2166,64 @@ mod ascension_b_recovery_label_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod s3_7_rapid_switching_soak {
+    use super::{SessionId, SessionMachine, TransitionCause};
+
+    /// Deterministic LCG (no external rng, no wall-clock input): the same seed
+    /// always produces the same transition sequence.
+    fn lcg(seed: u64) -> impl FnMut() -> u64 {
+        let mut state = seed;
+        move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            state >> 33
+        }
+    }
+
+    /// Rapid service switching over the whole legal hand-off graph: Home,
+    /// Game and Cinema hand off in every allowed direction. Revisions must be
+    /// strictly monotonic, real transitions must emit exactly one event each,
+    /// idempotent same-target transitions must emit none, and `previous` must
+    /// always track the last committed session.
+    #[test]
+    fn rapid_service_switching_keeps_revisions_monotonic_and_events_exact() {
+        const SESSIONS: [SessionId; 3] = [
+            SessionId::VeloraHome,
+            SessionId::Game,
+            SessionId::Cinema,
+        ];
+        let mut random = lcg(0x57_C0FFEE);
+        let mut machine = SessionMachine::default();
+        let mut expected_revision = 0u64;
+        let mut previous = SessionId::VeloraHome;
+        for step in 0..5_000u64 {
+            let target = SESSIONS[(random() % 3) as usize];
+            let from = previous;
+            let before = machine.snapshot();
+            let (snapshot, event) = machine
+                .transition_at(target, TransitionCause::User, None, step)
+                .unwrap_or_else(|error| panic!("step {step}: {error:?}"));
+            if target == from {
+                // Idempotent: no revision bump, no event, unchanged identity.
+                assert!(event.is_none(), "step {step}: same-target emitted an event");
+                assert_eq!(snapshot.revision, before.revision);
+                assert_eq!(snapshot.transitioned_at_ms, before.transitioned_at_ms);
+            } else {
+                expected_revision += 1;
+                assert_eq!(snapshot.revision, expected_revision, "step {step}");
+                let event = event.expect("a real transition must emit exactly one event");
+                assert_eq!(event.revision, expected_revision);
+                assert_eq!(event.from, from);
+                assert_eq!(event.to, target);
+                assert_eq!(snapshot.previous, Some(from));
+            }
+            assert_eq!(snapshot.current, target);
+            previous = target;
+        }
+        assert_eq!(machine.snapshot().revision, expected_revision);
+        assert_eq!(machine.snapshot().current, previous);
+    }
+}
