@@ -74,26 +74,38 @@ trait UsageSource: Send + Sync {
     }
 }
 
-struct StatusLineSource;
+struct StatusLineSource {
+    allow_cli_fallback: bool,
+}
+
+impl StatusLineSource {
+    fn missing_statusline(&self) -> SourceRead {
+        if !self.allow_cli_fallback {
+            return SourceRead {
+                version: None,
+                result: Err(UsageError::AwaitingUsage),
+                captured_at: None,
+            };
+        }
+        let mut read = OfficialCliSource.read();
+        if matches!(read.result, Err(UsageError::UsageUnavailable)) {
+            read.result = Err(UsageError::AwaitingUsage);
+        }
+        read
+    }
+}
 
 impl UsageSource for StatusLineSource {
     fn automatic_supported(&self) -> bool {
         true
     }
     fn read(&self) -> SourceRead {
-        let missing = || {
-            let mut read = OfficialCliSource.read();
-            if matches!(read.result, Err(UsageError::UsageUnavailable)) {
-                read.result = Err(UsageError::AwaitingUsage);
-            }
-            read
-        };
         let Some(path) = statusline_path() else {
-            return missing();
+            return self.missing_statusline();
         };
         match read_statusline(&path) {
             Ok(read) => read,
-            Err(None) => missing(),
+            Err(None) => self.missing_statusline(),
             Err(Some(error)) => SourceRead {
                 version: None,
                 result: Err(error),
@@ -514,7 +526,11 @@ pub struct ClaudeUsageService {
 impl Default for ClaudeUsageService {
     fn default() -> Self {
         Self {
-            source: Arc::new(StatusLineSource),
+            source: Arc::new(StatusLineSource {
+                // The installed CLI can discover host auth through its own
+                // credential mechanisms, even with an isolated home directory.
+                allow_cli_fallback: !crate::portable::is_portable(),
+            }),
             cache: Arc::new(Mutex::new(Cache::default())),
             flight: Arc::new(Mutex::new(())),
         }
@@ -798,6 +814,17 @@ mod tests {
         }))
         .unwrap()
     }
+    #[test]
+    fn portable_missing_statusline_never_falls_back_to_the_host_cli() {
+        let source = StatusLineSource {
+            allow_cli_fallback: false,
+        };
+        let read = source.missing_statusline();
+        assert_eq!(read.result, Err(UsageError::AwaitingUsage));
+        assert_eq!(read.version, None);
+        assert_eq!(read.captured_at, None);
+    }
+
     #[test]
     fn official_statusline_file_has_real_windows_and_no_invented_model_quota() {
         let read = parse_statusline_file(&statusline_fixture(), 1_000_000).unwrap();

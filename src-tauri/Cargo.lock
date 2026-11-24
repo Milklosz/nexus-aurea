@@ -2369,9 +2369,12 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
+ "tauri-runtime",
  "time",
+ "webview2-com",
  "windows",
  "windows-core",
+ "wry",
 ]
 
 [[package]]
