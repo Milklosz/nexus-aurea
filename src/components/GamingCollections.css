@@ -1,6 +1,9 @@
 .gaming-collection-tabs { display: flex; flex-wrap: wrap; gap: .6rem; margin: 1rem 0; }
 .gaming-collection-tabs button[aria-pressed="true"] { color: #f5ebdc; border-color: rgba(238,228,211,.65); background: rgba(238,228,211,.08); }
 .gaming-collection-tabs button:focus-visible { outline: 2px solid #eee4d3; outline-offset: 3px; }
+.gaming-search { display: grid; gap: .4rem; width: min(100%, 24rem); }
+.gaming-search input { min-height: 2.75rem; padding: .45rem .65rem; border: 1px solid #766f64; border-radius: .4rem; background: #121214; color: #f5ebdc; font: inherit; }
+.gaming-search input:focus-visible { outline: 2px solid #eee4d3; outline-offset: 3px; }
 .gaming-game-row > button { flex-shrink: 0; }
 .gaming-library-note { color: rgba(238,228,211,.75); font-size: .9rem; margin: .4rem 0; }
 .gaming-launcher-badge { display: inline-block; padding: .1rem .5rem; border-radius: 999px; font-size: .75rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; margin-right: .5rem; vertical-align: middle; border: 1px solid rgba(238,228,211,.35); color: #f5ebdc; }

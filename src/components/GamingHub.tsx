@@ -24,12 +24,13 @@ import {
 import { launchPlayniteGame } from "../services/playniteLibrary";
 import { returnVeloraHome } from "../services/sessionOrchestrator";
 import { PLAYNITE_DOWNLOAD_URL, openOfficialPlayniteDownload } from "../services/playniteSupport";
-import { favoriteGame, gameCollection, gameCollectionKey, readGamingCollections, recordGameLaunch, saveGamingCollections, type GamingCollections } from "../services/gamingCollections";
+import { favoriteGame, gameCatalogIdentity, gameCollection, readGamingCollections, recordGameLaunch, saveGamingCollections, type GamingCollections } from "../services/gamingCollections";
 import "./GamingCollections.css";
 
 type GamingHubProps = { onActivateGaming: () => Promise<boolean> };
 
 type GameLauncher = "steam" | "playnite" | "other";
+const gameNames = new Intl.Collator("pl-PL", { numeric: true, sensitivity: "base" });
 
 function launcherOf(game: ManagedGame): GameLauncher {
   const normalized = game.launcher.trim().toLowerCase();
@@ -61,10 +62,12 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
   const [diagnosticsError, setDiagnosticsError] = useState("");
   const [collections, setCollections] = useState(readGamingCollections);
   const [collectionView, setCollectionView] = useState<"all" | "favorites" | "recent">("all");
+  const [query, setQuery] = useState("");
   const [launchedGameId, setLaunchedGameId] = useState<string | null>(null);
   const launchedGameRef = useRef<string | null>(null);
   const [exitNotice, setExitNotice] = useState("");
   const [gameEnded, setGameEnded] = useState(false);
+  const [gameRunning, setGameRunning] = useState(false);
   const updateCollections = (next: GamingCollections) => {
     setCollections(next);
     if (!saveGamingCollections(next)) setError("Nie udało się zapisać kolekcji gier. Zmiany pozostają dostępne do zamknięcia VELORA.");
@@ -77,9 +80,15 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
     setNotice("");
     setLoading(true);
     try {
-      const [status, steam] = await Promise.all([getAppManagerStatus(), readSteamLibrary()]);
-      setSnapshot(status);
-      setSteamLibrary(steam);
+      const [status, steam] = await Promise.allSettled([getAppManagerStatus(), readSteamLibrary()]);
+      if (status.status === "rejected") throw status.reason;
+      setSnapshot(status.value);
+      setSteamLibrary(steam.status === "fulfilled" ? steam.value : {
+        ...readSteamLibraryFallback(),
+        windows: status.value.windows,
+        source: "unavailable",
+        reason: "Nie udało się odczytać dodatkowej biblioteki Steam.",
+      });
       setStatusUnavailable(false);
     } catch (cause) {
       setSnapshot((current) => current.windows ? current : emptyAppManagerSnapshot);
@@ -106,40 +115,46 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
   useEffect(() => {
     const listen = safeLaunchEventListener();
     if (!listen) return;
+    let cancelled = false;
     let unsubscribe: (() => void) | undefined;
-    void (async () => {
-      unsubscribe = await listen((event) => {
-        const session = event?.session;
-        if (!session || session.kind !== "game") return;
-        const current = launchedGameRef.current;
-        if (!current) return;
-        const currentAppId = steamAppIdFromGameId(current) ?? current;
-        const eventAppId = typeof session.appId === "string" ? session.appId : "";
-        const eventBare = steamAppIdFromGameId(eventAppId) ?? eventAppId;
-        if (eventBare !== currentAppId && eventAppId !== current) return;
-        if (session.phase === "ended" || session.phase === "failed" || session.phase === "cancelled") {
-          const crashed = session.phase === "failed";
-          setExitNotice(
-            crashed
-              ? `${session.displayName}: sesja zakończyła się nieoczekiwanie. VELORA nie zamyka gry — możesz wrócić do Home.`
-              : `${session.displayName} zakończył grę. Możesz wrócić do Home.`,
-          );
-          setGameEnded(true);
-        }
-      });
-    })();
-    return () => { if (unsubscribe) unsubscribe(); };
+    void listen((event) => {
+      if (cancelled) return;
+      const session = event?.session;
+      if (!session || session.kind !== "game") return;
+      const current = launchedGameRef.current;
+      if (!current || gameCatalogIdentity(session.appId) !== gameCatalogIdentity(current)) return;
+      if (session.phase === "ended" || session.phase === "failed" || session.phase === "cancelled") {
+        const crashed = session.phase === "failed";
+        setExitNotice(
+          crashed
+            ? `${session.displayName}: sesja zakończyła się nieoczekiwanie. VELORA nie zamyka gry — możesz wrócić do Home.`
+            : `${session.displayName} zakończył grę. Możesz wrócić do Home.`,
+        );
+        setGameEnded(true);
+        setGameRunning(false);
+      }
+    }).then((release) => {
+      if (cancelled) release();
+      else unsubscribe = release;
+    }).catch(() => {
+      // Native process polling remains available if event observation fails.
+    });
+    return () => { cancelled = true; unsubscribe?.(); };
   }, []);
 
   // Read-only process-table polling while a game launched from this hub is
   // tracked; detects exit/crash even if an event was missed.
   useEffect(() => {
-    if (!launchedGameId) return;
+    if (!launchedGameId || gameEnded) return;
     let cancelled = false;
+    let reading = false;
     const check = async () => {
+      if (reading) return;
+      reading = true;
       try {
         const state = await getGameProcessState(launchedGameId);
         if (cancelled) return;
+        setGameRunning(state.tracked && state.running);
         if (
           state.tracked
           && !state.running
@@ -153,21 +168,24 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
           setGameEnded(true);
         }
       } catch {
-        // Read-only best effort: a failed status read never fabricates state.
+        if (!cancelled) setGameRunning(false);
+      } finally {
+        reading = false;
       }
     };
     void check();
     const timer = window.setInterval(() => void check(), 5_000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [launchedGameId]);
+  }, [launchedGameId, gameEnded]);
 
   const handleReturnHome = async () => {
-    setGameEnded(false);
-    setExitNotice("");
-    launchedGameRef.current = null;
-    setLaunchedGameId(null);
     try {
       await returnVeloraHome();
+      setGameEnded(false);
+      setGameRunning(false);
+      setExitNotice("");
+      launchedGameRef.current = null;
+      setLaunchedGameId(null);
     } catch (cause) {
       setError(managedAppErrorMessage(cause, "Nie udało się wrócić do Home."));
     }
@@ -182,17 +200,21 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
   const games = useMemo(() => {
     const merged = new Map<string, ManagedGame>();
     for (const game of snapshot.games ?? []) {
-      if (gameCollectionKey(game.id) !== null && !merged.has(game.id)) merged.set(game.id, game);
+      const identity = gameCatalogIdentity(game.id);
+      if (identity !== null && !merged.has(identity)) merged.set(identity, game);
     }
     if (steamLibrary.available) {
       for (const entry of steamLibrary.games) {
         const id = `steam:${entry.appid}`;
-        if (!merged.has(id)) merged.set(id, { id, name: entry.name, launcher: "steam" });
+        if (gameCatalogIdentity(id) !== null && !merged.has(id)) merged.set(id, { id, name: entry.name, launcher: "steam" });
       }
     }
-    return [...merged.values()].slice(0, 4096);
+    return [...merged.values()].sort((a, b) => gameNames.compare(a.name, b.name) || gameNames.compare(a.id, b.id)).slice(0, 4096);
   }, [snapshot, steamLibrary]);
-  const visibleGames = collectionView === "all" ? games : gameCollection(games, collections[collectionView === "favorites" ? "favorites" : "recent"]);
+  const selectedCollection = collectionView === "all" ? games : gameCollection(games, collections[collectionView === "favorites" ? "favorites" : "recent"]);
+  const search = query.trim().toLocaleLowerCase("pl-PL");
+  const visibleGames = search ? selectedCollection.filter((game) => game.name.toLocaleLowerCase("pl-PL").includes(search)) : selectedCollection;
+  const favorites = new Set(collections.favorites.map(gameCatalogIdentity));
 
   const launchLauncher = async (id: ManagedAppId) => {
     if (busy) return;
@@ -247,8 +269,8 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
           : await launchManagedGame(game.id);
         if (!receipt.launched) throw new Error("Steam nie potwierdził uruchomienia gry.");
       }
-      const key = gameCollectionKey(game.id) ?? game.id;
-      updateCollections(recordGameLaunch(collections, key));
+      updateCollections(recordGameLaunch(collections, game.id));
+      setGameRunning(false);
       launchedGameRef.current = game.id;
       setLaunchedGameId(game.id);
       setNotice("Wysłano żądanie uruchomienia " + game.name + " przez " + through + ".");
@@ -332,17 +354,23 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
     </div>}
 
     <h4>Wykryte gry</h4>
+    {games.length > 0 && <label className="gaming-search">
+      Szukaj w grach
+      <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} data-velora-text-entry="" />
+    </label>}
     <div className="gaming-collection-tabs" role="group" aria-label="Kolekcja gier">
       <button type="button" aria-pressed={collectionView === "all"} onClick={() => setCollectionView("all")}>Zainstalowane ({games.length})</button>
       <button type="button" aria-pressed={collectionView === "favorites"} onClick={() => setCollectionView("favorites")}>Ulubione gry</button>
       <button type="button" aria-pressed={collectionView === "recent"} onClick={() => setCollectionView("recent")}>Ostatnio uruchamiane</button>
     </div>
-    {collectionView !== "all" && visibleGames.length === 0 && <p>Ta kolekcja nie zawiera dostępnych gier.</p>}
+    {visibleGames.length === 0 && search && <p role="status">Nie znaleziono gier pasujących do wyszukiwania.</p>}
+    {collectionView !== "all" && selectedCollection.length === 0 && !search && <p>Ta kolekcja nie zawiera dostępnych gier.</p>}
     {games.length > 0
       ? <div className="gaming-game-list">
         {visibleGames.map((game) => {
           const launcher = launcherOf(game);
           const label = launcherLabel(launcher, game.launcher);
+          const favorite = favorites.has(gameCatalogIdentity(game.id));
           const launchDisabled = launcher === "playnite"
             ? !playnite?.installed || statusUnavailable || busy !== null
             : !steam?.installed || Boolean(snapshot.gamesError) || statusUnavailable || busy !== null;
@@ -350,15 +378,16 @@ export function GamingHub({ onActivateGaming }: GamingHubProps) {
             <div>
               <span className={`gaming-launcher-badge gaming-launcher-badge--${launcher}`} data-launcher={launcher}>{label}</span>
               <strong>{game.name}</strong>
+              {gameRunning && launchedGameId === game.id && <span role="status">Gra działa</span>}
               <span>{launcher === "steam" ? `Steam · App ID ${steamAppIdFromGameId(game.id) ?? game.id}` : launcher === "playnite" ? "Playnite" : game.launcher}</span>
             </div>
             <button type="button" aria-busy={busy === game.id} disabled={launchDisabled}
               onClick={() => void launchGame(game)}>
               {busy === game.id ? "Uruchamiam…" : "Uruchom"}
             </button>
-            <button type="button" aria-label={`${collections.favorites.includes(gameCollectionKey(game.id) ?? game.id) ? "Odepnij" : "Przypnij"} ${game.name}`} aria-pressed={collections.favorites.includes(gameCollectionKey(game.id) ?? game.id)} disabled={busy !== null}
-              onClick={() => updateCollections(favoriteGame(collections, gameCollectionKey(game.id) ?? game.id))}>
-              {collections.favorites.includes(gameCollectionKey(game.id) ?? game.id) ? "Odepnij" : "Przypnij"}
+            <button type="button" aria-label={`${favorite ? "Odepnij" : "Przypnij"} ${game.name}`} aria-pressed={favorite} disabled={busy !== null}
+              onClick={() => updateCollections(favoriteGame(collections, game.id))}>
+              {favorite ? "Odepnij" : "Przypnij"}
             </button>
           </div>;
         })}
