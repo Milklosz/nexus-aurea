@@ -17,6 +17,7 @@
     "test:portable-isolation": "node --test scripts/portable-isolation-node-check.mjs",
     "test:genesis-ci": "node --test scripts/genesis-ci-node-check.mjs",
     "test:claude-usage": "node --test scripts/claude-usage-node-check.mjs",
+    "test:ipc-contract": "node --test scripts/ipc-contract-node-check.mjs",
     "manifest:sha256": "node scripts/sha256-manifest.mjs write",
     "test:manifest": "node --test scripts/sha256-manifest-node-check.mjs",
     "tauri": "tauri",

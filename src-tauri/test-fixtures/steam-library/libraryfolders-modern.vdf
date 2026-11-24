@@ -1,0 +1,33 @@
+"LibraryFolders"
+{
+	"timenextstoremigration"		"1735000000"
+	"0"
+	{
+		"path"		"{{ROOT}}"
+		"label"		""
+		"contentid"		"8346430000000000000"
+		"totalsize"		"499999993856"
+		"update_clean_bytes_tally"		"0"
+		"time_last_update_corruption"		"0"
+		"apps"
+		{
+			"440"		"86635671"
+		}
+	}
+	"1"
+	{
+		"path"		"{{LIB2}}"
+		"label"		"Games"
+		"contentid"		"8346430000000000001"
+		"apps"
+		{
+			"220"		"12345678",
+			"440"		"86635671"
+		}
+	}
+	"2"
+	{
+		"path"		"D:\\SteamLibrary-ghost"
+		"label"		"Disconnected drive"
+	}
+}
