@@ -263,6 +263,23 @@ mod tests {
     use super::{ProcessEntry, ProcessIdentity, ProcessTable};
 
     #[test]
+    fn pid_lookups_find_only_exact_existing_entries() {
+        let table = ProcessTable::from_entries(vec![
+            (100, 0, "steam.exe"),
+            (101, 100, "Game.exe"),
+        ]);
+        // Read-only observation: an unknown PID is reported absent, never guessed.
+        assert!(table.contains(100));
+        assert!(table.contains(101));
+        assert!(!table.contains(102));
+        assert_eq!(table.image_name(101), Some("Game.exe"));
+        assert_eq!(table.image_name(999), None);
+        // An unrelated process is never reported as part of a game session:
+        // pid 200 is not in the table at all.
+        assert!(!table.contains(200));
+    }
+
+    #[test]
     fn descendant_walk_is_bounded_and_excludes_the_root() {
         let table = ProcessTable::from_entries(vec![
             (100, 0, "steam.exe"),

@@ -654,14 +654,141 @@ fn game_process_state(app: &AppHandle, id: &str) -> GameProcessState {
 #[cfg(test)]
 mod tests {
     use super::{
-        appid_from_game_id, cached_snapshot, discover_steam_root, is_valid_appid,
-        parse_appmanifest, parse_libraryfolders, parse_vdf_pair, scan_library, steam_game_id,
+        appid_from_game_id, cached_snapshot, discover_steam_root, is_valid_appid, parse_appmanifest,
+        parse_libraryfolders, parse_vdf_pair, scan_library, steam_game_id,
     };
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static NEXT_TEMP: AtomicUsize = AtomicUsize::new(0);
+
+    /// Root of the committed, synthetic VDF fixtures (S3.8): nothing in there
+    /// comes from a real machine and the files are read, never written.
+    const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test-fixtures/steam-library");
+
+    fn fixture(name: &str) -> String {
+        fs::read_to_string(format!("{FIXTURES}/{name}")).expect("synthetic fixture must be readable")
+    }
+
+    /// VDF-escapes an absolute temp path for use inside an `{{ROOT}}`/`{{LIB2}}`
+    /// placeholder in a fixture libraryfolder file.
+    fn vdf_escaped(path: &Path) -> String {
+        path.to_string_lossy().replace('\\', "\\\\")
+    }
+
+    fn write_manifest(library: &Path, appid: &str, manifest_file: &str) {
+        let steamapps = library.join("steamapps");
+        fs::write(
+            steamapps.join(format!("appmanifest_{appid}.acf")),
+            fixture(manifest_file),
+        )
+        .expect("fixture manifest write");
+    }
+
+    fn write_libraryfolders(root: &Path, second_library: &Path, fixture_file: &str) {
+        let contents = fixture(fixture_file)
+            .replace("{{ROOT}}", &vdf_escaped(root))
+            .replace("{{LIB2}}", &vdf_escaped(second_library));
+        fs::write(root.join("steamapps").join("libraryfolders.vdf"), contents)
+            .expect("fixture libraryfolders write");
+    }
+
+    fn create_installed_dir(library: &Path, install_dir: &str) {
+        fs::create_dir_all(library.join("steamapps").join("common").join(install_dir))
+            .expect("fixture install dir");
+    }
+
+    /// Assembles the committed fixture files into a fresh, throwaway synthetic
+    /// Steam library (root + second library + installed common directories) and
+    /// returns the root to hand to `scan_library`. Deterministic: temp names are
+    /// process-scoped counters, no random data, and the tree is removed on drop.
+    struct FixtureLibrary(PathBuf);
+
+    impl Drop for FixtureLibrary {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn assemble_fixture_library(fixture_file: &str) -> (PathBuf, PathBuf) {
+        let root = temp_root();
+        let second = root.join("second-library");
+        fs::create_dir_all(root.join("steamapps")).expect("root steamapps");
+        fs::create_dir_all(second.join("steamapps")).expect("second steamapps");
+        write_libraryfolders(&root, &second, fixture_file);
+        // Root library: TF2 (valid), the duplicate appid 440 copy in the second
+        // library must lose, all malformed manifests must be skipped, and the
+        // not-installed manifest (no common/ dir) must be skipped.
+        create_installed_dir(&root, "Team Fortress 2");
+        write_manifest(&root, "440", "appmanifest-440-valid.acf");
+        write_manifest(&root, "999", "appmanifest-999-not-installed.acf");
+        write_manifest(&root, "80", "appmanifest-80-traversal-installdir.acf");
+        write_manifest(&root, "0", "appmanifest-0-zero-appid.acf");
+        write_manifest(&root, "70", "appmanifest-70-missing-installdir.acf");
+        write_manifest(&root, "300", "appmanifest-300-blank-name.acf");
+        write_manifest(&root, "8x", "appmanifest-8x-bad-appid.acf");
+        // Root also carries the CRLF + padded-name manifest with its install dir.
+        create_installed_dir(&root, "WindowsCarrierReturnGame");
+        write_manifest(&root, "500", "appmanifest-500-crlf.acf");
+        // Second library: Half-Life 2 plus the duplicate appid 440 manifest.
+        create_installed_dir(&second, "Half-Life 2");
+        write_manifest(&second, "220", "appmanifest-220-valid.acf");
+        create_installed_dir(&second, "Team Fortress 2");
+        write_manifest(&second, "440", "appmanifest-440-duplicate.acf");
+        (root, second)
+    }
+
+    #[test]
+    fn fixture_scan_covers_multiple_libraries_missing_library_duplicates_and_malformed_manifests() {
+        for fixture_file in ["libraryfolders-modern.vdf", "libraryfolders-legacy.vdf"] {
+            let (root, second) = assemble_fixture_library(fixture_file);
+            let games = scan_library(&root).expect("synthetic library scan must succeed");
+            // Exactly the three installed, well-formed games; every malformed
+            // manifest and the not-installed manifest are skipped.
+            let appids: Vec<&str> = games.iter().map(|game| game.appid.as_str()).collect();
+            assert_eq!(appids, ["220", "440", "500"], "fixture file {fixture_file}");
+            let hl2 = games.iter().find(|game| game.appid == "220").expect("Half-Life 2");
+            assert_eq!(hl2.name, "Half-Life 2");
+            assert_eq!(PathBuf::from(&hl2.library), second);
+            let tf2 = games.iter().find(|game| game.appid == "440").expect("TF2");
+            // Duplicate appid in the second library never replaces the first entry.
+            assert_eq!(PathBuf::from(&tf2.library), root);
+            let crlf = games.iter().find(|game| game.appid == "500").expect("CRLF game");
+            // Metadata normalization: padded names are trimmed before display.
+            assert_eq!(crlf.name, "Windows Carrier Return Game");
+            assert!(games.iter().all(|game| game.appid != "999"), "not-installed game is skipped");
+            assert!(games.iter().all(|game| game.appid != "80"), "traversal installdir is rejected");
+            assert!(games.iter().all(|game| game.appid != "0"), "zero appid is rejected");
+            assert!(games.iter().all(|game| game.appid != "70"), "missing installdir is rejected");
+            assert!(games.iter().all(|game| game.appid != "300"), "blank name is rejected");
+            assert!(games.iter().all(|game| game.appid != "8x"), "malformed appid is rejected");
+            // Sort stays case-insensitive by display name.
+            for pair in games.windows(2) {
+                assert!(pair[0].name.to_lowercase() <= pair[1].name.to_lowercase());
+            }
+        }
+    }
+
+    #[test]
+    fn fixture_scan_reports_a_missing_library_instead_of_guessing() {
+        // Missing root entirely — never an empty, guessed library.
+        assert!(scan_library(&temp_root()).is_err());
+        let root = temp_root();
+        fs::create_dir_all(root.join("steamapps")).expect("steamapps only");
+        // A valid but empty library (no libraryfolders, no manifests) is an
+        // honest, empty result — not an error, not an invented game.
+        let games = scan_library(&root).expect("empty library is valid");
+        assert!(games.is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn temp_roots_are_unique_without_randomness() {
+        let first = temp_root();
+        let second = temp_root();
+        assert_ne!(first, second);
+    }
 
     fn temp_root() -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -756,6 +883,39 @@ mod tests {
         assert!(parse_appmanifest(zero_id).is_none());
         let missing_name = r#""appid" "440" "installdir" "tf2""#;
         assert!(parse_appmanifest(missing_name).is_none());
+    }
+
+    #[test]
+    fn fixture_manifest_variants_parse_exactly_like_assembled_libraries() {
+        // Valid, CRLF-terminated manifest with a padded display name.
+        let crlf = parse_appmanifest(&fixture("appmanifest-500-crlf.acf")).expect("CRLF manifest");
+        assert_eq!(crlf.appid, "500");
+        assert_eq!(crlf.name, "Windows Carrier Return Game");
+        assert_eq!(crlf.install_dir, "WindowsCarrierReturnGame");
+
+        // Every malformed fixture is rejected by the same production parser
+        // used by `scan_library` — no fallback, no guessing. The Windows-style
+        // `..\escape` traversal fixture is only parseable on hosts where `\` is
+        // not a path separator; on Windows (the production target) the
+        // component guard rejects it, and on every host the scan-level
+        // install-dir existence check denies it (covered by the scan test).
+        for malformed in [
+            "appmanifest-0-zero-appid.acf",
+            "appmanifest-70-missing-installdir.acf",
+            "appmanifest-300-blank-name.acf",
+            "appmanifest-8x-bad-appid.acf",
+        ] {
+            assert!(
+                parse_appmanifest(&fixture(malformed)).is_none(),
+                "fixture {malformed} must be rejected"
+            );
+        }
+        if cfg!(windows) {
+            assert!(
+                parse_appmanifest(&fixture("appmanifest-80-traversal-installdir.acf")).is_none(),
+                "backslash traversal must be rejected on Windows"
+            );
+        }
     }
 
     #[test]
