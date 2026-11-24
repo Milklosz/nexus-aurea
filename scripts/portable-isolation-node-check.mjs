@@ -22,6 +22,8 @@ const read = (relative) =>
   readFileSync(path.join(ROOT, relative), "utf8").replace(/\r\n/g, "\n");
 
 const portableRs = read("src-tauri/src/portable.rs");
+const cargo = read("src-tauri/Cargo.toml");
+const workflow = read(".github/workflows/portable-windows.yml");
 const libRs = read("src-tauri/src/lib.rs");
 const launcherPs1 = read("scripts/portable/Start-VELORA-Portable.ps1");
 const launcherCmd = read("scripts/portable/Run-VELORA-Portable.cmd");
@@ -52,31 +54,37 @@ test("portable identity stays disjoint from the installed identity (service, mut
 });
 
 test("lib.rs redirects the Tauri app directories (incl. the WebView2 user-data dir) into the portable root", () => {
-  assert.ok(libRs.includes("fn portable_context() -> tauri::Context<tauri::Wry> {"));
+  assert.ok(libRs.includes("fn startup_context(windowed: bool) -> tauri::Context<tauri::Wry> {"));
   assert.ok(libRs.includes("if let Some(root) = portable::data_dir() {"));
   assert.ok(libRs.includes("use tauri::utils::config::AppDirectoriesOverride;"));
   assert.ok(libRs.includes("context.config_mut().app.app_directories_override ="));
   assert.ok(libRs.includes("Some(AppDirectoriesOverride::Root(root));"));
   // The doc comment pins the WebView2 user-data redirect.
   assert.ok(libRs.includes("`appDirectoriesOverride` also redirects Tauri's default WebView2 user-data"));
-  assert.ok(libRs.includes("window.title = portable::window_title().to_string();"));
-  // Without a portable root the context is untouched (installed behaviour).
-  assert.ok(libRs.includes(".build(portable_context())"));
+  assert.ok(libRs.includes("window.title = portable::window_title_for(portable).to_string();"));
+  // The application builds the context before entering Tauri.
+  assert.ok(libRs.includes(".build(context)"));
 });
 
-test("the portable launcher sets the data root and redirects the profile environment before starting the EXE", () => {
-  assert.ok(launcherPs1.includes("$env:VELORA_PORTABLE_DATA_DIR = $dataRoot"));
-  for (const variable of ["LOCALAPPDATA", "APPDATA", "USERPROFILE", "TEMP", "TMP"]) {
-    assert.ok(launcherPs1.includes(`$env:${variable} = `), `launcher must redirect ${variable}`);
-  }
-  assert.ok(launcherPs1.includes("Join-Path $portableRoot 'VELORA-Portable-Data'"));
-  // The EXE is started only after the environment is configured.
-  const envAt = launcherPs1.indexOf("$env:VELORA_PORTABLE_DATA_DIR");
-  const startAt = launcherPs1.indexOf("nexus-aurea.exe", launcherPs1.indexOf("$exe = Join-Path"));
-  assert.ok(envAt > -1 && startAt > envAt, "data root must be set before the EXE starts");
-  // The double-click launcher delegates to the PowerShell wrapper.
-  assert.ok(launcherCmd.includes("Start-VELORA-Portable.ps1"));
-  assert.ok(launcherCmd.includes("setlocal"));
+test("the portable feature guarantees a sibling profile on direct EXE launch", () => {
+  assert.ok(cargo.includes("portable-validation = []"));
+  assert.ok(workflow.includes("--features portable-validation"));
+  assert.ok(portableRs.includes("env::current_exe()?"));
+  assert.ok(portableRs.includes("directory.join(DATA_DIR_NAME)"));
+  assert.ok(portableRs.includes('const DATA_DIR_NAME: &str = "VELORA-Portable-Data";'));
+  assert.ok(libRs.indexOf("initialize_portable_startup()") < libRs.indexOf("claim_or_activate_existing()"));
+  assert.ok(launcherCmd.includes('"%~dp0nexus-aurea.exe" %*'));
+  assert.ok(launcherCmd.includes("setlocal DisableDelayedExpansion"));
+  assert.doesNotMatch(launcherCmd, /powershell|ExecutionPolicy/i);
+});
+
+test("CI verifies a visible window, React readiness and clean exit without archiving the profile", () => {
+  assert.ok(workflow.includes("Join-Path $smokeDir 'nexus-aurea.exe'"));
+  assert.ok(workflow.includes("MainWindowHandle -ne 0"));
+  assert.ok(workflow.includes("^window-visible"));
+  assert.ok(workflow.includes("^frontend-ready"));
+  assert.ok(workflow.includes("^exit-orderly"));
+  assert.ok(workflow.includes("Require passing Windows startup evidence"));
 });
 
 test("the portable scripts never run an installer and never write the registry", () => {
@@ -101,11 +109,11 @@ test("the portable manifest tooling pins the same isolation identity as portable
   assert.ok(portableRs.includes(`"${rustLiteral(EXPECTED_ISOLATION.singleInstanceMutex)}"`));
   assert.ok(portableRs.includes(`"${EXPECTED_ISOLATION.windowTitle}"`));
   for (const variable of EXPECTED_ISOLATION.redirectedEnvironment) {
-    assert.ok(launcherPs1.includes(`$env:${variable} = `), `manifest lists ${variable} but the launcher does not set it`);
+    assert.ok(portableRs.includes(`env::set_var("${variable}",`), `manifest lists ${variable} but native startup does not set it`);
   }
   // The manifest records the no-install runtime contract.
   assert.ok(manifestMjs.includes("requiresInstaller: false"));
   assert.ok(manifestMjs.includes("installerExecuted: false"));
   assert.ok(manifestMjs.includes("registryChanges: false"));
-  assert.ok(manifestMjs.includes('launch: "Run-VELORA-Portable.cmd (sets the isolated environment before starting the EXE)"'));
+  assert.ok(manifestMjs.includes('launch: "Run-VELORA-Portable.cmd (the executable initializes its sibling isolated profile)"'));
 });

@@ -15,6 +15,7 @@ on:
       - feat/portable-validation-build
       - 'feat/velora-3-ascension*'
       - 'feat/velora-3-singularity*'
+      - fix/velora-3-first-frame-recovery
 
 permissions:
   contents: read
@@ -95,7 +96,7 @@ jobs:
 
       - name: Build standalone Windows x64 executable (no bundle)
         # --no-bundle is essential: an NSIS installer is never produced or run.
-        run: pnpm tauri build --no-bundle --ci --target x86_64-pc-windows-msvc
+        run: pnpm tauri build --no-bundle --ci --target x86_64-pc-windows-msvc --features portable-validation
 
       - name: Stage the portable package
         shell: pwsh
@@ -122,90 +123,109 @@ jobs:
             Write-Host ("{0,12}  {1}" -f $_.Length, $_.Name)
           }
 
-      - name: Bounded startup and shutdown smoke test (no hardware claims)
+      - name: Verify visible Windows startup, React readiness and orderly shutdown
         shell: pwsh
         run: |
           $stage = Join-Path $env:RUNNER_TEMP 'velora-portable-stage'
+          $smokeDir = Join-Path $env:RUNNER_TEMP "velora-first-frame-${env:GITHUB_RUN_ID}-${env:GITHUB_RUN_ATTEMPT}"
           $output = Join-Path $env:GITHUB_WORKSPACE 'dist/portable'
-          $dataRoot = Join-Path $env:RUNNER_TEMP 'velora-portable-smoke-data'
-          $smokePath = Join-Path $output 'smoke-result.json'
+          $dataRoot = Join-Path $smokeDir 'VELORA-Portable-Data'
+          $trace = ''
+          $tracePath = Join-Path $output 'startup-smoke.log'
           $result = [ordered]@{
-            status = 'NOT-RUN'
-            startedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
-            evidenceType = 'bounded-ci-process-smoke'
+            status = 'STARTUP-BLOCKED'
+            evidenceType = 'windows-visible-window-and-react-smoke'
+            platform = 'windows-latest (GitHub Actions)'
             hardwareValidated = $false
-            platform = 'windows-latest (GitHub Actions, not MSI)'
+            processStarted = $false
+            runtimeInitialized = $false
+            eventLoopStarted = $false
+            windowCreated = $false
+            windowVisible = $false
+            frontendReady = $false
+            runningAtReadiness = $false
+            installedProfileCreated = $false
+            portableWebViewProfile = $false
+            shutdownRequested = $false
+            cleanShutdown = $false
+            exitCode = $null
           }
           $process = $null
           try {
-            if (Test-Path -LiteralPath $dataRoot) { Remove-Item -LiteralPath $dataRoot -Recurse -Force }
-            foreach ($sub in @('Local','Roaming','Temp')) {
-              New-Item -ItemType Directory -Force -Path (Join-Path $dataRoot $sub) | Out-Null
-            }
-            $realAppData = [Environment]::GetFolderPath('ApplicationData')
-            $realLocalAppData = [Environment]::GetFolderPath('LocalApplicationData')
-            $installedDataBefore = @($realAppData, $realLocalAppData) | Where-Object { $_ -and (Test-Path -LiteralPath (Join-Path $_ 'pl.nexus.aurea')) }
+            New-Item -ItemType Directory -Path $smokeDir -ErrorAction Stop | Out-Null
+            $exe = Join-Path $smokeDir 'nexus-aurea.exe'
+            Copy-Item -LiteralPath (Join-Path $stage 'nexus-aurea.exe') -Destination $exe
+            $installedProfiles = @('ApplicationData', 'LocalApplicationData' | ForEach-Object {
+              $root = [Environment]::GetFolderPath($_)
+              if ($root) {
+                Join-Path $root 'pl.nexus.aurea'
+                Join-Path $root 'VELORA'
+              }
+            }) | Select-Object -Unique
+            $installedDataBefore = @($installedProfiles | Where-Object { Test-Path -LiteralPath $_ })
 
-            $env:VELORA_PORTABLE_DATA_DIR = $dataRoot
-            $env:LOCALAPPDATA = Join-Path $dataRoot 'Local'
-            $env:APPDATA = Join-Path $dataRoot 'Roaming'
-            $env:USERPROFILE = $dataRoot
-            $env:TEMP = Join-Path $dataRoot 'Temp'
-            $env:TMP = $env:TEMP
-
-            $exe = Join-Path $stage 'nexus-aurea.exe'
-            $process = Start-Process -FilePath $exe -ArgumentList '--windowed' -WorkingDirectory $stage -PassThru
+            # Direct EXE launch proves isolation without launcher environment.
+            $process = Start-Process -FilePath $exe -ArgumentList '--windowed' -WorkingDirectory $env:RUNNER_TEMP -PassThru
+            $result.processStarted = $true
             $result.pid = $process.Id
-            Start-Sleep -Seconds 15
-            $running = -not $process.HasExited
-            $result.runningAfter15s = $running
-
-            $dataFiles = @(Get-ChildItem -LiteralPath $dataRoot -Recurse -File -ErrorAction SilentlyContinue)
-            $result.isolatedDataFileCount = $dataFiles.Count
-            $result.isolatedDataSample = @($dataFiles | Select-Object -First 12 | ForEach-Object {
-              $_.FullName.Substring($dataRoot.Length + 1)
-            })
-            $installedDataAfter = @($realAppData, $realLocalAppData) | Where-Object { $_ -and (Test-Path -LiteralPath (Join-Path $_ 'pl.nexus.aurea')) }
-            $result.installedProfileCreated = ($installedDataAfter.Count -gt $installedDataBefore.Count)
-
-            $closeRequested = $false
-            $exitCode = $null
-            if ($running) {
-              $closeRequested = $process.CloseMainWindow()
-              $result.gracefulCloseRequested = $closeRequested
-              if ($closeRequested) {
-                try { $process.WaitForExit(20000) | Out-Null } catch { }
+            $deadline = (Get-Date).AddSeconds(30)
+            do {
+              $process.Refresh()
+              $startup = Get-ChildItem -LiteralPath $dataRoot -Filter "startup-$($process.Id)-*.log" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($startup) { $trace = Get-Content -LiteralPath $startup.FullName -Raw }
+              $result.runtimeInitialized = $trace -match '(?m)^tauri-build-complete\r?$'
+              $result.eventLoopStarted = $trace -match '(?m)^event-loop-started\r?$'
+              $result.windowCreated = $trace -match '(?m)^window-created\r?$'
+              $result.windowVisible = $trace -match '(?m)^window-visible\r?$' -and $process.MainWindowHandle -ne 0 -and $process.MainWindowTitle -eq 'VELORA (Portable Validation)'
+              $result.frontendReady = $trace -match '(?m)^frontend-ready\r?$'
+              if ($process.HasExited) { break }
+              if ($result.windowVisible -and $result.frontendReady) {
+                $result.runningAtReadiness = $true
+                break
               }
-              if ($process.HasExited) {
-                $exitCode = $process.ExitCode
-              } else {
-                Stop-Process -Id $process.Id -Force
-                $exitCode = 'force-stopped-after-timeout'
-              }
+              Start-Sleep -Milliseconds 250
+            } while ((Get-Date) -lt $deadline)
+
+            if (-not $process.HasExited -and $result.windowVisible) {
+              $result.shutdownRequested = $process.CloseMainWindow()
+              if ($result.shutdownRequested) { $null = $process.WaitForExit(20000) }
             }
-            $result.exitCode = $exitCode
-            if ($running -and -not $result.installedProfileCreated) {
-              $result.status = 'PASS'
-            } elseif (-not $running) {
-              $result.status = 'STARTUP-BLOCKED'
-            } else {
+            if ($process.HasExited) { $result.exitCode = $process.ExitCode }
+            if ($startup) { $trace = Get-Content -LiteralPath $startup.FullName -Raw }
+            $result.cleanShutdown = $result.shutdownRequested -and $process.HasExited -and
+              $result.exitCode -eq 0 -and $trace -match '(?m)^exit-orderly\r?$'
+            $result.portableWebViewProfile = Test-Path -LiteralPath (Join-Path $dataRoot 'EBWebView/Local State') -PathType Leaf
+            $result.installedProfileCreated = @($installedProfiles | Where-Object {
+              $_ -notin $installedDataBefore -and (Test-Path -LiteralPath $_)
+            }).Count -gt 0
+            $exactCommit = $trace -match "(?m)^process-start .* commit=$env:VELORA_SOURCE_SHA portable=true "
+            $windowed = $trace -match '(?m)^mode-windowed\r?$'
+            if ($result.installedProfileCreated) {
               $result.status = 'ISOLATION-BLOCKED'
+            } elseif ($result.runtimeInitialized -and $result.eventLoopStarted -and $result.windowCreated -and
+                $result.windowVisible -and $result.frontendReady -and $result.runningAtReadiness -and
+                $result.portableWebViewProfile -and $result.cleanShutdown -and $exactCommit -and $windowed) {
+              $result.status = 'PASS'
+            } elseif ($result.runningAtReadiness -and -not $result.cleanShutdown) {
+              $result.status = 'SHUTDOWN-BLOCKED'
             }
           } catch {
-            $result.status = 'BLOCKED'
-            $result.error = $_.Exception.Message
+            $result.status = 'SMOKE-ERROR'
+            $result.errorType = $_.Exception.GetType().Name
           } finally {
             if ($process -and -not $process.HasExited) {
-              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+              try {
+                $process.Kill()
+                $result.runnerTerminatedSmokeProcess = $true
+              } catch {
+                $result.runnerTerminationError = $_.Exception.GetType().Name
+              }
             }
-            $result.finishedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
-            $result | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $smokePath -Encoding utf8
-            Write-Host "SMOKE_STATUS=$($result.status)"
-            Get-Content -LiteralPath $smokePath
+            $trace | Set-Content -LiteralPath $tracePath -Encoding utf8
+            $result | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'smoke-result.json') -Encoding utf8
+            Get-Content -LiteralPath $tracePath
+            $result | ConvertTo-Json
           }
-          # Best-effort evidence only: never fail the build because a headless
-          # runner could not display a full GUI. The report states the status.
-          exit 0
 
       - name: Package ZIP, SHA-256 manifest and source provenance
         shell: pwsh
@@ -270,14 +290,14 @@ jobs:
           $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
           $smoke = Get-Content -LiteralPath (Join-Path $output 'smoke-result.json') -Raw | ConvertFrom-Json
           @(
-            '## VELORA 2.0 portable validation candidate'
+            '## VELORA 3.0 first-frame recovery candidate'
             ''
             "- Source commit: $($manifest.source.sourceSha)"
             "- Event SHA: $($manifest.source.eventSha)"
             "- Run: [$($manifest.source.runId)]($($manifest.source.runUrl)) (attempt $($manifest.source.runAttempt))"
             "- ZIP SHA-256: $($manifest.artifacts.package.sha256)"
             "- EXE SHA-256: $($manifest.artifacts.executable.sha256)"
-            "- Startup/shutdown smoke: $($smoke.status) (isolated files: $($smoke.isolatedDataFileCount))"
+            "- Startup/shutdown smoke: $($smoke.status)"
             ''
             'No installer was run. No registry or system setting was changed. No physical hardware validation is claimed.'
             'The manifest is a hash consistency record, not a digital signature.'
@@ -286,13 +306,20 @@ jobs:
       - name: Upload portable candidate artifact
         uses: actions/upload-artifact@v7
         with:
-          name: VELORA-Portable-Windows-x64-${{ env.VELORA_SOURCE_SHA }}
+          name: VELORA-3-First-Frame-Windows-x64-${{ env.VELORA_SOURCE_SHA }}
           path: |
             dist/portable/VELORA-Portable-Windows-x64.zip
             dist/portable/velora-portable-manifest.json
             dist/portable/SHA256SUMS.txt
             dist/portable/smoke-result.json
+            dist/portable/startup-smoke.log
             dist/portable/sha256-manifest.json
             dist/portable/sha256-manifest.md
           if-no-files-found: error
           retention-days: 30
+
+      - name: Require passing Windows startup evidence
+        shell: pwsh
+        run: |
+          $smoke = Get-Content 'dist/portable/smoke-result.json' -Raw | ConvertFrom-Json
+          if ($smoke.status -ne 'PASS') { throw "Windows startup gate failed ($($smoke.status)). See the portable artifact logs." }

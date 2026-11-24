@@ -259,7 +259,7 @@ pub fn set_tv_mode(
 /// Called at startup, or after the existing display monitor reports a topology change.
 /// A disconnected saved screen never changes Windows topology or triggers repeated launches.
 pub(crate) fn restore_tv_mode(app: &AppHandle) -> Result<(), String> {
-    if std::env::args().any(|arg| arg == "--windowed") {
+    if std::env::args_os().any(|arg| arg == "--windowed") {
         return Ok(());
     }
     // Display notifications can overlap an explicit local change. Never block the

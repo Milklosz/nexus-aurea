@@ -190,7 +190,7 @@ export async function createPortableManifest(options) {
         "WebView2 Runtime (Evergreen) already installed - no bootstrapper is bundled or run",
         "Microsoft Edge installed for optional Edge Cinema streaming",
       ],
-      launch: "Run-VELORA-Portable.cmd (sets the isolated environment before starting the EXE)",
+      launch: "Run-VELORA-Portable.cmd (the executable initializes its sibling isolated profile)",
     },
     verification: {
       digitalSignature: false,

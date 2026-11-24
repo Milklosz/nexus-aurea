@@ -1,4 +1,4 @@
-# VELORA 2.0 — Portable Validation Candidate (Windows x64)
+# VELORA 3.0 — First-frame recovery candidate (Windows x64)
 
 This is a **no-install test build** for hardware validation on the MSI machine. It is
 **not** a replacement for the installed VELORA 0.9.2, it is **not signed**, and it
@@ -22,14 +22,14 @@ Inside `VELORA-Portable-Windows-x64.zip`:
 | --- | --- |
 | `nexus-aurea.exe` | Standalone Tauri v2 application (built `--no-bundle`). |
 | `Run-VELORA-Portable.cmd` | Double-click launcher. Use this to start the app. |
-| `Start-VELORA-Portable.ps1` | Launcher implementation (sets the isolated environment). |
+| `Start-VELORA-Portable.ps1` | Optional PowerShell launcher where machine policy permits it. |
 | `Preflight-WebView2.ps1` | Read-only prerequisite check. |
 | `README-PORTABLE.md` | This file. |
 
 ## 2. Download and extract (verifiable procedure)
 
 1. Open the GitHub Actions run linked from the validation report. Under **Artifacts**,
-   download `VELORA-Portable-Windows-x64-<commit-sha>`.
+   download `VELORA-3-First-Frame-Windows-x64-<commit-sha>`.
 2. Extract the artifact ZIP to a new folder, for example
    `C:\VELORA-Portable-Validation`. **Do not extract into the VELORA 0.9.2 install
    folder or into `C:\Program Files`.**
@@ -68,11 +68,13 @@ Inside `VELORA-Portable-Windows-x64.zip`:
   executes an installer. Check with the read-only preflight:
 
   ```powershell
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\Preflight-WebView2.ps1'
+  powershell.exe -NoProfile -File '.\Preflight-WebView2.ps1'
   ```
 
 * Microsoft Edge is required only for Edge Cinema streaming; the preflight reports
   its status. No admin rights are needed for any step.
+* If Windows policy blocks the optional preflight, use the CMD launcher. Native
+  startup records whether the WebView2 loader detected a runtime.
 
 ## 4. Launch and shutdown
 
@@ -83,8 +85,8 @@ Inside `VELORA-Portable-Windows-x64.zip`:
    Run-VELORA-Portable.cmd --windowed
    ```
 
-3. The launcher prints the isolated data root before starting the app. All writes
-   go to `VELORA-Portable-Data` next to the launcher.
+3. The portable EXE initializes `VELORA-Portable-Data` beside itself, including
+   when started directly or from a different working directory.
 4. Close normally with the window close button or `Alt+F4`. The application runs an
    orderly shutdown (workers and single-instance guard are released). If the app
    hangs, end only the `nexus-aurea.exe` process started from this folder.
@@ -92,7 +94,7 @@ Inside `VELORA-Portable-Windows-x64.zip`:
 ## 5. Isolation — what is protected
 
 Changing the executable path alone would **not** isolate a Tauri app. This candidate
-uses both a launch-time environment and an isolated compile-time identity:
+uses a dedicated build feature and initializes its profile before Tauri starts.
 
 | Concern | Installed VELORA 0.9.2 | Portable candidate |
 | --- | --- | --- |
@@ -105,20 +107,23 @@ uses both a launch-time environment and an isolated compile-time identity:
 | Windows autostart (`HKCU\...\Run`) | available in installed app | write command is disabled in the portable build |
 | iOS trust-profile download (system Downloads) | available in installed app | written only to `VELORA-Portable-Data\trust`, after explicit local approval |
 
-The launcher changes `APPDATA`, `LOCALAPPDATA`, `USERPROFILE`, `TEMP` and `TMP` for
-**its child process only**; no system or user environment variable is changed.
-No registry key is written, no installer is run, and no existing user data is read
-or modified.
+The EXE redirects `APPDATA`, `LOCALAPPDATA`, `USERPROFILE`, `TEMP` and `TMP` for
+its own process. It exits before starting Tauri if WebView2 policy or an inherited
+user-data override could redirect the profile outside the portable root.
 
 ## 6. Honest limitations
 
-* No physical DS4, iPhone, Panasonic TV or streaming-DRM result is claimed. The only
-  automated check is a bounded CI startup/shutdown smoke test, recorded in the
-  manifest's `smoke` field.
+* `smoke-result.json` records whether a Windows CI runner found a visible native
+  window, received the React startup event and observed orderly process exit.
+  Physical DS4, iPhone, Panasonic TV and streaming-DRM results require separate tests.
 * Hashes and the manifest are **not a digital signature**; they show that the bytes
   match the CI record, not who produced them.
-* If WebView2 Runtime is missing the Tauri app exits without a visible UI. Run the
-  preflight first; the build will not install anything for you.
+* `VELORA-Portable-Data\startup-<pid>-<time>.log` records the last reached phase,
+  commit, loader status and sanitized failure codes. A stopped process with no
+  terminal marker may have terminated outside the Rust shutdown path. If no log
+  exists, check whether the extracted folder is writable and record the exit code.
+* To clean up, close the portable window and remove only this extracted test folder.
+  Keep a copy of the startup traces if a launch failed.
 * Redirecting `LOCALAPPDATA` means installed-app discovery (Playnite manifest,
   Apple Music stub) may not be visible in this profile. This is intentional for
   isolation; copy only synthetic test fixtures into the portable data root if a

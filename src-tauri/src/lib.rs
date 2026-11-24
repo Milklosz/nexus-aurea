@@ -1,4 +1,4 @@
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Listener, Manager};
 
 mod app_manager;
 mod audio_control;
@@ -22,8 +22,8 @@ mod platform_launchers;
 mod playnite_library;
 #[allow(dead_code)]
 mod playnite_manifest;
-pub(crate) mod portable;
 mod pointer_indicator;
+pub(crate) mod portable;
 mod process_table;
 mod remote_access;
 #[allow(dead_code)]
@@ -35,6 +35,7 @@ mod session_orchestrator;
 mod session_store;
 mod single_instance;
 mod spatial_navigation;
+mod startup_diagnostics;
 mod steam_library;
 mod streaming_control;
 mod tv_mode;
@@ -52,24 +53,115 @@ mod build_support;
 /// `appDirectoriesOverride` also redirects Tauri's default WebView2 user-data
 /// directory on Windows, so the main window's localStorage/cache stay inside
 /// the portable data root instead of `%LOCALAPPDATA%\pl.nexus.aurea`.
-fn portable_context() -> tauri::Context<tauri::Wry> {
+fn startup_context(windowed: bool) -> tauri::Context<tauri::Wry> {
     let mut context = tauri::generate_context!();
     if let Some(root) = portable::data_dir() {
         use tauri::utils::config::AppDirectoriesOverride;
         context.config_mut().app.app_directories_override =
             Some(AppDirectoriesOverride::Root(root));
-        if let Some(window) = context.config_mut().app.windows.first_mut() {
-            window.title = portable::window_title().to_string();
-        }
+    }
+    if let Some(window) = context
+        .config_mut()
+        .app
+        .windows
+        .iter_mut()
+        .find(|window| window.label == "main")
+    {
+        configure_main_window(window, portable::is_portable(), windowed);
     }
     context
 }
 
+fn configure_main_window(
+    window: &mut tauri::utils::config::WindowConfig,
+    portable: bool,
+    windowed: bool,
+) {
+    if portable {
+        window.title = portable::window_title_for(portable).to_string();
+        // Tauri otherwise creates configured windows before our setup callback.
+        window.create = false;
+    }
+    if windowed {
+        window.fullscreen = false;
+        window.decorations = true;
+    }
+}
+
+fn initialize_portable_startup() -> std::io::Result<()> {
+    let Some(root) = portable::startup_data_dir()? else {
+        return Ok(());
+    };
+    portable::ensure_profile_directory(&root)?;
+    if let Err(error) = startup_diagnostics::begin(&root) {
+        eprintln!("VELORA startup trace unavailable ({:?}).", error.kind());
+    }
+    portable::initialize_profile(&root).inspect_err(|error| {
+        startup_diagnostics::record_io_error("exit-profile-error", error);
+    })?;
+    startup_diagnostics::record("profile-ready");
+    Ok(())
+}
+
+fn build_portable_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow> {
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == "main")
+        .ok_or(tauri::Error::WindowNotFound)?;
+    tauri::WebviewWindowBuilder::from_config(app, config)?.build()
+}
+
+fn record_window_visibility(window: &tauri::WebviewWindow) {
+    match window.is_visible() {
+        Ok(true) => startup_diagnostics::record("window-visible"),
+        Ok(false) => startup_diagnostics::record("window-not-yet-visible"),
+        Err(error) => startup_diagnostics::record_tauri_error("window-visibility-error", &error),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn portable_window_mode_is_applied_to_the_creation_config() {
+    let main = startup_context(false).config().app.windows[0].clone();
+    let mut fullscreen = main.clone();
+    configure_main_window(&mut fullscreen, true, false);
+    assert!(fullscreen.fullscreen && !fullscreen.decorations && !fullscreen.create);
+    assert_eq!(fullscreen.title, "VELORA (Portable Validation)");
+
+    let mut windowed = main;
+    configure_main_window(&mut windowed, true, true);
+    assert!(!windowed.fullscreen && windowed.decorations && !windowed.create);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Err(error) = initialize_portable_startup() {
+        eprintln!(
+            "VELORA portable profile initialization failed ({:?}).",
+            error.kind()
+        );
+        std::process::exit(20);
+    }
     if !single_instance::claim_or_activate_existing() {
+        startup_diagnostics::record("exit-duplicate-instance");
         return;
     }
+    let portable = portable::is_portable();
+    let windowed = std::env::args_os().any(|arg| arg == "--windowed");
+    startup_diagnostics::record(if windowed {
+        "mode-windowed"
+    } else {
+        "mode-default"
+    });
+    #[cfg(windows)]
+    if portable {
+        startup_diagnostics::probe_webview2();
+    }
+    startup_diagnostics::record("tauri-build-start");
+    let context = startup_context(windowed);
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(control_service::ControlService::default())
@@ -163,7 +255,41 @@ pub fn run() {
             steam_library::launch_steam_game,
             steam_library::get_game_process_state,
         ])
-        .setup(|app| {
+        .on_page_load(move |webview, payload| {
+            if portable && webview.label() == "main" {
+                use tauri::webview::PageLoadEvent;
+                startup_diagnostics::record(match payload.event() {
+                    PageLoadEvent::Started => "page-load-start",
+                    PageLoadEvent::Finished => "page-load-finish",
+                });
+            }
+        })
+        .on_window_event(move |window, event| {
+            if portable
+                && window.label() == "main"
+                && matches!(event, tauri::WindowEvent::CloseRequested { .. })
+            {
+                startup_diagnostics::record("window-close-requested");
+            }
+        })
+        .setup(move |app| {
+            startup_diagnostics::record("event-loop-started");
+            if portable {
+                startup_diagnostics::record("window-create-start");
+                let window = build_portable_window(app).map_err(|error| {
+                    startup_diagnostics::record_tauri_error("exit-window-create-error", &error);
+                    std::io::Error::other("VELORA portable main window creation failed")
+                })?;
+                startup_diagnostics::record("window-created");
+                let handle = app.handle().clone();
+                window.once(startup_diagnostics::FRONTEND_READY_EVENT, move |_| {
+                    startup_diagnostics::record("frontend-ready");
+                    if let Some(window) = handle.get_webview_window("main") {
+                        record_window_visibility(&window);
+                    }
+                });
+                record_window_visibility(&window);
+            }
             #[cfg(target_os = "windows")]
             if let Some(window) = app.get_webview_window("main") {
                 if let Ok(hwnd) = window.hwnd() {
@@ -182,20 +308,28 @@ pub fn run() {
             display_audio::start_monitor(app.handle().clone());
             session_monitor::start(app.handle().clone());
             memory_watch::start(app.handle().clone());
-            if std::env::args().any(|arg| arg == "--windowed") {
-                if let Some(window) = app.get_webview_window("main") {
-                    window.set_fullscreen(false)?;
-                    window.set_decorations(true)?;
-                }
-            } else {
+            if !windowed {
                 let _ = tv_mode::restore_tv_mode(app.handle());
             }
+            startup_diagnostics::record("setup-complete");
             Ok(())
         })
-        .build(portable_context())
-        .expect("error while building VELORA");
+        .build(context)
+        .unwrap_or_else(|error| {
+            if portable {
+                startup_diagnostics::record_tauri_error("exit-tauri-build-error", &error);
+                eprintln!("VELORA portable Tauri initialization failed.");
+                std::process::exit(21);
+            }
+            panic!("error while building VELORA: {error}");
+        });
 
+    startup_diagnostics::record("tauri-build-complete");
+    startup_diagnostics::record("event-loop-enter");
     app.run(|app, event| {
+        if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+            startup_diagnostics::record("shutdown-requested");
+        }
         if let tauri::RunEvent::Exit = event {
             session_orchestrator::mark_clean_shutdown(app);
             app.state::<pad_hub::PadHub>().stop();
@@ -207,6 +341,8 @@ pub fn run() {
             session_monitor::stop();
             memory_watch::stop();
             single_instance::release_for_shutdown();
+            startup_diagnostics::record("exit-orderly");
         }
     });
+    startup_diagnostics::record("event-loop-returned");
 }
