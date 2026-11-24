@@ -19,3 +19,10 @@
 | Integration lead | Home, Gaming Hub, Control Center and CI evidence, candidate integration and reports | Focus tests, browser layout, full local and remote gates |
 
 Resume in the isolated branch. Start with `git status --short --branch`, `git log --oneline -8` and `git diff --check`. Check [the repository's Actions](https://github.com/Milklosz/nexus-aurea/actions) against the exact candidate SHA before using any artifact. Use the acceptance matrix and physical handoff in the engineering report for pending work.
+
+## Integrated development checkpoint · 24 November 2026, Europe/Warsaw
+
+- First published checkpoint `c0d1ac0bb368a305009efbe52e12c36a200b1507` contains the startup and controller/streaming commits. [Draft PR #77](https://github.com/Milklosz/nexus-aurea/pull/77) targets the recovery branch directly. [Checkpoint CI](https://github.com/Milklosz/nexus-aurea/actions/runs/45429754581) and [checkpoint portable smoke](https://github.com/Milklosz/nexus-aurea/actions/runs/45429754380) passed for that earlier revision.
+- Home, Control Center, Gaming Hub and the extended portable CI smoke were integrated in `ab67fc1`, `89b6ef9` and `7fc643b`. The integrated frontend passed 1,395 tests in 146 files and built successfully. The portable workflow's five PowerShell script blocks parsed successfully.
+- The later LAN commit hardens hello accounting, start/stop state, and trust profile file handling. The integrated Windows portable-feature Rust run passed 561 tests with 3 ignored. The 73 Node checks and all 12 real-browser geometry fixtures passed. The full candidate and independent security findings are described in the [engineering report](velora-3-infinity-report.md).
+- Resume by checking the exact head of Draft PR #77 and its matching CI jobs. The PR body records the exact final commit, job outcomes and portable hashes. Keep physical Panasonic, DS4, iPhone and service tests open until there is device evidence.
