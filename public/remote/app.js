@@ -174,6 +174,25 @@
     renderUnknownPanel();
   }
 
+  // True only while the entry still belongs to the CURRENT pairing credential.
+  // After a revocation or a new pairing a stored signature can never be
+  // accepted again, so such an entry must be dropped instead of sent.
+  function matchesCredential(entry, record) {
+    return Boolean(record)
+      && entry.deviceId === record.deviceId
+      && entry.credentialGeneration === record.credentialGeneration;
+  }
+
+  // Drops every outbound entry (queued or unknown) signed with a credential
+  // this page no longer pairs with. Called after a successful pairing and
+  // before any queued entry is dispatched.
+  function dropOutboundEntriesForOtherCredentials() {
+    if (!state.record) return;
+    for (const entry of [...outboundQueue, ...unknownOutbound]) {
+      if (!matchesCredential(entry, state.record)) removeOutboundEntry(entry);
+    }
+  }
+
   function setElementText(id, text) {
     const element = document.getElementById(id);
     if (element) element.textContent = text;
@@ -632,6 +651,9 @@
       }
       state.record = record;
       state.paired = true;
+      // Entries signed with the PREVIOUS pairing can never be accepted again;
+      // dropping them prevents a stale re-confirm from unpairing this pairing.
+      dropOutboundEntriesForOtherCredentials();
       state.verified = true;
       state.rejectedUnconfirmedRecord = false;
       state.authorizationRejected = false;
@@ -735,6 +757,14 @@
   // sequence + signature). The server can only answer dedup-2xx / 409 / 401 —
   // a second side effect is impossible.
   async function reconfirmEntry(entry) {
+    if (!matchesCredential(entry, state.record)) {
+      // The credential this entry was signed with is revoked or re-paired: a
+      // blind re-send could only end in a misleading 401 that would unpair
+      // the fresh pairing. The stale entry is dropped, never auto-retried.
+      removeOutboundEntry(entry);
+      showMessage("Zapisane polecenie pochodziło z poprzedniego parowania i zostało usunięte.", true);
+      return;
+    }
     state.inFlight = true;
     showMessage("Potwierdzam ponownie: " + (commandLabels[entry.command] || "polecenie") + "…");
     updateControls();
@@ -758,7 +788,14 @@
         showMessage("Zapisane parowanie zmieniło się lub jest nieprawidłowe. Sprawdź połączenie pilota.", true);
         return;
       }
-      if (requestId !== commandRequestId || !navigator.onLine) return;
+      if (requestId !== commandRequestId) return;
+      if (!navigator.onLine) {
+        // The sequence was reserved, but nothing was signed and nothing ever
+        // reached the network: the intent can safely wait for reconnect.
+        pendingIntents.push(command);
+        showMessage("iPhone jest offline. Polecenie zapisane w kolejce — zostanie wysłane po ponownym połączeniu.", true);
+        return;
+      }
       const sequence = record.sequence;
       state.record = record;
       if (requestId !== commandRequestId) return;
@@ -824,11 +861,13 @@
           if (neverReached && entry.attempts < OUTBOUND_MAX_AUTO_RETRIES) {
             entry.attempts += 1;
             await waitMs(outboundRetryDelayMs(entry.attempts));
-            if (requestId !== commandRequestId) return;
-            if (!navigator.onLine) {
-              // Dropped again mid-wait: keep it queued for a verified
-              // reconnect — it was never sent, so it is not "unknown".
-              entry.state = "queued";
+            if (requestId !== commandRequestId || !navigator.onLine) {
+              // Provably never sent (offline, or superseded mid-wait), but the
+              // outcome is now AMBIGUOUS: mark it unknown. It is re-sent ONLY
+              // on explicit re-confirmation — never automatically (the server
+              // may have persisted the sequence; a blind retry could double an
+              // applied window action, so go through the unknown panel).
+              markEntryUnknown(entry);
               return;
             }
             continue;
