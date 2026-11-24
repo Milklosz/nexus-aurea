@@ -48,7 +48,7 @@ mod window_broker;
 mod build_support;
 
 /// Build the Tauri context from the checked-in configuration, applying the
-/// portable isolation override only when the launcher supplied a data root.
+/// portable isolation override when startup initialized a profile root.
 ///
 /// `appDirectoriesOverride` also redirects Tauri's default WebView2 user-data
 /// directory on Windows, so the main window's localStorage/cache stay inside
@@ -88,19 +88,15 @@ fn configure_main_window(
     }
 }
 
-fn initialize_portable_startup() -> std::io::Result<()> {
+fn prepare_portable_startup() -> std::io::Result<Option<std::path::PathBuf>> {
     let Some(root) = portable::startup_data_dir()? else {
-        return Ok(());
+        return Ok(None);
     };
     portable::ensure_profile_directory(&root)?;
     if let Err(error) = startup_diagnostics::begin(&root) {
         eprintln!("VELORA startup trace unavailable ({:?}).", error.kind());
     }
-    portable::initialize_profile(&root).inspect_err(|error| {
-        startup_diagnostics::record_io_error("exit-profile-error", error);
-    })?;
-    startup_diagnostics::record("profile-ready");
-    Ok(())
+    Ok(Some(root))
 }
 
 fn build_portable_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow> {
@@ -138,27 +134,53 @@ fn portable_window_mode_is_applied_to_the_creation_config() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    if let Err(error) = initialize_portable_startup() {
+    let portable_root = prepare_portable_startup().unwrap_or_else(|error| {
         eprintln!(
-            "VELORA portable profile initialization failed ({:?}).",
+            "VELORA cannot open its portable profile root ({:?}). Extract the portable package to a writable folder.",
             error.kind()
         );
         std::process::exit(20);
+    });
+    let portable = portable_root.is_some();
+    match single_instance::claim_or_activate_existing(portable) {
+        Ok(single_instance::Claim::Primary) => {}
+        Ok(single_instance::Claim::AlreadyRunning) => {
+            startup_diagnostics::record("exit-duplicate-instance");
+            return;
+        }
+        Err(error) if portable => {
+            startup_diagnostics::record_io_error("exit-instance-guard-error", &error);
+            eprintln!("VELORA cannot claim exclusive access to the portable profile. Check the startup log.");
+            std::process::exit(22);
+        }
+        Err(_) => {
+            // Preserve the installed application's startup behavior.
+        }
     }
-    if !single_instance::claim_or_activate_existing() {
-        startup_diagnostics::record("exit-duplicate-instance");
-        return;
+    if let Some(root) = portable_root {
+        if let Err(error) = portable::initialize_profile(&root) {
+            startup_diagnostics::record_profile_error(error.stage, &error.source);
+            eprintln!(
+                "VELORA portable profile initialization failed at {} ({:?}). Check the startup log.",
+                error.stage,
+                error.source.kind()
+            );
+            std::process::exit(20);
+        }
+        startup_diagnostics::record("profile-ready");
     }
-    let portable = portable::is_portable();
-    let windowed = std::env::args_os().any(|arg| arg == "--windowed");
+    let windowed = std::env::args_os().skip(1).any(|arg| arg == "--windowed");
     startup_diagnostics::record(if windowed {
         "mode-windowed"
     } else {
         "mode-default"
     });
     #[cfg(windows)]
-    if portable {
-        startup_diagnostics::probe_webview2();
+    if portable && !startup_diagnostics::probe_webview2() {
+        // The bundled Tauri runtime uses the same probe and would otherwise
+        // open a modal runtime-installation prompt before returning the error.
+        eprintln!("VELORA could not detect a usable WebView2 Runtime. Check the startup log and Windows account's runtime availability.");
+        std::process::exit(23);
     }
     startup_diagnostics::record("tauri-build-start");
     let context = startup_context(windowed);
@@ -341,7 +363,7 @@ pub fn run() {
             session_monitor::stop();
             memory_watch::stop();
             single_instance::release_for_shutdown();
-            startup_diagnostics::record("exit-orderly");
+            startup_diagnostics::record_shutdown();
         }
     });
     startup_diagnostics::record("event-loop-returned");

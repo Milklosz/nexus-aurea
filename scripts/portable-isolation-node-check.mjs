@@ -3,7 +3,7 @@
 // Run with: pnpm test:portable-isolation  (or node --test this file)
 //
 // The portable validation candidate must stay fully isolated from the
-// installed VELORA build: the launcher sets VELORA_PORTABLE_DATA_DIR, lib.rs
+// installed VELORA build: the executable sets VELORA_PORTABLE_DATA_DIR, lib.rs
 // redirects the Tauri app directories (which includes the WebView2 user-data
 // directory on Windows) into that root, and portable.rs keeps a disjoint
 // credential-service / mutex / window-title identity. These guards fail
@@ -72,7 +72,10 @@ test("the portable feature guarantees a sibling profile on direct EXE launch", (
   assert.ok(portableRs.includes("env::current_exe()?"));
   assert.ok(portableRs.includes("directory.join(DATA_DIR_NAME)"));
   assert.ok(portableRs.includes('const DATA_DIR_NAME: &str = "VELORA-Portable-Data";'));
-  assert.ok(libRs.indexOf("initialize_portable_startup()") < libRs.indexOf("claim_or_activate_existing()"));
+  const traceSetup = libRs.indexOf("let portable_root = prepare_portable_startup()");
+  const instanceClaim = libRs.indexOf("claim_or_activate_existing(portable)");
+  const profileInit = libRs.indexOf("portable::initialize_profile(&root)");
+  assert.ok(traceSetup >= 0 && traceSetup < instanceClaim && instanceClaim < profileInit);
   assert.ok(launcherCmd.includes('"%~dp0nexus-aurea.exe" %*'));
   assert.ok(launcherCmd.includes("setlocal DisableDelayedExpansion"));
   assert.doesNotMatch(launcherCmd, /powershell|ExecutionPolicy/i);
